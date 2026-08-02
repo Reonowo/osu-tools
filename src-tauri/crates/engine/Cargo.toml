@@ -1,0 +1,17 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lzma-rs = "0.3"
+rosu-map = "0.2"
+thiserror = "2"
+
+[dev-dependencies]
+osu-db = { version = "0.3", default-features = false }
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: without it serde_json's fast float path can land 1 ulp off the
+# value .net wrote, which shows up as spurious "deviation" against fixtures that
+# the port actually reproduces bit-for-bit
+serde_json = { version = "1", features = ["float_roundtrip"] }
