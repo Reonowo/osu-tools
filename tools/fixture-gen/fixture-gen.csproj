@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <OsuCheckout Condition="'$(OsuCheckout)' == ''">C:\Users\admin\Desktop\osu_ref\osu!lazer source</OsuCheckout>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(OsuCheckout)\osu.Game\osu.Game.csproj" />
+  </ItemGroup>
+
+  <!-- bake the checkout that was actually compiled against into the assembly, so
+       Program.cs records the head of *that* repository rather than independently
+       guessing one. without this, building with -p:OsuCheckout=<path> references
+       one checkout while the runtime inspects another, and meta.json's
+       checkout_head ends up describing a repository that did not produce the
+       fixtures (or reads "unknown" outright on a machine without the default
+       path).
+
+       this value WINS over the OSU_CHECKOUT environment variable at runtime,
+       being the only path that can honestly describe what produced a given
+       fixture set, so `-p:OsuCheckout=<path>` is the single knob that moves the
+       reference and the recorded head together. OSU_CHECKOUT is consulted only
+       when this attribute is absent (an assembly built before it existed). -->
+  <ItemGroup>
+    <!-- normalized to an absolute path here, against the project directory,
+         because that is what MSBuild resolves a relative OsuCheckout against
+         when it expands the ProjectReference above. Program.cs runs with an
+         arbitrary working directory, so baking the raw property value would let
+         `-p:OsuCheckout=..\osu` reference one directory and report another. -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>OsuCheckout</_Parameter1>
+      <_Parameter2>$([MSBuild]::NormalizePath($(MSBuildProjectDirectory), $(OsuCheckout)))</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>
