@@ -92,7 +92,7 @@ pub struct ReplayAction {
 /// the same way and for the same reason: it rounds the delta on the way in
 /// (legacyscoredecoder.cs:305) and writes it back as a bare integer
 /// (legacyscoreencoder.cs:174). no encoder emits a non-canonical spelling
-const SEED_FRAME_DELTA: i64 = -12345;
+pub const SEED_FRAME_DELTA: i64 = -12345;
 
 /// legacyscoredecoder.cs:117 — the first replay version whose framing carries a
 /// length-prefixed lazer score-info array after the online score id. at or above
@@ -405,8 +405,10 @@ fn parse_delta(token: &str) -> Option<i64> {
     )))
 }
 
-/// parsing.cs:14 — `Parsing.MAX_COORDINATE_VALUE`
-const MAX_COORDINATE_VALUE: f32 = 131_072.0;
+/// parsing.cs:14 — `Parsing.MAX_COORDINATE_VALUE`. crate-visible so
+/// `replay::document` can refuse edits that this same bound would make
+/// undecodable on re-open
+pub(crate) const MAX_COORDINATE_VALUE: f32 = 131_072.0;
 
 /// legacyscoredecoder.cs:308-309 reads both cursor coordinates through
 /// `Parsing.ParseFloat(.., Parsing.MAX_COORDINATE_VALUE)`, which throws
