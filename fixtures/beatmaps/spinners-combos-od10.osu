@@ -1,0 +1,32 @@
+osu file format v14
+
+[General]
+AudioFilename: audio.mp3
+Mode: 0
+StackLeniency: 0.7
+
+[Metadata]
+Title:Spinner Combo Fixture
+Artist:fixture
+Creator:fixture
+Version:spinners-od10
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:7
+OverallDifficulty:10
+ApproachRate:10
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[TimingPoints]
+0,500,4,2,1,60,1,0
+
+[HitObjects]
+64,64,1000,5,0,0:0:0:0:
+128,64,1200,1,0,0:0:0:0:
+256,192,1500,12,0,3000,0:0:0:0:
+192,128,3200,37,0,0:0:0:0:
+320,128,3400,1,0,0:0:0:0:
+256,192,3600,12,0,3900,0:0:0:0:
+400,320,4100,1,0,0:0:0:0:

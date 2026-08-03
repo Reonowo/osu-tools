@@ -22,8 +22,36 @@ lazer checkout so lazer itself computes every expected value).
   the pin. Fixtures generated from a `dirty` tree are not attributable to their
   recorded commit and should be regenerated from a clean one before being
   committed. Regeneration warns on stderr when this happens.
-- `replays/local/` is gitignored: drop personal `.osr` files there for the
-  optional local round-trip corpus tests.
+- `replays/local/` is gitignored -- see "Replay corpus" below for its layout
+  and what it feeds.
+- `replays/synthetic_v14.osr` and `replays/synthetic_v4.osr` are intentionally
+  byte-identical: both carry the same replay payload, and only the beatmap
+  format version passed to `convert_frames` at decode time (14 vs 4) makes
+  their expected frame times differ (`frame_conversion_v14.json` vs
+  `frame_conversion_v4.json`).
+
+## Replay corpus
+
+`replays/local/` is gitignored: it holds an optional, personal corpus for
+`src-tauri/crates/engine/tests/replay_corpus.rs`'s `local_nomod_replays_self_verify`
+test, which is the spec's §Parity 2 oracle. Layout: drop a real `.osr` file and
+its matching `.osu` beatmap side by side, sharing the same stem --
+`<name>.osr` + `<name>.osu`. The test decodes both, simulates the replay
+against the processed beatmap, and asserts that the simulated `{300, 100, 50,
+miss, max combo}` totals equal the `.osr` header's own counts exactly --
+because for a real NoMod stable replay those numbers are already known and
+correct, so any divergence is a bug in this crate's simulation, not in the
+replay. Replays whose `.osr` header mods are non-zero are skipped (mod
+simulation is a TODO.md item, not yet a v1 concern); a `.osr` with no sibling
+`.osu`, or that fails to decode, is skipped with a stderr notice rather than
+failing the test. An empty or entirely missing `replays/local/` directory
+also passes (with a notice), so CI stays green on machines that never
+populate it -- this repo does not, and should not, ship anyone's personal
+replays. `tests/replay_corpus.rs` also carries a second, committed test
+(`synthetic_full_combo_on_the_fixture_map`) that full-combos
+`beatmaps/slider-zoo-v14.osu` with a hand-built replay and hand-derived
+expected totals, so the pipeline is exercised end to end on every CI run
+even with an empty local corpus.
 
 ## Named floating point literals
 
@@ -36,6 +64,21 @@ non-finite progress values in lazer. They are recorded rather than avoided,
 because consumers of `GetSegmentEnds` have to cope with them. `fixture-gen`
 serialises them with `JsonNumberHandling.AllowNamedFloatingPointLiterals`;
 readers must accept a JSON string in a float position for that field.
+
+`beatmap/*.json` also contain named floating point literals, for the same
+reason. `slider-zoo-v14.json`'s third slider sits under the
+`8000,NaN,4,2,1,60,0,0` inherited timing point, which disables tick generation
+(`Slider.cs:169`) and makes lazer's `TickDistance` genuinely `+Infinity` for
+that slider — its dump's `tick_distance` field is therefore the JSON string
+`"Infinity"`. Readers must accept that and compare it by classification
+(`is_infinite`), the same as `segment_ends_progress` above; the Rust side does
+this with a scalar sibling of `slider_path_fixtures.rs`'s
+`deserialize_lenient_f64_list` (see `beatmap_fixtures.rs`'s
+`deserialize_lenient_f64`). Every fixture not named in this section
+(`approximator_bspline.json`, `approximator_catmull.json`,
+`approximator_circular_arc.json`, `replays/float_format.json`) is still
+written with strict number handling, so an accidental non-finite value in one
+of those would still throw at generation time.
 
 ## Architecture/runtime-pinned fixtures: `path/approximator_circular_arc.json`, `path/slider_path.json`
 

@@ -1,0 +1,29 @@
+osu file format v4
+
+[General]
+AudioFilename: audio.mp3
+Mode: 0
+
+[Metadata]
+Title:Old Format Fixture
+Artist:fixture
+Creator:fixture
+Version:old-v4
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:5
+OverallDifficulty:6
+SliderMultiplier:1.2
+SliderTickRate:1
+
+[TimingPoints]
+0,400,4,1,0,60,1,0
+
+[HitObjects]
+256,192,1000,5,0
+256,192,1100,1,0
+256,192,1200,1,0
+100,100,2000,6,0,L|220:100,1,120
+220,100,2500,1,0
+220,100,2600,1,0
