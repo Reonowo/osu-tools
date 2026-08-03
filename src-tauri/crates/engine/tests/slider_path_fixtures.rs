@@ -74,21 +74,9 @@ fn deserialize_lenient_f64_list<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<f
         .collect()
 }
 
-/// non-finite expectations compare by classification (both nan, or the same
-/// infinity); finite ones use the fixture tolerance from `fixtures/meta.json`
-fn assert_f64_close(actual: f64, expected: f64, tolerance: f64, ctx: &str) {
-    if expected.is_finite() {
-        assert!(
-            (actual - expected).abs() <= tolerance,
-            "{ctx}: got {actual}, expected {expected}"
-        );
-    } else {
-        assert!(
-            (expected.is_nan() && actual.is_nan()) || actual == expected,
-            "{ctx}: got {actual}, expected {expected}"
-        );
-    }
-}
+// assert_f64_close (non-finite-aware comparison, tolerance from
+// fixtures/meta.json) lives in fixture_util now and is already in scope via
+// the glob import above
 
 fn convert_cp(cp: &FixtureCp) -> PathControlPoint {
     let path_type = cp.kind.as_deref().map(|k| match k {

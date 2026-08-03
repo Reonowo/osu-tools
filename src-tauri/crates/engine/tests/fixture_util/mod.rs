@@ -4,6 +4,7 @@
 
 use engine::math::Vec2;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
 
 // tolerances mirror fixtures/meta.json; integers and counts compare exact
@@ -37,5 +38,48 @@ pub fn assert_vertices_close(actual: &[Vec2], expected: &[[f32; 2]], ctx: &str) 
     assert_eq!(actual.len(), expected.len(), "{ctx}: vertex count mismatch");
     for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
         assert_vec2_close(*a, *e, &format!("{ctx} vertex {i}"));
+    }
+}
+
+/// fixture-gen serialises non-finite doubles (infinity/nan) as json's named
+/// floating point literals rather than numbers -- see fixtures/README.md's
+/// "named floating point literals" section for why lazer genuinely produces
+/// them for some fixture cases. shared scalar deserializer; slider_path_fixtures.rs
+/// keeps its own list variant of this same idiom for `Vec<f64>` fields
+pub fn deserialize_lenient_f64<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumberOrNamedLiteral {
+        Number(f64),
+        Named(String),
+    }
+
+    match NumberOrNamedLiteral::deserialize(d)? {
+        NumberOrNamedLiteral::Number(n) => Ok(n),
+        NumberOrNamedLiteral::Named(s) => match s.as_str() {
+            "Infinity" => Ok(f64::INFINITY),
+            "-Infinity" => Ok(f64::NEG_INFINITY),
+            "NaN" => Ok(f64::NAN),
+            other => Err(serde::de::Error::custom(format!(
+                "unexpected floating point literal {other:?}"
+            ))),
+        },
+    }
+}
+
+/// non-finite expectations compare by classification (both nan, or exactly
+/// equal, which already distinguishes +/- infinity); finite ones use the
+/// caller-supplied tolerance
+pub fn assert_f64_close(actual: f64, expected: f64, tolerance: f64, ctx: &str) {
+    if expected.is_finite() {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{ctx}: got {actual}, expected {expected}"
+        );
+    } else {
+        assert!(
+            (expected.is_nan() && actual.is_nan()) || actual == expected,
+            "{ctx}: got {actual}, expected {expected}"
+        );
     }
 }
