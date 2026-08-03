@@ -133,14 +133,24 @@ Dump("meta.json", new
         "the arc branch at 3 vertices; on a saturating runtime that case would record ~129 " +
         "vertices from the B-spline branch instead.",
 
-        "path/slider_path.json is the only fixture that may contain JSON's named floating point " +
-        "literals: segment_ends_progress entries can be the strings \"Infinity\" or \"NaN\", " +
+        "path/slider_path.json contains JSON's named floating point literals: " +
+        "segment_ends_progress entries can be the strings \"Infinity\" or \"NaN\", " +
         "because SliderPath.GetSegmentEnds (SliderPath.cs:267) divides each segment-end distance " +
         "by Distance with no zero guard and Distance is genuinely 0 for the expected-zero and " +
         "zero-length-all-identical cases. readers must accept a JSON string in that float " +
         "position and compare non-finite expectations by classification rather than by " +
-        "subtraction. every other fixture is written with strict number handling, so a " +
-        "non-finite value in one of those would throw at generation time instead.",
+        "subtraction.",
+
+        "beatmap/*.json also contain JSON's named floating point literals, for the same reason: " +
+        "slider-zoo-v14.json's third slider sits under the 8000,NaN inherited timing point, which " +
+        "disables tick generation (Slider.cs:169) and makes lazer's TickDistance genuinely " +
+        "+Infinity for that slider, so its dump's tick_distance field is the JSON string " +
+        "\"Infinity\". readers must accept that and compare it by classification " +
+        "(is_infinite), same as segment_ends_progress above. every fixture not named in these " +
+        "two notes (approximator_bspline.json, approximator_catmull.json, " +
+        "approximator_circular_arc.json, replays/float_format.json) is still written with strict " +
+        "number handling, so an accidental non-finite value in one of those would still throw at " +
+        "generation time.",
     },
 });
 
@@ -367,6 +377,20 @@ void DumpSliderPathFixtures()
 
     DumpAllowingNamedFloatLiterals(Path.Combine("path", "slider_path.json"), new { Cases = cases });
 }
+
+// slider-zoo-v14's 8000,NaN inherited timing point disables tick generation
+// for the slider active at that time (Slider.cs:169), which makes lazer
+// compute that slider's TickDistance as +Infinity -- the strict jsonOptions
+// above would throw serialising it. this is the same shape of problem
+// path/slider_path.json's segment_ends_progress already has, so it gets the
+// same fix: the named-float-literal options, and readers accept a JSON
+// string in that field's position (see slider_path_fixtures.rs's
+// deserialize_lenient_f64_list for the established rust-side convention)
+DumpBeatmapFixtures();
+
+void DumpBeatmapFixtures() => FixtureGen.BeatmapDumps.Run(outDir, namedFloatLiteralJsonOptions);
+
+FixtureGen.ReplayDumps.Run(outDir, jsonOptions);
 
 static osu.Game.Rulesets.Objects.Types.PathType? ParsePathType(FixtureGen.Cp p) => p.Type switch
 {

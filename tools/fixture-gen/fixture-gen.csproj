@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="$(OsuCheckout)\osu.Game\osu.Game.csproj" />
+    <ProjectReference Include="$(OsuCheckout)\osu.Game.Rulesets.Osu\osu.Game.Rulesets.Osu.csproj" />
   </ItemGroup>
 
   <!-- bake the checkout that was actually compiled against into the assembly, so
