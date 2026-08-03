@@ -10,6 +10,28 @@ use crate::formats::GameMode;
 use crate::limits;
 use crate::math::Vec2;
 
+/// legacybeatmapdecoder.cs:30 -- baked into object and control point times for
+/// format versions < 5, and mirrored into replay frame times by replay::frames
+pub const EARLY_VERSION_TIMING_OFFSET: f64 = 24.0;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimingPoint {
+    pub time: f64,
+    /// rosu-map clamps to 6..60000 at parse, matching lazer's
+    /// TimingControlPoint.BeatLengthBindable (timingcontrolpoint.cs:65-69)
+    pub beat_len: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DifficultyPoint {
+    pub time: f64,
+    /// rosu-map clamps to 0.1..10 at parse, matching lazer's
+    /// SliderVelocityMultiplierBindable (slider.cs:128-132)
+    pub slider_velocity: f64,
+    /// false when the inherited point's beat length parsed as NaN
+    pub generate_ticks: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Beatmap {
     pub format_version: i32,
@@ -31,6 +53,8 @@ pub struct Beatmap {
     pub slider_multiplier: f64,
     pub slider_tick_rate: f64,
     pub combo_colors: Vec<[u8; 4]>,
+    pub timing_points: Vec<TimingPoint>,
+    pub difficulty_points: Vec<DifficultyPoint>,
     pub hit_objects: Vec<HitObject>,
 }
 
@@ -446,13 +470,19 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         ));
     }
 
+    let offset = if raw.format_version < 5 {
+        EARLY_VERSION_TIMING_OFFSET
+    } else {
+        0.0
+    };
+
     use rosu_map::section::hit_objects::HitObjectKind as RosuKind;
 
     let mut hit_objects = Vec::with_capacity(raw.hit_objects.len());
     for obj in &raw.hit_objects {
         let converted = match &obj.kind {
             RosuKind::Circle(c) => HitObject {
-                start_time: obj.start_time,
+                start_time: obj.start_time + offset,
                 pos: Vec2::new(c.pos.x, c.pos.y),
                 new_combo: c.new_combo,
                 combo_offset: c.combo_offset,
@@ -470,7 +500,7 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
                     ));
                 }
                 HitObject {
-                    start_time: obj.start_time,
+                    start_time: obj.start_time + offset,
                     pos: Vec2::new(s.pos.x, s.pos.y),
                     new_combo: s.new_combo,
                     combo_offset: s.combo_offset,
@@ -488,7 +518,7 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
                 }
             }
             RosuKind::Spinner(s) => HitObject {
-                start_time: obj.start_time,
+                start_time: obj.start_time + offset,
                 pos: Vec2::new(s.pos.x, s.pos.y),
                 new_combo: s.new_combo,
                 combo_offset: 0,
@@ -500,6 +530,23 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         };
         hit_objects.push(converted);
     }
+
+    let timing_points = raw
+        .control_points
+        .timing_points
+        .iter()
+        .map(|tp| TimingPoint { time: tp.time + offset, beat_len: tp.beat_len })
+        .collect();
+    let difficulty_points = raw
+        .control_points
+        .difficulty_points
+        .iter()
+        .map(|dp| DifficultyPoint {
+            time: dp.time + offset,
+            slider_velocity: dp.slider_velocity,
+            generate_ticks: dp.generate_ticks,
+        })
+        .collect();
 
     Ok(Beatmap {
         format_version: raw.format_version,
@@ -514,13 +561,21 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         audio_lead_in: raw.audio_lead_in,
         background_file: raw.background_file,
         stack_leniency: raw.stack_leniency,
-        hp_drain_rate: raw.hp_drain_rate,
-        circle_size: raw.circle_size,
-        overall_difficulty: raw.overall_difficulty,
-        approach_rate: raw.approach_rate,
+        // legacybeatmapdecoder.cs:118-132 (applydifficultyrestrictions) --
+        // lazer clamps difficulty settings to their allowed ranges after
+        // parsing; rosu-map clamps slider_multiplier and slider_tick_rate
+        // itself but stores these four raw, so deriving scale/preempt/windows
+        // from them unclamped would diverge (e.g. cs 20 yields a negative
+        // circle scale instead of behaving as cs 10)
+        hp_drain_rate: raw.hp_drain_rate.clamp(0.0, 10.0),
+        circle_size: raw.circle_size.clamp(0.0, 10.0),
+        overall_difficulty: raw.overall_difficulty.clamp(0.0, 10.0),
+        approach_rate: raw.approach_rate.clamp(0.0, 10.0),
         slider_multiplier: raw.slider_multiplier,
         slider_tick_rate: raw.slider_tick_rate,
         combo_colors: raw.custom_combo_colors.iter().map(|c| c.0).collect(),
+        timing_points,
+        difficulty_points,
         hit_objects,
     })
 }
@@ -615,6 +670,29 @@ SliderTickRate:1
         assert_eq!(data.control_points[2].pos, Vec2::new(100.0, 100.0));
         assert_eq!(data.expected_distance, Some(141.9));
         assert_eq!(data.repeat_count, 1); // slides=2 -> one repeat
+    }
+
+    #[test]
+    fn out_of_range_difficulty_settings_clamp_like_lazer() {
+        // legacybeatmapdecoder.cs:118-132: hp/cs/od/ar clamp to [0, 10];
+        // rosu-map stores them raw, so the clamp is convert's responsibility
+        let wild = MINIMAL_OSU
+            .replace("HPDrainRate:5", "HPDrainRate:99")
+            .replace("CircleSize:4", "CircleSize:20")
+            .replace("OverallDifficulty:8", "OverallDifficulty:-3")
+            .replace("ApproachRate:9", "ApproachRate:10.7");
+        let map = decode_beatmap_bytes(wild.as_bytes()).unwrap();
+        assert_eq!(map.hp_drain_rate, 10.0);
+        assert_eq!(map.circle_size, 10.0);
+        assert_eq!(map.overall_difficulty, 0.0);
+        assert_eq!(map.approach_rate, 10.0);
+
+        // in-range values pass through untouched
+        let map = decode_beatmap_bytes(MINIMAL_OSU.as_bytes()).unwrap();
+        assert_eq!(map.hp_drain_rate, 5.0);
+        assert_eq!(map.circle_size, 4.0);
+        assert_eq!(map.overall_difficulty, 8.0);
+        assert_eq!(map.approach_rate, 9.0);
     }
 
     #[test]
@@ -1274,5 +1352,59 @@ SliderTickRate:1
             panic!("expected slider")
         };
         assert_eq!(data.control_points.len(), limits::MAX_SLIDER_CONTROL_POINTS);
+    }
+
+    #[test]
+    fn decodes_timing_and_difficulty_points() {
+        let map = decode_beatmap_bytes(MINIMAL_OSU.as_bytes()).unwrap();
+        assert_eq!(map.timing_points.len(), 1);
+        assert_eq!(map.timing_points[0].time, 500.0);
+        assert!((map.timing_points[0].beat_len - 344.827586206897).abs() < 1e-9);
+        assert!(map.difficulty_points.is_empty());
+    }
+
+    #[test]
+    fn inherited_point_decodes_to_clamped_slider_velocity() {
+        // -50 -> sv 2.0; -5 -> raw sv 20 clamped to 10 (difficulty.rs:18 in
+        // rosu-map mirrors lazer's SliderVelocityBindable 0.1..10 clamp)
+        let osu = MINIMAL_OSU.replace(
+            "500,344.827586206897,4,2,1,60,1,0",
+            "500,344.827586206897,4,2,1,60,1,0\n1000,-50,4,2,1,60,0,0\n2000,-5,4,2,1,60,0,0",
+        );
+        let map = decode_beatmap_bytes(osu.as_bytes()).unwrap();
+        assert_eq!(map.difficulty_points.len(), 2);
+        assert_eq!(map.difficulty_points[0].time, 1000.0);
+        assert_eq!(map.difficulty_points[0].slider_velocity, 2.0);
+        assert!(map.difficulty_points[0].generate_ticks);
+        assert_eq!(map.difficulty_points[1].slider_velocity, 10.0);
+    }
+
+    #[test]
+    fn nan_beat_length_disables_tick_generation() {
+        // legacybeatmapdecoder parses inherited beat lengths with allowNaN and
+        // LegacyDifficultyControlPoint sets GenerateTicks = !double.IsNaN;
+        // rosu-map's DifficultyPoint::new mirrors it (difficulty.rs:19-20)
+        let osu = MINIMAL_OSU.replace(
+            "500,344.827586206897,4,2,1,60,1,0",
+            "500,344.827586206897,4,2,1,60,1,0\n1000,NaN,4,2,1,60,0,0",
+        );
+        let map = decode_beatmap_bytes(osu.as_bytes()).unwrap();
+        assert_eq!(map.difficulty_points.len(), 1);
+        assert!(!map.difficulty_points[0].generate_ticks);
+    }
+
+    #[test]
+    fn early_format_versions_shift_all_times_by_24ms() {
+        // legacybeatmapdecoder.cs:30,75 -- v4 and lower bake +24ms into every
+        // object and control point time. rosu-map does not do this, so convert
+        // must. the replay side mirrors it in replay::frames
+        let v4 = MINIMAL_OSU.replace("osu file format v14", "osu file format v4");
+        let map = decode_beatmap_bytes(v4.as_bytes()).unwrap();
+        assert_eq!(map.format_version, 4);
+        assert_eq!(map.hit_objects[0].start_time, 1024.0);
+        assert_eq!(map.timing_points[0].time, 524.0);
+
+        let v14 = decode_beatmap_bytes(MINIMAL_OSU.as_bytes()).unwrap();
+        assert_eq!(v14.hit_objects[0].start_time, 1000.0);
     }
 }
