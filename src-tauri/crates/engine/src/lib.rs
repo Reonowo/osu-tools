@@ -56,14 +56,52 @@
 //! | [`math`] | osuTK `Vector2` (osu-framework's vector nuget dependency), `osu.framework/utils/precision.cs`, and .net's `System.Array.BinarySearch` |
 //! | [`formats::osr`] | byte framing follows `LegacyScoreDecoder.cs`/`LegacyScoreEncoder.cs`; decompression tolerance is checked against `SharpCompress.Compressors.LZMA.LzmaStream`'s actual runtime behaviour, which is looser than lazer's own encoder output |
 //! | [`formats::beatmap`] | not a port of a lazer source file -- it wraps the third-party `rosu-map` crate for the actual `.osu` parse and only converts the result into engine-owned types. its pre-parse slider-size guard is checked against `rosu-map`'s own internal line/section/point-parsing behaviour (see [`limits`]) rather than against lazer, since `rosu-map` is the parser being guarded here |
+//! | [`beatmap`]`::*` | assembly order follows `workingbeatmap.cs:291-351` (convert -> combo pre-process -> per-object defaults -> stacking); per-submodule citations: `osubeatmapprocessor.cs` (combo enforcement, stacking), `slidereventgenerator.cs` (slider nested events), `ibeatmapdifficultyinfo.cs`/`legacyrulesetextensions.cs:46-59`/`osuhitobject.cs`/`osuhitwindows.cs` (cs/ar/od derivations, hit windows), `controlpointinfo.cs`/`timingcontrolpoint.cs`/`slider.cs:158-170`/`osubeatmapconverter.cs:47-51` (timing/velocity/tick distance) |
+//! | [`replay`]`::*` | `legacyscoredecoder.cs:268-352` (frame conversion: cumulative times, stable's first-frame fixups, intro-frame removal); `framedreplayinputhandler.cs`/`osuframedreplayinputhandler.cs`/`interpolation.cs:351-361` (cursor interpolation, frame-accurate replay of `MousePositionAbsoluteInput`); `replay::document`'s undo/redo and export rules come from this crate's own spec, not a lazer port |
+//! | [`simulation`]`::*` | `legacyhitpolicy.cs` (classic note lock); `drawablehitcircle.cs`/`drawablesliderhead.cs`/`drawableslider.cs:293-315` (classic circle/slider-head/aggregate judgement); `sliderinputmanager.cs` (tracking state machine, key restriction, `postprocessheadjudgement`); `spinnerrotationtracker.cs`/`spinnerspinhistory.cs`/`drawablespinner.cs` (spinner rotation, ticks, final result); `hitresult.cs`/`osulegacyscoresimulator.cs` (combo/count semantics, with the one deliberate divergence noted below) |
+//! | [`mods`] | `osu.game/beatmaps/legacy/legacymods.cs` (flag values, mirroring the stable bitfield stored in `.osr` headers). the `ModPipeline` seam itself (`adjust_difficulty -> transform_geometry -> rate`) is new scaffolding rather than a lazer port; v1 ships [`mods::NoMod`] only, catalogued further in `TODO.md` |
 //!
 //! [`limits`] documents every resource cap this crate enforces at a format
 //! boundary: what each one guards and where its boundary test lives.
+//!
+//! # simulation parity
+//!
+//! judgement parity has two tiers below the fixture-level golden tests above.
+//! count-level: `tests/replay_corpus.rs`'s `local_nomod_replays_self_verify`
+//! is the spec's §parity 2 oracle -- for every replay dropped into the
+//! gitignored personal corpus at `fixtures/replays/local/` (a real NoMod
+//! stable `.osr` plus its sibling `.osu`, same stem), the simulated `{300,
+//! 100, 50, miss, max combo}` must equal the `.osr` header's own counts
+//! exactly; an empty or missing corpus passes with a notice so ci stays
+//! green without anyone's personal replays ever being committed. alongside
+//! it, a committed synthetic test (`synthetic_full_combo_on_the_fixture_map`)
+//! full-combos `fixtures/beatmaps/slider-zoo-v14.osu` with a hand-built
+//! replay and hand-derived expected totals, so decode -> process -> simulate
+//! runs end to end on every ci run even with no local corpus at all.
+//!
+//! beneath the count-level oracle, two lazer-dump fixture families back
+//! `beatmap` and `replay` directly with values lazer itself computed: the
+//! `.osu`-decoded `fixtures/beatmap/*.json` dumps (stacking, scale, preempt,
+//! windows, nested slider objects, per-slider ball samples) and the replay
+//! dumps (`fixtures/replays/cursor_interpolation.json`,
+//! `fixtures/replays/frame_conversion_*.json`) covering cursor interpolation
+//! and frame conversion.
+//!
+//! this crate has exactly one deliberate scoring divergence from lazer: the
+//! classic slider tail increments combo (stable semantics), evidenced by
+//! `OsuLegacyScoreSimulator.cs:92-96` and the `LegacyComboIncrease` padding at
+//! `LegacyScoreDecoder.cs:245-254` -- lazer's own lazer-native tail result
+//! does not touch combo, but the oracle here is the stable `.osr` header's
+//! max combo, so the stable rule wins. documented at [`simulation::score`].
 
+pub mod beatmap;
 pub mod error;
 pub mod formats;
 pub mod limits;
 pub mod math;
+pub mod mods;
 pub mod path;
+pub mod replay;
+pub mod simulation;
 
 pub use error::{EngineError, Result};
