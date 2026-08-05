@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  embedded by build.rs into every compiled artifact of this crate (bins and
+  the cargo test harness alike, see the comment above
+  embed_common_controls_v6_manifest in build.rs for why); it exists purely to
+  activate the common-controls-v6 side-by-side assembly so the loader can
+  resolve muda's TaskDialogIndirect import, which the cargo test harness
+  otherwise never gets a manifest for
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
