@@ -60,6 +60,7 @@
 //! | [`replay`]`::*` | `legacyscoredecoder.cs:268-352` (frame conversion: cumulative times, stable's first-frame fixups, intro-frame removal); `framedreplayinputhandler.cs`/`osuframedreplayinputhandler.cs`/`interpolation.cs:351-361` (cursor interpolation, frame-accurate replay of `MousePositionAbsoluteInput`); `replay::document`'s undo/redo and export rules come from this crate's own spec, not a lazer port |
 //! | [`simulation`]`::*` | `legacyhitpolicy.cs` (classic note lock); `drawablehitcircle.cs`/`drawablesliderhead.cs`/`drawableslider.cs:293-315` (classic circle/slider-head/aggregate judgement); `sliderinputmanager.cs` (tracking state machine, key restriction, `postprocessheadjudgement`); `spinnerrotationtracker.cs`/`spinnerspinhistory.cs`/`drawablespinner.cs` (spinner rotation, ticks, final result); `hitresult.cs`/`osulegacyscoresimulator.cs` (combo/count semantics, with the one deliberate divergence noted below) |
 //! | [`mods`] | `osu.game/beatmaps/legacy/legacymods.cs` (flag values, mirroring the stable bitfield stored in `.osr` headers). the `ModPipeline` seam itself (`adjust_difficulty -> transform_geometry -> rate`) is new scaffolding rather than a lazer port; v1 ships [`mods::NoMod`] only, catalogued further in `TODO.md` |
+//! | [`render_plan`] | not a port: assembles the frontend package from `beatmap`/`path` outputs. its two cited constants are the argon combo palette (`argonskin.cs:51-71`, fallback used because beatmap skins refuse the legacy default palette, `legacybeatmapskin.cs:40`) and the playfield base size (`osuplayfield.cs:47`) |
 //!
 //! [`limits`] documents every resource cap this crate enforces at a format
 //! boundary: what each one guards and where its boundary test lives.
@@ -101,6 +102,7 @@ pub mod limits;
 pub mod math;
 pub mod mods;
 pub mod path;
+pub mod render_plan;
 pub mod replay;
 pub mod simulation;
 

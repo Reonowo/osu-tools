@@ -6,11 +6,11 @@ edition = "2021"
 [dependencies]
 lzma-rs = "0.3"
 rosu-map = "0.2"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
 osu-db = { version = "0.3", default-features = false }
-serde = { version = "1", features = ["derive"] }
 # float_roundtrip: without it serde_json's fast float path can land 1 ulp off the
 # value .net wrote, which shows up as spurious "deviation" against fixtures that
 # the port actually reproduces bit-for-bit
