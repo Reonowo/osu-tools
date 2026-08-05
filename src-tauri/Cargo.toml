@@ -16,12 +16,39 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# embeds a comctl32-v6 manifest uniformly into every artifact of this crate,
+# including the cargo test harness (build.rs; see the comment there -- the
+# harness gets no manifest at all otherwise, since tauri-build's own default
+# manifest is scoped to bin targets only). version pinned to match what
+# tauri-build already pulls in transitively via tauri-winres, so cargo
+# resolves a single shared instance. unconditional because the build script
+# is compiled for the host and cannot cfg on the target: the embedding call
+# is gated at runtime on CARGO_CFG_TARGET_OS instead, and a target-gated
+# dependency would leave that call unresolvable on non-windows targets
+embed-resource = "3"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# protocol-asset: commands.rs allows loaded media on the asset-protocol scope
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+engine = { path = "crates/engine" }
+dunce = "1"
+osu-db = { version = "0.3", default-features = false }
+md5 = "0.8"
+
+# deflate only: .osz members are stored or deflated; the default feature set
+# pulls aes/bzip2/zstd/xz codecs this app never reads
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+chrono = "0.4"
+# [dev-dependencies] -- the mock runtime for command tests; feature
+# unification only applies this to test builds
+tauri = { version = "2", features = ["test"] }
 
 [workspace]
 members = ["crates/engine"]
