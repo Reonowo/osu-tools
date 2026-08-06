@@ -6,6 +6,8 @@ export interface ClockAudio {
   readonly currentTimeMs: number;
   readonly durationMs: number | null;
   setRate(rate: number): void;
+  /** linear amplitude, 0-1 */
+  setVolume(volume: number): void;
   play(): void;
   pause(): void;
   seekMs(ms: number): void;
@@ -21,6 +23,9 @@ export function htmlAudioAdapter(el: HTMLAudioElement): ClockAudio {
       return Number.isFinite(el.duration) ? el.duration * 1000 : null;
     },
     setRate: (rate) => { el.playbackRate = rate; },
+    // HTMLMediaElement.volume throws on anything outside 0-1, so clamp at the
+    // boundary rather than trusting every caller
+    setVolume: (volume) => { el.volume = Math.min(Math.max(volume, 0), 1); },
     play: () => { void el.play().catch(() => {}); },
     pause: () => el.pause(),
     seekMs: (ms) => { el.currentTime = ms / 1000; },
@@ -44,6 +49,8 @@ export class PlaybackClock {
   private boundsMax = 0;
   private isPlaying = false;
   private currentRate = 1;
+  /** linear amplitude 0-1, held here so it survives audio swaps */
+  private currentVolume = 1;
 
   constructor(private readonly now: () => number = () => performance.now()) {
     this.lastNow = this.now();
@@ -53,11 +60,15 @@ export class PlaybackClock {
   get maxTime() { return this.boundsMax; }
   get playing() { return this.isPlaying; }
   get rate() { return this.currentRate; }
+  get volume() { return this.currentVolume; }
 
   attachAudio(audio: ClockAudio | null): void {
     this.audio?.pause();
     this.audio = audio;
+    // re-apply both persistent settings: loading a second replay swaps in a
+    // fresh element that starts at full volume and 1x
     audio?.setRate(this.currentRate);
+    audio?.setVolume(this.currentVolume);
     this.mode = "internal";
   }
 
@@ -76,6 +87,14 @@ export class PlaybackClock {
     this.rebaseFromRaw();
     this.currentRate = rate;
     this.audio?.setRate(rate);
+  }
+
+  /** linear amplitude 0-1. osu-framework applies its aggregate volume
+   * straight to the bass channel volume (TrackBass.cs:371), so linear is the
+   * osu!-matching curve. remembered across attachAudio */
+  setVolume(volume: number): void {
+    this.currentVolume = Math.min(Math.max(volume, 0), 1);
+    this.audio?.setVolume(this.currentVolume);
   }
 
   play(): void {

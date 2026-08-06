@@ -24,6 +24,7 @@ function fakeAudio(durationMs = 10_000, sampleInterval = 250) {
     readonly playingNow: boolean;
     readonly seeks: number[];
     readonly rates: number[];
+    readonly volumes: number[];
     pauseCalls: number;
   } = {
     get currentTimeMs() {
@@ -31,6 +32,7 @@ function fakeAudio(durationMs = 10_000, sampleInterval = 250) {
     },
     durationMs,
     setRate: (r) => { rate = r; audio.rates.push(r); },
+    setVolume: (v) => { audio.volumes.push(v); },
     play: () => { playing = true; },
     pause: () => { playing = false; audio.pauseCalls++; },
     seekMs: (ms) => {
@@ -51,6 +53,7 @@ function fakeAudio(durationMs = 10_000, sampleInterval = 250) {
     playingNow: false as boolean,
     seeks: [] as number[],
     rates: [] as number[],
+    volumes: [] as number[],
     pauseCalls: 0,
   };
   Object.defineProperty(audio, "playingNow", { get: () => playing });
@@ -71,6 +74,7 @@ function manualAudio(durationMs: number | null = 10_000) {
     },
     durationMs,
     setRate: () => {},
+    setVolume: () => {},
     play: () => { playing = true; },
     pause: () => { playing = false; },
     seekMs: (ms) => { position = ms; audio.seeks.push(ms); },
@@ -487,5 +491,63 @@ describe("play/pause idempotency", () => {
     expect(clock.playing).toBe(false);
     expect(audio.pauseCalls).toBe(pauseCallsWhilePlaying + 1);
     expect(clock.currentTime()).toBe(pausedAt);
+  });
+});
+
+describe("volume", () => {
+  test("setVolume forwards to the audio and clamps to 0-1", () => {
+    const audio = fakeAudio();
+    const clock = new PlaybackClock(fakeNow().now);
+    clock.attachAudio(audio);
+    const afterAttach = audio.volumes.length;
+
+    clock.setVolume(0.5);
+    expect(clock.volume).toBe(0.5);
+    expect(audio.volumes[afterAttach]).toBe(0.5);
+
+    clock.setVolume(1.7);
+    expect(clock.volume).toBe(1);
+    clock.setVolume(-0.2);
+    expect(clock.volume).toBe(0);
+    expect(audio.volumes.slice(afterAttach)).toEqual([0.5, 1, 0]);
+  });
+
+  test("attachAudio re-applies the current volume to the new element", () => {
+    // loading a second replay swaps in a fresh <audio>, which starts at full
+    // volume; the level the user picked has to follow it across
+    const clock = new PlaybackClock(fakeNow().now);
+    clock.attachAudio(fakeAudio());
+    clock.setVolume(0.25);
+
+    const next = fakeAudio();
+    clock.attachAudio(next);
+    expect(next.volumes).toEqual([0.25]);
+    expect(clock.volume).toBe(0.25);
+  });
+
+  test("a volume set with no audio attached applies on the next attach", () => {
+    // hydration can finish before PlayerView has mounted an element
+    const clock = new PlaybackClock(fakeNow().now);
+    clock.setVolume(0.4);
+    expect(clock.volume).toBe(0.4);
+
+    const audio = fakeAudio();
+    clock.attachAudio(audio);
+    expect(audio.volumes).toEqual([0.4]);
+  });
+
+  test("volume defaults to full and survives rate changes and seeks", () => {
+    const c = fakeNow();
+    const audio = fakeAudio();
+    const clock = new PlaybackClock(c.now);
+    expect(clock.volume).toBe(1);
+    clock.attachAudio(audio);
+    clock.setBounds(0, 12_000);
+    clock.setVolume(0.6);
+    clock.setRate(1.5);
+    clock.seekTo(3000);
+    clock.play();
+    c.advance(16); audio.advance(16); clock.tick();
+    expect(clock.volume).toBe(0.6);
   });
 });
