@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { buildPathQuads, pathBounds } from "./geometry";
 
 function quadAt(q: ReturnType<typeof buildPathQuads>, index: number) {
-	const positions = q.positions.slice(index * 8, index * 8 + 8);
-	const start = q.segStarts.slice(index * 8, index * 8 + 2);
-	const end = q.segEnds.slice(index * 8, index * 8 + 2);
+	// Normalise GPU-friendly typed buffers to value-only arrays: these tests
+	// assert the emitted coordinates, not the buffers' runtime container type.
+	const positions = Array.from(q.positions.slice(index * 8, index * 8 + 8));
+	const start = Array.from(q.segStarts.slice(index * 8, index * 8 + 2));
+	const end = Array.from(q.segEnds.slice(index * 8, index * 8 + 2));
 	return { positions, start, end };
 }
 
