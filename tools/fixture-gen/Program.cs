@@ -392,6 +392,27 @@ void DumpBeatmapFixtures() => FixtureGen.BeatmapDumps.Run(outDir, namedFloatLite
 
 FixtureGen.ReplayDumps.Run(outDir, jsonOptions);
 
+DumpEasingFixtures();
+
+void DumpEasingFixtures()
+{
+    // 33 samples at i/32: hits both endpoints and the exact 0.5 branch
+    // boundary every InOut easing switches on
+    double[] samples = Enumerable.Range(0, 33).Select(i => i / 32.0).ToArray();
+
+    var cases = Enum.GetValues<osu.Framework.Graphics.Easing>()
+        .Select(easing => new
+        {
+            Name = easing.ToString(),
+            Values = samples
+                .Select(t => new osu.Framework.Graphics.Transforms.DefaultEasingFunction(easing).ApplyEasing(t))
+                .ToArray(),
+        })
+        .ToArray();
+
+    Dump("easing.json", new { Samples = samples, Cases = cases });
+}
+
 static osu.Game.Rulesets.Objects.Types.PathType? ParsePathType(FixtureGen.Cp p) => p.Type switch
 {
     null => null,
