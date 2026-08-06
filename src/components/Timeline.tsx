@@ -16,6 +16,7 @@ export function Timeline() {
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const trackRef = useRef<HTMLDivElement>(null);
 	const fillRef = useRef<HTMLDivElement>(null);
+	const playheadRef = useRef<HTMLDivElement>(null);
 	// when the audio outlives the last object, PlayerView extends the clock's
 	// maxTime on loadedmetadata; the bar must map fill, markers, and seeks
 	// against those same effective bounds or the trailing audio is pegged at
@@ -30,9 +31,9 @@ export function Timeline() {
 	useEffect(() => {
 		let raf = 0;
 		const loop = () => {
-			if (fillRef.current !== null) {
-				fillRef.current.style.width = `${fractionFor(bounds, playbackClock.currentTime()) * 100}%`;
-			}
+			const fraction = fractionFor(bounds, playbackClock.currentTime());
+			if (fillRef.current !== null) fillRef.current.style.width = `${fraction * 100}%`;
+			if (playheadRef.current !== null) playheadRef.current.style.left = `${fraction * 100}%`;
 			raf = requestAnimationFrame(loop);
 		};
 		raf = requestAnimationFrame(loop);
@@ -58,16 +59,18 @@ export function Timeline() {
 	return (
 		<div
 			ref={trackRef}
-			className="group relative h-3 w-full cursor-pointer touch-none"
+			className="group relative h-5 w-full cursor-pointer touch-none"
 			onPointerDown={(e) => {
 				e.currentTarget.setPointerCapture(e.pointerId);
+				playheadRef.current?.setAttribute("data-scrubbing", "");
 				seekFromPointer(e);
 			}}
 			onPointerMove={(e) => {
 				if (e.currentTarget.hasPointerCapture(e.pointerId)) seekFromPointer(e);
 			}}
+			onLostPointerCapture={() => playheadRef.current?.removeAttribute("data-scrubbing")}
 		>
-			<div className="absolute inset-x-0 top-1 h-1 rounded-full bg-zinc-800">
+			<div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-zinc-800">
 				<div
 					className="absolute left-0 top-0 h-full rounded-l-full bg-zinc-700/60"
 					style={{ width: `${leadInWidth}%` }}
@@ -77,10 +80,15 @@ export function Timeline() {
 			{markers.map((m, i) => (
 				<div
 					key={i}
-					className="absolute top-0 h-3 w-0.5"
+					className="absolute top-0 h-5 w-0.5"
 					style={{ left: `${m.left}%`, backgroundColor: m.colour }}
 				/>
 			))}
+			{/* grab handle at the current time, not a hover preview at the cursor */}
+			<div
+				ref={playheadRef}
+				className="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/40 bg-[#ff66ab] opacity-0 transition-opacity group-hover:opacity-100 data-scrubbing:opacity-100"
+			/>
 		</div>
 	);
 }
