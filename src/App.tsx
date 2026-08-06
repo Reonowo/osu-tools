@@ -9,8 +9,10 @@ import { PlayerView } from "@/components/PlayerView";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { TopBar } from "@/components/TopBar";
 import { WarningBanners } from "@/components/WarningBanners";
+import { invokeSetViewerPrefs } from "@/lib/ipc";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
+import { installPrefsPersistence } from "@/state/persist";
 import { useViewerStore, viewerStore } from "@/state/store";
 
 export default function App() {
@@ -20,6 +22,23 @@ export default function App() {
   useEffect(() => {
     const cleanup = installDropHandler();
     return () => void cleanup.then((unlisten) => unlisten());
+  }, []);
+
+  // persistence is installed only after hydration resolves, so the loaded
+  // values are not immediately written back. the cancelled flag covers
+  // strict-mode's double mount, where the first effect is torn down while
+  // its hydrate is still in flight
+  useEffect(() => {
+    let cancelled = false;
+    let dispose: (() => void) | null = null;
+    void viewerStore.getState().hydrateSettings().then(() => {
+      if (cancelled) return;
+      dispose = installPrefsPersistence(viewerStore, invokeSetViewerPrefs);
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
   }, []);
 
   useEffect(() => {
