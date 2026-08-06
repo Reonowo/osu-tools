@@ -7,8 +7,9 @@
 // never call setBounds, which is scene-load-only (task 9's review note)
 
 import { useEffect, useRef } from "react";
-import { Pause, Play, SkipBack, StepBack, StepForward } from "lucide-react";
+import { Pause, Play, SkipBack, StepBack, StepForward, Volume1, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import { formatAccuracy, formatTime } from "@/lib/format";
 import { statsAt } from "@/lib/timeline";
 import { playbackClock } from "@/playback/instance";
@@ -16,6 +17,12 @@ import { useViewerStore, viewerStore } from "@/state/store";
 import { Timeline } from "./Timeline";
 
 const RATES = [0.25, 0.5, 0.75, 1, 1.5, 2];
+
+/** the speaker glyph tracks the level, as osu! itself does */
+function VolumeIcon({ volume }: { volume: number }) {
+  const Icon = volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
+  return <Icon className="size-4 shrink-0 text-zinc-500" aria-hidden />;
+}
 
 function stepFrame(direction: 1 | -1) {
   const { scene } = viewerStore.getState();
@@ -32,8 +39,10 @@ export function Controls() {
   const scene = useViewerStore((s) => s.scene);
   const playing = useViewerStore((s) => s.playing);
   const rate = useViewerStore((s) => s.rate);
+  const volume = useViewerStore((s) => s.volume);
   const setPlaying = useViewerStore((s) => s.setPlaying);
   const setRate = useViewerStore((s) => s.setRate);
+  const setVolume = useViewerStore((s) => s.setVolume);
   const timeRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -53,8 +62,9 @@ export function Controls() {
     function onKey(e: KeyboardEvent) {
       // buttons and other interactive controls keep their native key
       // handling (space on a focused button must activate it, not toggle
-      // playback out from under it)
-      if (e.target instanceof HTMLElement && e.target.closest("input, textarea, select, button, [role=dialog]") !== null) return;
+      // playback out from under it; arrows on a focused slider thumb must
+      // move that slider, not seek)
+      if (e.target instanceof HTMLElement && e.target.closest("input, textarea, select, button, [role=slider], [role=dialog]") !== null) return;
       if (viewerStore.getState().scene === null) return;
       switch (e.key) {
         case " ": e.preventDefault(); setPlaying(!viewerStore.getState().playing); break;
@@ -83,7 +93,18 @@ export function Controls() {
         <Button size="icon" variant="ghost" aria-label="previous frame" onClick={() => stepFrame(-1)}><StepBack /></Button>
         <Button size="icon" variant="ghost" aria-label="next frame" onClick={() => stepFrame(1)}><StepForward /></Button>
         <span ref={timeRef} className="ml-2 text-xs tabular-nums text-zinc-400" />
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="ml-auto flex items-center gap-2">
+          <VolumeIcon volume={volume} />
+          <Slider
+            className="w-24"
+            aria-label="volume"
+            min={0} max={100} step={1}
+            value={[volume]}
+            onValueChange={(v) => setVolume(Array.isArray(v) ? v[0] : v)}
+          />
+          <span className="w-9 text-right text-xs tabular-nums text-zinc-400">{volume}%</span>
+        </div>
+        <div className="flex items-center gap-0.5">
           {RATES.map((r) => (
             <Button
               key={r}
