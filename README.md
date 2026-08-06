@@ -68,3 +68,55 @@ Two things worth knowing before you regenerate, covered in full in `fixtures/REA
 
 See `fixtures/README.md` for the full fixture format, tolerance policy, and the local
 (gitignored) `.osr` corpus used by the optional round-trip test.
+
+## Frontend viewer
+
+The frontend is a Tauri + React + Pixi app that renders a loaded replay against its
+beatmap: playback clock, zustand store, the Pixi `GameplayRenderer` and its Argon
+drawables (hit circles, slider bodies, cursor/trail, judgements, analysis overlays),
+and the timeline/controls chrome.
+
+### Prerequisites
+
+- bun `1.3.14` (pinned via `package.json`'s `packageManager` field) -- never npm/yarn/npx
+- Rust (stable toolchain) and the .NET SDK from the engine prerequisites above, since
+  `bun run tauri dev`/`build` compile the `src-tauri` workspace as part of the app
+
+### Running the app
+
+From the repo root:
+
+```bash
+bun install
+bun run tauri dev
+```
+
+`bun run tauri dev` builds and launches the desktop shell with hot reload; open a
+`.osr` from the app's load UI (auto beatmap lookup needs a real osu! stable install
+with `osu!.db`, or pick the `.osu`/`.osz` manually).
+
+### Frontend tests
+
+```bash
+bun test src        # every bun-tested module under src/
+bun run build        # tsc typecheck + vite production build
+```
+
+`bun test src` is headless (no WebGL/display) and covers every pure module: engine
+math ports, the playback clock, track builders, and drawable helper functions split
+out for testability. It does not exercise Pixi's actual render path or anything
+under `bun run tauri dev` -- those need a human pass with a real replay.
+
+### Fixture regeneration
+
+Frontend parity tests (easing, interpolation, progress-to-position, render-plan
+shape) read the same `fixtures/` tree the engine crate does. Regenerate with:
+
+```bash
+dotnet run --project tools/fixture-gen -- --out fixtures       # lazer-derived .osu/.osr dumps
+cargo run -p engine --example dump_render_plan                 # engine::render_plan fixture dumps (from src-tauri)
+```
+
+Both are deterministic given the same pinned lazer checkout -- rerunning either with
+no source changes should leave `git status` clean. Only regenerate on a reference-pin
+bump or when a task adds new fixture cases (see "Regenerating fixtures" above).

@@ -119,3 +119,23 @@ a `PerfectCurve` segment gets a circular arc or degrades to a B-spline, so
 branch — 3 vertices. On a saturating runtime that case would take the B-spline
 branch and record ~129 vertices instead, silently changing the shape of a
 slider a mapper can actually place.
+
+## easing.json
+
+All 36 `Easing` enum members sampled through
+`osu.Framework.Graphics.Transforms.DefaultEasingFunction.ApplyEasing` at
+`t = i/32, i ∈ [0, 32]`. Consumed by the frontend easing port's parity test
+(`src/engine/easing.test.ts`); pure double math on both sides, compared at
+1e-9. Regenerated with every other fixture.
+
+## render_plan/
+
+**Rust-generated, not lazer goldens.** One dump of
+`engine::render_plan::build_render_plan` per `beatmaps/*.osu` — the exact
+production geometry `LoadedScene.renderPlan` carries over IPC. The frontend's
+slider progress→position parity test (`src/engine/slider-path.test.ts`)
+evaluates this geometry and compares against **lazer's** `ball_samples` in
+`beatmap/*.json`, so lazer remains the oracle; the geometry itself is under
+the engine's own lazer-fixture parity (plans 1–2). Regenerate with
+`cargo run -p engine --example dump_render_plan` (from `src-tauri/`) whenever
+the render-plan serialization or the fixture beatmaps change.
