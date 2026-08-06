@@ -1,0 +1,36 @@
+// pure timeline math (decision 4): fraction<->time mapping for the seek bar
+// and the combo/accuracy lookup for the hud. no dom, no react, no clock --
+// components evaluate these against values they already read elsewhere
+
+export interface TimeBounds {
+  minTime: number;
+  maxTime: number;
+}
+
+export function fractionFor(bounds: TimeBounds, t: number): number {
+  const span = bounds.maxTime - bounds.minTime;
+  if (span <= 0) return 0;
+  return Math.min(1, Math.max(0, (t - bounds.minTime) / span));
+}
+
+export function timeFor(bounds: TimeBounds, fraction: number): number {
+  const clamped = Math.min(1, Math.max(0, fraction));
+  return bounds.minTime + clamped * (bounds.maxTime - bounds.minTime);
+}
+
+/** latest combo/accuracy at t from the time-sorted judgement events; null
+ * before the first judgement (the hud shows resting values then) */
+export function statsAt(
+  events: import("./scene-types").JudgementEventDto[],
+  t: number,
+): { combo: number; accuracy: number } | null {
+  let lo = 0;
+  let hi = events.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (events[mid].time <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo === 0) return null;
+  return { combo: events[lo - 1].comboAfter, accuracy: events[lo - 1].accuracyAfter };
+}
