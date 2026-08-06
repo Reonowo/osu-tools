@@ -1,51 +1,56 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect, useState } from "react";
+import { toast, Toaster } from "sonner";
+import { Controls, HudReadout } from "@/components/Controls";
+import { DropZone } from "@/components/DropZone";
+import { InfoPanel } from "@/components/InfoPanel";
+import { KeypressOverlay } from "@/components/KeypressOverlay";
+import { MismatchDialog } from "@/components/MismatchDialog";
+import { PlayerView } from "@/components/PlayerView";
+import { SettingsDialog } from "@/components/SettingsDialog";
+import { TopBar } from "@/components/TopBar";
+import { WarningBanners } from "@/components/WarningBanners";
+import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
+import { describeIpcError } from "@/state/errors";
+import { useViewerStore, viewerStore } from "@/state/store";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+export default function App() {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const lastError = useViewerStore((s) => s.lastError);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  useEffect(() => {
+    const cleanup = installDropHandler();
+    return () => void cleanup.then((unlisten) => unlisten());
+  }, []);
+
+  useEffect(() => {
+    if (lastError === null) return;
+    const { title, detail, recovery } = describeIpcError(lastError.error);
+    toast.error(title, {
+      description: detail,
+      duration: recovery === null ? 6000 : 30_000,
+      action: recovery === "pickBeatmap"
+        ? { label: "pick beatmap", onClick: () => void pickBeatmapFor(lastError.osrPath) }
+        : undefined,
+    });
+    viewerStore.getState().clearError();
+  }, [lastError]);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="relative h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-zinc-200">
+      <main className="absolute inset-0">
+        <PlayerView />
+      </main>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
+      <WarningBanners />
+      <DropZone />
+      <InfoPanel />
+      <Controls />
+      <HudReadout />
+      <KeypressOverlay />
+      <MismatchDialog />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <Toaster theme="dark" position="bottom-right" richColors />
+    </div>
   );
 }
-
-export default App;
