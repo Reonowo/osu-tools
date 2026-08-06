@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { LoadedSceneWarning } from "@/lib/scene-types";
+import type { LoadedSceneWarning, Settings } from "@/lib/scene-types";
+import { DEFAULT_OVERLAYS } from "@/state/defaults";
 import { createViewerStore, type ViewerState } from "@/state/store";
 import { testScene } from "@/test/scene";
 import { bannersFor, selectWarnings, warningText } from "./WarningBanners";
+
+const settings: Settings = { osuStablePath: null, volume: 100, overlays: DEFAULT_OVERLAYS };
 
 // zustand's useStore drives useSyncExternalStore, which compares each
 // getSnapshot() result to the previous one with Object.is. a selector that
@@ -13,8 +16,9 @@ describe("selectWarnings identity stability", () => {
   const deps = {
     loadReplay: async () => testScene(),
     loadReplayWithBeatmap: async () => testScene(),
-    getSettings: async () => ({ osuStablePath: null }),
-    setOsuStablePath: async () => ({ osuStablePath: null }),
+    getSettings: async () => settings,
+    setOsuStablePath: async () => settings,
+    setViewerPrefs: async () => settings,
   };
 
   test("returns a referentially stable value with no scene loaded", () => {

@@ -163,6 +163,21 @@ export type IpcError =
   | { kind: "io"; message: string }
   | { kind: "internal"; message: string };
 
+/** mirrors settings.rs OverlayPrefs */
+export interface OverlaySettings {
+  cursorPath: boolean;
+  clickMarkers: boolean;
+  frameMarkers: boolean;
+  hideCursor: boolean;
+  keyOverlay: boolean;
+  /** ms; lazer's ReplayAnalysisDisplayLength (200-2000, default 800) */
+  displayLength: number;
+}
+
+/** mirrors settings.rs Settings */
 export interface Settings {
   osuStablePath: string | null;
+  /** linear amplitude percent, 0-100 */
+  volume: number;
+  overlays: OverlaySettings;
 }

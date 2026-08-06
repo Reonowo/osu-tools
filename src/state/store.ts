@@ -4,27 +4,24 @@
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
   invokeGetSettings, invokeLoadReplay, invokeLoadReplayWithBeatmap,
-  invokeSetOsuStablePath, isIpcError,
+  invokeSetOsuStablePath, invokeSetViewerPrefs, isIpcError,
 } from "../lib/ipc";
-import type { IpcError, LoadedScene, Settings } from "../lib/scene-types";
+import type { IpcError, LoadedScene, OverlaySettings, Settings } from "../lib/scene-types";
 import { deriveScene, type DerivedScene } from "../lib/derive";
+import { clampDisplayLength, clampVolume, DEFAULT_OVERLAYS, DEFAULT_VOLUME } from "./defaults";
 import { describeIpcError } from "./errors";
+
+// OverlaySettings moved to the wire contract (scene-types.ts) when the
+// overlays became a persisted setting; re-exported so the renderer and the
+// settings dialog keep importing it from here
+export type { OverlaySettings };
 
 export interface IpcDeps {
   loadReplay(osrPath: string): Promise<LoadedScene>;
   loadReplayWithBeatmap(osrPath: string, beatmapPath: string, allowMismatch: boolean): Promise<LoadedScene>;
   getSettings(): Promise<Settings>;
   setOsuStablePath(path: string | null): Promise<Settings>;
-}
-
-export interface OverlaySettings {
-  cursorPath: boolean;
-  clickMarkers: boolean;
-  frameMarkers: boolean;
-  hideCursor: boolean;
-  keyOverlay: boolean;
-  /** ms; lazer's ReplayAnalysisDisplayLength (200-2000 step 200, default 800) */
-  displayLength: number;
+  setViewerPrefs(volume: number, overlays: OverlaySettings): Promise<Settings>;
 }
 
 export interface ViewerState {
@@ -52,6 +49,9 @@ export interface ViewerState {
   overlays: OverlaySettings;
   playing: boolean;
   rate: number;
+  /** linear amplitude percent 0-100; persisted (unlike rate, which belongs
+   * to the replay being watched rather than to the app) */
+  volume: number;
 
   openReplay(osrPath: string): Promise<void>;
   openWithBeatmap(osrPath: string, beatmapPath: string): Promise<void>;
@@ -62,6 +62,12 @@ export interface ViewerState {
   setOverlay<K extends keyof OverlaySettings>(key: K, value: OverlaySettings[K]): void;
   setPlaying(playing: boolean): void;
   setRate(rate: number): void;
+  setVolume(volume: number): void;
+  /** startup only: pulls the persisted settings and applies volume + overlays
+   * into the store. distinct from loadSettings, which the settings dialog
+   * calls on every open and which must NOT touch volume/overlays -- doing so
+   * would revert changes still sitting in the persistence debounce */
+  hydrateSettings(): Promise<void>;
   loadSettings(): Promise<void>;
   saveStablePath(path: string | null): Promise<void>;
 }
@@ -79,6 +85,12 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
     // and a superseded load that hasn't started skips its ipc call entirely
     let loadSeq = 0;
     let loadQueue: Promise<void> = Promise.resolve();
+
+    // volume is a primitive, so hydration cannot use a value compare to
+    // detect an in-flight edit -- a drag away and back lands on the starting
+    // value again. every setVolume bumps this instead (overlays don't need
+    // one: setOverlay always builds a new object, so identity shows the edit)
+    let volumeEdits = 0;
 
     // a stale (superseded) success still swaps the displayed scene: its
     // command already installed the backend session (commands.rs
@@ -152,12 +164,10 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
       pendingMismatch: null,
       audioDurationMs: null,
       settings: null,
-      overlays: {
-        cursorPath: false, clickMarkers: false, frameMarkers: false,
-        hideCursor: false, keyOverlay: true, displayLength: 800,
-      },
+      overlays: DEFAULT_OVERLAYS,
       playing: false,
       rate: 1,
+      volume: DEFAULT_VOLUME,
 
       openReplay: (osrPath) => run(osrPath, () => deps.loadReplay(osrPath)),
       openWithBeatmap: (osrPath, beatmapPath) =>
@@ -174,9 +184,53 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
       dismissMismatch: () => set({ pendingMismatch: null }),
       clearError: () => set({ lastError: null }),
       setAudioDuration: (durationMs) => set({ audioDurationMs: durationMs }),
-      setOverlay: (key, value) => set({ overlays: { ...get().overlays, [key]: value } }),
+      setOverlay: (key, value) => {
+        let next = value;
+        if (key === "displayLength") {
+          // the numeric field commits raw user input, so validate here rather
+          // than at every call site; a blank field arrives as NaN and must
+          // leave the last good value alone
+          const ms = value as number;
+          if (!Number.isFinite(ms)) return;
+          next = clampDisplayLength(ms) as OverlaySettings[typeof key];
+        }
+        set({ overlays: { ...get().overlays, [key]: next } });
+      },
       setPlaying: (playing) => set({ playing }),
       setRate: (rate) => set({ rate }),
+      setVolume: (volume) => {
+        if (!Number.isFinite(volume)) return;
+        volumeEdits += 1;
+        set({ volume: clampVolume(volume) });
+      },
+      hydrateSettings: async () => {
+        // the volume slider and overlay toggles are usable before the read
+        // resolves, so capture what could be edited in flight: applying the
+        // loaded value over a fresher edit would visibly revert the control
+        // the user just touched (and the edit predates persistence install,
+        // so nothing would re-save it)
+        const overlaysBefore = get().overlays;
+        const volumeEditsBefore = volumeEdits;
+        let settings: Settings;
+        try {
+          settings = await deps.getSettings();
+        } catch {
+          // startup must not break on an unreadable settings file; the
+          // defaults already in the store stand in, and the settings dialog
+          // retries through loadSettings on its next open
+          return;
+        }
+        set({
+          settings,
+          ...(volumeEdits === volumeEditsBefore
+            ? { volume: clampVolume(settings.volume) }
+            : {}),
+          // reference equality: setOverlay always builds a new object
+          ...(get().overlays === overlaysBefore
+            ? { overlays: { ...DEFAULT_OVERLAYS, ...settings.overlays } }
+            : {}),
+        });
+      },
       loadSettings: async () => set({ settings: await deps.getSettings() }),
       saveStablePath: async (path) => {
         try {
@@ -198,6 +252,7 @@ export const viewerStore = createViewerStore({
   loadReplayWithBeatmap: invokeLoadReplayWithBeatmap,
   getSettings: invokeGetSettings,
   setOsuStablePath: invokeSetOsuStablePath,
+  setViewerPrefs: invokeSetViewerPrefs,
 });
 
 export function useViewerStore<T>(selector: (state: ViewerState) => T): T {
