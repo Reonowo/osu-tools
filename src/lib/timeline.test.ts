@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fractionFor, statsAt, timeFor } from "./timeline";
+import { adjacentFrameTime, fractionFor, statsAt, timeFor } from "./timeline";
 
 const bounds = { minTime: -1500, maxTime: 8500 };
 
@@ -93,5 +93,37 @@ describe("statsAt", () => {
 	test("negative t (lead-in) before any judgement is null", () => {
 		expect(statsAt(events, -1500)).toBeNull();
 		expect(statsAt(events, -0.001)).toBeNull();
+	});
+});
+
+describe("adjacentFrameTime", () => {
+	const frames = [{ time: 10 }, { time: 20 }, { time: 30 }];
+
+	test("finds the next strictly-later frame time", () => {
+		expect(adjacentFrameTime(frames, 15, 1)).toBe(20);
+		expect(adjacentFrameTime(frames, 5, 1)).toBe(10);
+	});
+
+	test("finds the previous strictly-earlier frame time", () => {
+		expect(adjacentFrameTime(frames, 15, -1)).toBe(10);
+		expect(adjacentFrameTime(frames, 35, -1)).toBe(30);
+	});
+
+	test("skips frames at exactly t in both directions", () => {
+		expect(adjacentFrameTime(frames, 20, 1)).toBe(30);
+		expect(adjacentFrameTime(frames, 20, -1)).toBe(10);
+	});
+
+	test("returns undefined past either end", () => {
+		expect(adjacentFrameTime(frames, 30, 1)).toBeUndefined();
+		expect(adjacentFrameTime(frames, 10, -1)).toBeUndefined();
+		expect(adjacentFrameTime([], 0, 1)).toBeUndefined();
+		expect(adjacentFrameTime([], 0, -1)).toBeUndefined();
+	});
+
+	test("steps over duplicate frame times as one boundary", () => {
+		const dupes = [{ time: 10 }, { time: 20 }, { time: 20 }, { time: 30 }];
+		expect(adjacentFrameTime(dupes, 20, 1)).toBe(30);
+		expect(adjacentFrameTime(dupes, 20, -1)).toBe(10);
 	});
 });

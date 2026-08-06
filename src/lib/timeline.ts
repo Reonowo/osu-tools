@@ -34,3 +34,23 @@ export function statsAt(
 	if (lo === 0) return null;
 	return { combo: events[lo - 1].comboAfter, accuracy: events[lo - 1].accuracyAfter };
 }
+
+/** the neighbouring frame time strictly after (direction 1) or strictly
+ * before (direction -1) t, or undefined at the ends; frames must be
+ * time-sorted, as scene.frames already is */
+export function adjacentFrameTime(
+	frames: readonly { time: number }[],
+	t: number,
+	direction: 1 | -1
+): number | undefined {
+	let lo = 0;
+	let hi = frames.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		const before = direction === 1 ? frames[mid].time <= t : frames[mid].time < t;
+		if (before) lo = mid + 1;
+		else hi = mid;
+	}
+	if (direction === 1) return frames[lo]?.time;
+	return lo > 0 ? frames[lo - 1].time : undefined;
+}
