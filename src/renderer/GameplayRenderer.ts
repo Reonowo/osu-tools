@@ -8,6 +8,7 @@ import { HIT_FADE_OUT_TIME } from "../engine/argon";
 import type { DerivedScene } from "../lib/derive";
 import type { LoadedScene } from "../lib/scene-types";
 import type { OverlaySettings } from "../state/store";
+import { DEFAULT_OVERLAYS } from "../state/defaults";
 import { CircleDrawable } from "./drawables/circle";
 import { CursorDrawable } from "./drawables/cursor";
 import { FollowPointsDrawable } from "./drawables/follow-points";
@@ -17,13 +18,6 @@ import { SpinnerDrawable } from "./drawables/spinner";
 import { AnalysisDrawable } from "./overlays/analysis";
 import { ActiveSetTracker, objectLifetime, playfieldTransform, reconcileActiveDrawables } from "./playfield";
 import * as textures from "./textures";
-
-// osurulesetconfigmanager.cs:27-31 -- matches the store's own initial
-// overlays (state/store.ts); used only before the first setOverlays() call
-const DEFAULT_OVERLAYS: OverlaySettings = {
-  cursorPath: false, clickMarkers: false, frameMarkers: false,
-  hideCursor: false, keyOverlay: true, displayLength: 800,
-};
 
 export interface ObjectDrawable {
   readonly view: Container;
