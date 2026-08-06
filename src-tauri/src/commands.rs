@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use crate::error::IpcError;
 use crate::load::{self, LoadOutcome};
 use crate::scene::LoadedScene;
-use crate::settings::{save_settings, Settings};
+use crate::settings::{save_settings, OverlayPrefs, Settings};
 use crate::state::AppState;
 
 fn join_err(e: tauri::Error) -> IpcError {
@@ -95,6 +95,27 @@ pub fn set_osu_stable_path(
     Ok(settings.clone())
 }
 
+/// the viewer preferences that survive a restart. the frontend debounces its
+/// calls (state/persist.ts), so this runs on a settled value rather than per
+/// slider tick. sanitized before the write for the same reason load_settings
+/// sanitizes after the read -- neither side trusts a range it did not clamp
+#[tauri::command]
+pub fn set_viewer_prefs(
+    state: State<'_, AppState>,
+    volume: u32,
+    overlays: OverlayPrefs,
+) -> Result<Settings, IpcError> {
+    let mut settings = state.settings.lock().expect("settings lock");
+    // persist before publishing, as in set_osu_stable_path
+    let mut candidate = settings.clone();
+    candidate.volume = volume;
+    candidate.overlays = overlays;
+    candidate.sanitize();
+    save_settings(&state.config_dir, &candidate)?;
+    *settings = candidate;
+    Ok(settings.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,7 +129,8 @@ mod tests {
                 load_replay,
                 load_replay_with_beatmap,
                 get_settings,
-                set_osu_stable_path
+                set_osu_stable_path,
+                set_viewer_prefs
             ])
             .manage(AppState::new(config_dir, cache_root))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -237,5 +259,55 @@ mod tests {
         assert!(matches!(err, IpcError::Io { .. }));
         // the rejected value must not linger in memory to drive later loads
         assert_eq!(get_settings(app.state()).osu_stable_path, None);
+    }
+
+    #[test]
+    fn viewer_prefs_persist_and_clamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+
+        let prefs = OverlayPrefs {
+            cursor_path: true,
+            key_overlay: false,
+            display_length: 50.0, // below the range floor
+            ..OverlayPrefs::default()
+        };
+        let updated = set_viewer_prefs(app.state(), 250, prefs).unwrap(); // volume over 100
+
+        assert_eq!(updated.volume, 100);
+        assert_eq!(updated.overlays.display_length, crate::settings::DISPLAY_LENGTH_MIN);
+        assert!(updated.overlays.cursor_path);
+        assert!(!updated.overlays.key_overlay);
+
+        // persisted in sanitized form, not just published
+        let from_disk = crate::settings::load_settings(&config_dir);
+        assert_eq!(from_disk, updated);
+        assert_eq!(get_settings(app.state()), updated);
+    }
+
+    #[test]
+    fn setting_viewer_prefs_leaves_the_stable_path_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+
+        set_osu_stable_path(app.state(), Some(r"D:\osu!".into())).unwrap();
+        let updated = set_viewer_prefs(app.state(), 30, OverlayPrefs::default()).unwrap();
+
+        assert_eq!(updated.osu_stable_path.as_deref(), Some(r"D:\osu!"));
+        assert_eq!(crate::settings::load_settings(&config_dir).osu_stable_path.as_deref(), Some(r"D:\osu!"));
+    }
+
+    #[test]
+    fn a_failed_prefs_save_leaves_them_unpublished() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let app = mock_app(blocker.join("config"), dir.path().join("cache"));
+
+        let err = set_viewer_prefs(app.state(), 25, OverlayPrefs::default()).unwrap_err();
+        assert!(matches!(err, IpcError::Io { .. }));
+        assert_eq!(get_settings(app.state()).volume, 100, "the rejected volume must not linger");
     }
 }
