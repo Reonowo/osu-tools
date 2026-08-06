@@ -32,7 +32,11 @@ export function InfoPanel() {
 		// that with a 12px gap regardless of this panel's collapsed/expanded
 		// height, since collapsing only ever shrinks the panel upward, never down
 		// into the combo's box
-		<aside className="pointer-events-auto absolute bottom-36 left-3 z-20 w-64 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/85 text-xs shadow-xl shadow-black/30 backdrop-blur">
+		<aside
+			// wheel over the info panel keeps native behaviour instead of frame-stepping
+			data-native-wheel=""
+			className="pointer-events-auto absolute bottom-36 left-3 z-20 w-64 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/85 text-xs shadow-xl shadow-black/30 backdrop-blur"
+		>
 			<Button
 				variant="ghost"
 				size="sm"

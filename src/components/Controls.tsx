@@ -1,10 +1,12 @@
-// playback controls, keyboard shortcuts, and the live combo/accuracy hud.
-// the `current / total` readout and the hud values are continuous consumers
-// (decision 6): they read playbackClock in their own rAF loop and write dom
-// text directly, never through react state. play/pause and rate are discrete
-// toggles, so those flow through the store, which task 12's PlayerView
-// forwards to the clock. seeks call playbackClock.seekTo directly -- they
-// never call setBounds, which is scene-load-only (task 9's review note)
+// playback controls and the live combo/accuracy hud. the `current / total`
+// readout and the hud values are continuous consumers (decision 6): they
+// read playbackClock in their own rAF loop and write dom text directly,
+// never through react state. play/pause and rate are discrete toggles, so
+// those flow through the store, which task 12's PlayerView forwards to the
+// clock. seeks call playbackClock.seekTo directly -- they never call
+// setBounds, which is scene-load-only (task 9's review note). keyboard
+// shortcuts and wheel frame-stepping live in
+// src/playback/use-playback-shortcuts.ts
 
 import { useEffect, useRef } from "react";
 import { Pause, Play, SkipBack, StepBack, StepForward, Volume1, Volume2, VolumeX } from "lucide-react";
@@ -13,7 +15,8 @@ import { Slider } from "@/components/ui/slider";
 import { formatAccuracy, formatTime } from "@/lib/format";
 import { statsAt } from "@/lib/timeline";
 import { playbackClock } from "@/playback/instance";
-import { useViewerStore, viewerStore } from "@/state/store";
+import { stepFrame, usePlaybackShortcuts } from "@/playback/use-playback-shortcuts";
+import { useViewerStore } from "@/state/store";
 import { Timeline } from "./Timeline";
 
 const RATES = [0.25, 0.5, 0.75, 1, 1.5, 2];
@@ -22,15 +25,6 @@ const RATES = [0.25, 0.5, 0.75, 1, 1.5, 2];
 function VolumeIcon({ volume }: { volume: number }) {
 	const Icon = volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
 	return <Icon className="size-4 shrink-0 text-zinc-500" aria-hidden />;
-}
-
-function stepFrame(direction: 1 | -1) {
-	const { scene } = viewerStore.getState();
-	if (scene === null) return;
-	const t = playbackClock.currentTime();
-	const times = scene.frames.map((f) => f.time);
-	const next = direction === 1 ? times.find((time) => time > t) : [...times].reverse().find((time) => time < t);
-	if (next !== undefined) playbackClock.seekTo(next);
 }
 
 export function Controls() {
@@ -55,43 +49,7 @@ export function Controls() {
 		return () => cancelAnimationFrame(raf);
 	}, []);
 
-	useEffect(() => {
-		function onKey(e: KeyboardEvent) {
-			// buttons and other interactive controls keep their native key
-			// handling (space on a focused button must activate it, not toggle
-			// playback out from under it; arrows on a focused slider thumb must
-			// move that slider, not seek)
-			if (
-				e.target instanceof HTMLElement &&
-				e.target.closest("input, textarea, select, button, [role=slider], [role=dialog]") !== null
-			)
-				return;
-			if (viewerStore.getState().scene === null) return;
-			switch (e.key) {
-				case " ":
-					e.preventDefault();
-					setPlaying(!viewerStore.getState().playing);
-					break;
-				case "ArrowLeft":
-					playbackClock.seekTo(playbackClock.currentTime() - 1000);
-					break;
-				case "ArrowRight":
-					playbackClock.seekTo(playbackClock.currentTime() + 1000);
-					break;
-				case ",":
-					stepFrame(-1);
-					break;
-				case ".":
-					stepFrame(1);
-					break;
-				case "Home":
-					playbackClock.seekTo(playbackClock.minTime);
-					break;
-			}
-		}
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [setPlaying]);
+	usePlaybackShortcuts();
 
 	if (scene === null) return null;
 	return (
@@ -124,7 +82,9 @@ export function Controls() {
 				<div className="ml-auto flex items-center gap-2">
 					<VolumeIcon volume={volume} />
 					<Slider
-						className="w-24"
+						// shrink-0 or a crowded footer squeezes the track away entirely: the
+						// thumb is the only non-shrinkable part, so w-24 alone collapses to it
+						className="w-24 shrink-0"
 						aria-label="volume"
 						min={0}
 						max={100}
