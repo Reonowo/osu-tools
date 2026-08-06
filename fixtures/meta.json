@@ -1,17 +1,17 @@
 {
-  "osu_pin": "83b8a64bec19e1463353645c2d6d10c75e275b43",
-  "framework_pin": "2026.731.0",
-  "checkout_head": "83b8a64bec19e1463353645c2d6d10c75e275b43",
-  "checkout_working_tree": "clean",
-  "tolerances": {
-    "position": 0.0001,
-    "distance": 0.001,
-    "ratio": 1E-06
-  },
-  "notes": [
-    "path/approximator_circular_arc.json\u0027s arc-huge-radius-zero-acos case is reproducible only on x86/x64 with a pre-.NET-9 runtime: it depends on an unchecked (int) cast of a non-finite double truncating to int.MinValue (pre-.NET-9 x86/x64 behaviour) rather than saturating (.NET 9\u002B, and Arm64 even before that). see fixtures/README.md for the full explanation; this tool probes for the wrong behaviour at startup and fails fast rather than let a regeneration attempt on the wrong runtime silently corrupt this fixture.",
-    "path/slider_path.json inherits the same x86/x64 pre-.NET-9 runtime dependency: SliderPath.cs:355 duplicates the arc point-count expression to decide whether a PerfectCurve segment gets a circular arc or degrades to a B-spline, and the same unchecked (int) cast of \u002BInfinity to int.MinValue is what makes the guard fall through to the arc branch. its perfect-huge-radius-takes-arc case (circumradius ~4.7e6) records the arc branch at 3 vertices; on a saturating runtime that case would record ~129 vertices from the B-spline branch instead.",
-    "path/slider_path.json contains JSON\u0027s named floating point literals: segment_ends_progress entries can be the strings \u0022Infinity\u0022 or \u0022NaN\u0022, because SliderPath.GetSegmentEnds (SliderPath.cs:267) divides each segment-end distance by Distance with no zero guard and Distance is genuinely 0 for the expected-zero and zero-length-all-identical cases. readers must accept a JSON string in that float position and compare non-finite expectations by classification rather than by subtraction.",
-    "beatmap/*.json also contain JSON\u0027s named floating point literals, for the same reason: slider-zoo-v14.json\u0027s third slider sits under the 8000,NaN inherited timing point, which disables tick generation (Slider.cs:169) and makes lazer\u0027s TickDistance genuinely \u002BInfinity for that slider, so its dump\u0027s tick_distance field is the JSON string \u0022Infinity\u0022. readers must accept that and compare it by classification (is_infinite), same as segment_ends_progress above. every fixture not named in these two notes (approximator_bspline.json, approximator_catmull.json, approximator_circular_arc.json, replays/float_format.json) is still written with strict number handling, so an accidental non-finite value in one of those would still throw at generation time."
-  ]
+	"osu_pin": "83b8a64bec19e1463353645c2d6d10c75e275b43",
+	"framework_pin": "2026.731.0",
+	"checkout_head": "83b8a64bec19e1463353645c2d6d10c75e275b43",
+	"checkout_working_tree": "clean",
+	"tolerances": {
+		"position": 0.0001,
+		"distance": 0.001,
+		"ratio": 1e-6
+	},
+	"notes": [
+		"path/approximator_circular_arc.json\u0027s arc-huge-radius-zero-acos case is reproducible only on x86/x64 with a pre-.NET-9 runtime: it depends on an unchecked (int) cast of a non-finite double truncating to int.MinValue (pre-.NET-9 x86/x64 behaviour) rather than saturating (.NET 9\u002B, and Arm64 even before that). see fixtures/README.md for the full explanation; this tool probes for the wrong behaviour at startup and fails fast rather than let a regeneration attempt on the wrong runtime silently corrupt this fixture.",
+		"path/slider_path.json inherits the same x86/x64 pre-.NET-9 runtime dependency: SliderPath.cs:355 duplicates the arc point-count expression to decide whether a PerfectCurve segment gets a circular arc or degrades to a B-spline, and the same unchecked (int) cast of \u002BInfinity to int.MinValue is what makes the guard fall through to the arc branch. its perfect-huge-radius-takes-arc case (circumradius ~4.7e6) records the arc branch at 3 vertices; on a saturating runtime that case would record ~129 vertices from the B-spline branch instead.",
+		"path/slider_path.json contains JSON\u0027s named floating point literals: segment_ends_progress entries can be the strings \u0022Infinity\u0022 or \u0022NaN\u0022, because SliderPath.GetSegmentEnds (SliderPath.cs:267) divides each segment-end distance by Distance with no zero guard and Distance is genuinely 0 for the expected-zero and zero-length-all-identical cases. readers must accept a JSON string in that float position and compare non-finite expectations by classification rather than by subtraction.",
+		"beatmap/*.json also contain JSON\u0027s named floating point literals, for the same reason: slider-zoo-v14.json\u0027s third slider sits under the 8000,NaN inherited timing point, which disables tick generation (Slider.cs:169) and makes lazer\u0027s TickDistance genuinely \u002BInfinity for that slider, so its dump\u0027s tick_distance field is the JSON string \u0022Infinity\u0022. readers must accept that and compare it by classification (is_infinite), same as segment_ends_progress above. every fixture not named in these two notes (approximator_bspline.json, approximator_catmull.json, approximator_circular_arc.json, replays/float_format.json) is still written with strict number handling, so an accidental non-finite value in one of those would still throw at generation time."
+	]
 }

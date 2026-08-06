@@ -1,133 +1,78 @@
 {
-  "playfield": {
-    "width": 512.0,
-    "height": 384.0
-  },
-  "comboColours": [
-    [
-      241,
-      116,
-      0,
-      255
-    ],
-    [
-      0,
-      241,
-      53,
-      255
-    ],
-    [
-      0,
-      82,
-      241,
-      255
-    ],
-    [
-      241,
-      0,
-      0,
-      255
-    ],
-    [
-      232,
-      235,
-      0,
-      255
-    ],
-    [
-      92,
-      0,
-      241,
-      255
-    ]
-  ],
-  "hitWindows": {
-    "great": 37.5,
-    "ok": 83.5,
-    "meh": 129.5,
-    "miss": 400.0
-  },
-  "scale": 0.57023364,
-  "preempt": 900.0,
-  "fadeIn": 400.0,
-  "objects": [
-    {
-      "startTime": 2000.0,
-      "endTime": 2500.0,
-      "position": [
-        100.0,
-        100.0
-      ],
-      "stackHeight": 0,
-      "comboColourIndex": 1,
-      "comboIndex": 1,
-      "indexInCombo": 0,
-      "preempt": 900.0,
-      "fadeIn": 400.0,
-      "kind": {
-        "type": "slider",
-        "vertices": [
-          0.0,
-          0.0,
-          200.0,
-          0.0
-        ],
-        "cumulativeLengths": [
-          0.0,
-          200.0
-        ],
-        "distance": 200.0,
-        "segmentEnds": [
-          1.0
-        ],
-        "repeatCount": 0,
-        "spanCount": 1,
-        "spanDuration": 500.0,
-        "duration": 500.0,
-        "endPosition": [
-          300.0,
-          100.0
-        ],
-        "snakeInDuration": 300.0,
-        "nested": [
-          {
-            "kind": "head",
-            "spanIndex": 0,
-            "time": 2000.0,
-            "position": [
-              100.0,
-              100.0
-            ],
-            "pathProgress": 0.0,
-            "preempt": 900.0,
-            "fadeIn": 400.0
-          },
-          {
-            "kind": "tick",
-            "spanIndex": 0,
-            "time": 2250.0,
-            "position": [
-              200.0,
-              100.0
-            ],
-            "pathProgress": 0.5,
-            "preempt": 719.0000236034393,
-            "fadeIn": 400.0
-          },
-          {
-            "kind": "tail",
-            "spanIndex": 0,
-            "time": 2500.0,
-            "position": [
-              300.0,
-              100.0
-            ],
-            "pathProgress": 1.0,
-            "preempt": 1400.0,
-            "fadeIn": 400.0
-          }
-        ]
-      }
-    }
-  ]
+	"playfield": {
+		"width": 512.0,
+		"height": 384.0
+	},
+	"comboColours": [
+		[241, 116, 0, 255],
+		[0, 241, 53, 255],
+		[0, 82, 241, 255],
+		[241, 0, 0, 255],
+		[232, 235, 0, 255],
+		[92, 0, 241, 255]
+	],
+	"hitWindows": {
+		"great": 37.5,
+		"ok": 83.5,
+		"meh": 129.5,
+		"miss": 400.0
+	},
+	"scale": 0.57023364,
+	"preempt": 900.0,
+	"fadeIn": 400.0,
+	"objects": [
+		{
+			"startTime": 2000.0,
+			"endTime": 2500.0,
+			"position": [100.0, 100.0],
+			"stackHeight": 0,
+			"comboColourIndex": 1,
+			"comboIndex": 1,
+			"indexInCombo": 0,
+			"preempt": 900.0,
+			"fadeIn": 400.0,
+			"kind": {
+				"type": "slider",
+				"vertices": [0.0, 0.0, 200.0, 0.0],
+				"cumulativeLengths": [0.0, 200.0],
+				"distance": 200.0,
+				"segmentEnds": [1.0],
+				"repeatCount": 0,
+				"spanCount": 1,
+				"spanDuration": 500.0,
+				"duration": 500.0,
+				"endPosition": [300.0, 100.0],
+				"snakeInDuration": 300.0,
+				"nested": [
+					{
+						"kind": "head",
+						"spanIndex": 0,
+						"time": 2000.0,
+						"position": [100.0, 100.0],
+						"pathProgress": 0.0,
+						"preempt": 900.0,
+						"fadeIn": 400.0
+					},
+					{
+						"kind": "tick",
+						"spanIndex": 0,
+						"time": 2250.0,
+						"position": [200.0, 100.0],
+						"pathProgress": 0.5,
+						"preempt": 719.0000236034393,
+						"fadeIn": 400.0
+					},
+					{
+						"kind": "tail",
+						"spanIndex": 0,
+						"time": 2500.0,
+						"position": [300.0, 100.0],
+						"pathProgress": 1.0,
+						"preempt": 1400.0,
+						"fadeIn": 400.0
+					}
+				]
+			}
+		}
+	]
 }

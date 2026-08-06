@@ -1,54 +1,39 @@
 {
-  "frames": [
-    {
-      "time": 500,
-      "pos": [
-        100.5,
-        100.25
-      ],
-      "left": false,
-      "right": false,
-      "smoke": false
-    },
-    {
-      "time": 516,
-      "pos": [
-        110,
-        105
-      ],
-      "left": true,
-      "right": false,
-      "smoke": false
-    },
-    {
-      "time": 532,
-      "pos": [
-        120,
-        110
-      ],
-      "left": true,
-      "right": false,
-      "smoke": false
-    },
-    {
-      "time": 547,
-      "pos": [
-        130,
-        115
-      ],
-      "left": true,
-      "right": true,
-      "smoke": false
-    },
-    {
-      "time": 843,
-      "pos": [
-        200,
-        200
-      ],
-      "left": false,
-      "right": true,
-      "smoke": false
-    }
-  ]
+	"frames": [
+		{
+			"time": 500,
+			"pos": [100.5, 100.25],
+			"left": false,
+			"right": false,
+			"smoke": false
+		},
+		{
+			"time": 516,
+			"pos": [110, 105],
+			"left": true,
+			"right": false,
+			"smoke": false
+		},
+		{
+			"time": 532,
+			"pos": [120, 110],
+			"left": true,
+			"right": false,
+			"smoke": false
+		},
+		{
+			"time": 547,
+			"pos": [130, 115],
+			"left": true,
+			"right": true,
+			"smoke": false
+		},
+		{
+			"time": 843,
+			"pos": [200, 200],
+			"left": false,
+			"right": true,
+			"smoke": false
+		}
+	]
 }

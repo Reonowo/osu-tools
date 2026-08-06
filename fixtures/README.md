@@ -100,17 +100,17 @@ through an unchecked `(int)` cast:
   correct behaviour for that runtime, but a baffling failure mode with no
   obvious connection to this specific case unless you already know about it.
 
-  Reference: ["Floating point-to-integer conversions are saturating"](https://learn.microsoft.com/en-us/dotnet/core/compatibility/jit/9.0/fp-to-integer),
-  a documented .NET 9 Preview 4 JIT breaking change. `global.json` pins the
-  SDK's *version* (8.x) but not architecture, so this fixture additionally
-  assumes an x86/x64 host — `dotnet run --project tools/fixture-gen` on an
-  Arm64 machine (e.g. Apple Silicon) will hit the saturating path even with
-  the pinned SDK.
+    Reference: ["Floating point-to-integer conversions are saturating"](https://learn.microsoft.com/en-us/dotnet/core/compatibility/jit/9.0/fp-to-integer),
+    a documented .NET 9 Preview 4 JIT breaking change. `global.json` pins the
+    SDK's _version_ (8.x) but not architecture, so this fixture additionally
+    assumes an x86/x64 host — `dotnet run --project tools/fixture-gen` on an
+    Arm64 machine (e.g. Apple Silicon) will hit the saturating path even with
+    the pinned SDK.
 
-  `tools/fixture-gen` probes for this at startup (an actual runtime division,
-  not a compile-time constant, so it can't be folded away) and exits with a
-  clear diagnostic instead of generating a corrupted fixture or crashing with
-  an unrelated-looking `OutOfMemoryException`.
+    `tools/fixture-gen` probes for this at startup (an actual runtime division,
+    not a compile-time constant, so it can't be folded away) and exits with a
+    clear diagnostic instead of generating a corrupted fixture or crashing with
+    an unrelated-looking `OutOfMemoryException`.
 
 `SliderPath.cs:355` duplicates the same point-count expression to decide whether
 a `PerfectCurve` segment gets a circular arc or degrades to a B-spline, so

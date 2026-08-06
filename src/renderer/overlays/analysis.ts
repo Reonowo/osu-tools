@@ -13,18 +13,19 @@ import type { FrameDto } from "../../lib/scene-types";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
 
 export function countAtOrBefore(times: number[], t: number): number {
-  let lo = 0, hi = times.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (times[mid] <= t) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
+	let lo = 0,
+		hi = times.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (times[mid] <= t) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
 }
 
 /** indices alive at t under the [time, time + displayLength) lifetime */
 export function aliveWindow(times: number[], t: number, displayLength: number): { lo: number; hi: number } {
-  return { lo: countAtOrBefore(times, t - displayLength), hi: countAtOrBefore(times, t) };
+	return { lo: countAtOrBefore(times, t - displayLength), hi: countAtOrBefore(times, t) };
 }
 
 // marker textures (canvas, 2x): sizes/colours from clickmarker.cs:27-77 /
@@ -34,145 +35,153 @@ export function aliveWindow(times: number[], t: number, displayLength: number): 
 // 32px reference canvas (2x a 16px marker footprint) regardless of the
 // marker's final on-screen size, which the sprite's width/height scale to
 function markerTexture(ctx: RenderContext, kind: string): Texture {
-  return ctx.textures.canvasTexture(32, `analysis:${kind}`, (c, size) => {
-    const half = size / 2;
-    const arc = (side: "left" | "right", inner: number, outer: number) => {
-      c.fillStyle = "#ffcc22";
-      c.beginPath();
-      const from = side === "left" ? Math.PI / 2 : -Math.PI / 2;
-      c.arc(half, half, outer, from, from + Math.PI);
-      c.arc(half, half, inner, from + Math.PI, from, true);
-      c.fill();
-    };
-    if (kind.startsWith("click")) {
-      // clickmarker.cs:27-77 -- 16px marker box, so canvas half (16) stands
-      // in for its full radius at 2x. centre dot: Size(0.125) additive gray5
-      c.fillStyle = "#555";
-      c.beginPath(); c.arc(half, half, 2, 0, Math.PI * 2); c.fill();
-      // white ring: circularcontainer border, 2.2px thickness
-      c.strokeStyle = "#fff";
-      c.lineWidth = 4.4;
-      c.beginPath(); c.arc(half, half, 13.8, 0, Math.PI * 2); c.stroke();
-      // half-arc: Size(0.95) -> outer = 0.95*16 = 15.2; circularprogressdrawnode.cs:157-158
-      // derives inner = outer*(1 - InnerRadius), InnerRadius(0.18) -> 15.2*0.82 = 12.464
-      arc(kind === "click-left" ? "left" : "right", 12.464, 15.2);
-    } else {
-      const held = kind !== "frame-none";
-      c.fillStyle = held ? "#444" : "#eb4791";
-      c.beginPath(); c.arc(half, half, half - 2, 0, Math.PI * 2); c.fill();
-      // half-arc: Size(0.8) -> outer = 0.8*16 = 12.8; InnerRadius(0.5) is its
-      // own fixed point under the same formula -- inner = 12.8*0.5 = 6.4
-      if (kind === "frame-left" || kind === "frame-both") arc("left", 6.4, 12.8);
-      if (kind === "frame-right" || kind === "frame-both") arc("right", 6.4, 12.8);
-    }
-  });
+	return ctx.textures.canvasTexture(32, `analysis:${kind}`, (c, size) => {
+		const half = size / 2;
+		const arc = (side: "left" | "right", inner: number, outer: number) => {
+			c.fillStyle = "#ffcc22";
+			c.beginPath();
+			const from = side === "left" ? Math.PI / 2 : -Math.PI / 2;
+			c.arc(half, half, outer, from, from + Math.PI);
+			c.arc(half, half, inner, from + Math.PI, from, true);
+			c.fill();
+		};
+		if (kind.startsWith("click")) {
+			// clickmarker.cs:27-77 -- 16px marker box, so canvas half (16) stands
+			// in for its full radius at 2x. centre dot: Size(0.125) additive gray5
+			c.fillStyle = "#555";
+			c.beginPath();
+			c.arc(half, half, 2, 0, Math.PI * 2);
+			c.fill();
+			// white ring: circularcontainer border, 2.2px thickness
+			c.strokeStyle = "#fff";
+			c.lineWidth = 4.4;
+			c.beginPath();
+			c.arc(half, half, 13.8, 0, Math.PI * 2);
+			c.stroke();
+			// half-arc: Size(0.95) -> outer = 0.95*16 = 15.2; circularprogressdrawnode.cs:157-158
+			// derives inner = outer*(1 - InnerRadius), InnerRadius(0.18) -> 15.2*0.82 = 12.464
+			arc(kind === "click-left" ? "left" : "right", 12.464, 15.2);
+		} else {
+			const held = kind !== "frame-none";
+			c.fillStyle = held ? "#444" : "#eb4791";
+			c.beginPath();
+			c.arc(half, half, half - 2, 0, Math.PI * 2);
+			c.fill();
+			// half-arc: Size(0.8) -> outer = 0.8*16 = 12.8; InnerRadius(0.5) is its
+			// own fixed point under the same formula -- inner = 12.8*0.5 = 6.4
+			if (kind === "frame-left" || kind === "frame-both") arc("left", 6.4, 12.8);
+			if (kind === "frame-right" || kind === "frame-both") arc("right", 6.4, 12.8);
+		}
+	});
 }
 
 export class AnalysisDrawable implements ObjectDrawable {
-  readonly view = new Container();
-  private readonly path = new Graphics();
-  private readonly frameLayer = new Container();
-  private readonly clickLayer = new Container();
-  private readonly frames: FrameDto[];
-  private readonly frameTimes: number[];
-  private readonly presses: Press[];
-  private readonly pressTimes: number[];
-  private readonly framePool = new Map<number, Sprite>();
-  private readonly clickPool = new Map<number, Sprite>();
+	readonly view = new Container();
+	private readonly path = new Graphics();
+	private readonly frameLayer = new Container();
+	private readonly clickLayer = new Container();
+	private readonly frames: FrameDto[];
+	private readonly frameTimes: number[];
+	private readonly presses: Press[];
+	private readonly pressTimes: number[];
+	private readonly framePool = new Map<number, Sprite>();
+	private readonly clickPool = new Map<number, Sprite>();
 
-  constructor(private readonly ctx: RenderContext) {
-    this.frames = ctx.scene.frames;
-    this.frameTimes = this.frames.map((f) => f.time);
-    this.presses = ctx.derived.presses;
-    this.pressTimes = this.presses.map((p) => p.time);
-    // newer markers draw above older (analysismarker.cs:25 -- depth = -lifetimeend)
-    this.frameLayer.sortableChildren = true;
-    this.clickLayer.sortableChildren = true;
-    this.view.addChild(this.path, this.frameLayer, this.clickLayer);
-    ctx.layers.analysis.addChild(this.view);
-  }
+	constructor(private readonly ctx: RenderContext) {
+		this.frames = ctx.scene.frames;
+		this.frameTimes = this.frames.map((f) => f.time);
+		this.presses = ctx.derived.presses;
+		this.pressTimes = this.presses.map((p) => p.time);
+		// newer markers draw above older (analysismarker.cs:25 -- depth = -lifetimeend)
+		this.frameLayer.sortableChildren = true;
+		this.clickLayer.sortableChildren = true;
+		this.view.addChild(this.path, this.frameLayer, this.clickLayer);
+		ctx.layers.analysis.addChild(this.view);
+	}
 
-  private frameSprite(index: number): Sprite {
-    const frame = this.frames[index];
-    const left = isLeft(frame.buttons);
-    const right = isRight(frame.buttons);
-    const variant = left && right ? "frame-both" : left ? "frame-left" : right ? "frame-right" : "frame-none";
-    const sprite = new Sprite(markerTexture(this.ctx, variant));
-    sprite.anchor.set(0.5);
-    // framemarker.cs:61 -- 4px held, 2.5px idle
-    sprite.width = sprite.height = left || right ? 4 : 2.5;
-    sprite.position.set(frame.x, frame.y);
-    sprite.zIndex = frame.time;
-    return sprite;
-  }
+	private frameSprite(index: number): Sprite {
+		const frame = this.frames[index];
+		const left = isLeft(frame.buttons);
+		const right = isRight(frame.buttons);
+		const variant = left && right ? "frame-both" : left ? "frame-left" : right ? "frame-right" : "frame-none";
+		const sprite = new Sprite(markerTexture(this.ctx, variant));
+		sprite.anchor.set(0.5);
+		// framemarker.cs:61 -- 4px held, 2.5px idle
+		sprite.width = sprite.height = left || right ? 4 : 2.5;
+		sprite.position.set(frame.x, frame.y);
+		sprite.zIndex = frame.time;
+		return sprite;
+	}
 
-  private clickSprite(index: number): Sprite {
-    const press = this.presses[index];
-    const frame = this.frames[press.frameIndex];
-    const sprite = new Sprite(markerTexture(this.ctx, press.action === "left" ? "click-left" : "click-right"));
-    sprite.anchor.set(0.5);
-    sprite.width = sprite.height = 16;
-    sprite.position.set(frame.x, frame.y);
-    sprite.zIndex = press.time;
-    return sprite;
-  }
+	private clickSprite(index: number): Sprite {
+		const press = this.presses[index];
+		const frame = this.frames[press.frameIndex];
+		const sprite = new Sprite(markerTexture(this.ctx, press.action === "left" ? "click-left" : "click-right"));
+		sprite.anchor.set(0.5);
+		sprite.width = sprite.height = 16;
+		sprite.position.set(frame.x, frame.y);
+		sprite.zIndex = press.time;
+		return sprite;
+	}
 
-  /** hard-window pooling: create on entering [lo, hi), destroy on leaving.
-   * aliveWindow is recomputed fresh from the raw time array every call, so
-   * this is idempotent under seeking in either direction -- there is no
-   * persistent "was this dead before" state for a stale window to resurrect */
-  private syncPool(
-    pool: Map<number, Sprite>,
-    layer: Container,
-    times: number[],
-    t: number,
-    length: number,
-    make: (index: number) => Sprite,
-  ): void {
-    const { lo, hi } = aliveWindow(times, t, length);
-    for (const [index, sprite] of pool) {
-      if (index < lo || index >= hi) {
-        sprite.destroy();
-        pool.delete(index);
-      }
-    }
-    for (let i = lo; i < hi; i++) {
-      if (!pool.has(i)) {
-        const sprite = make(i);
-        layer.addChild(sprite);
-        pool.set(i, sprite);
-      }
-    }
-  }
+	/** hard-window pooling: create on entering [lo, hi), destroy on leaving.
+	 * aliveWindow is recomputed fresh from the raw time array every call, so
+	 * this is idempotent under seeking in either direction -- there is no
+	 * persistent "was this dead before" state for a stale window to resurrect */
+	private syncPool(
+		pool: Map<number, Sprite>,
+		layer: Container,
+		times: number[],
+		t: number,
+		length: number,
+		make: (index: number) => Sprite
+	): void {
+		const { lo, hi } = aliveWindow(times, t, length);
+		for (const [index, sprite] of pool) {
+			if (index < lo || index >= hi) {
+				sprite.destroy();
+				pool.delete(index);
+			}
+		}
+		for (let i = lo; i < hi; i++) {
+			if (!pool.has(i)) {
+				const sprite = make(i);
+				layer.addChild(sprite);
+				pool.set(i, sprite);
+			}
+		}
+	}
 
-  update(t: number): void {
-    const overlays = this.ctx.getOverlays();
-    this.path.visible = overlays.cursorPath;
-    this.frameLayer.visible = overlays.frameMarkers;
-    this.clickLayer.visible = overlays.clickMarkers;
-    const length = overlays.displayLength;
+	update(t: number): void {
+		const overlays = this.ctx.getOverlays();
+		this.path.visible = overlays.cursorPath;
+		this.frameLayer.visible = overlays.frameMarkers;
+		this.clickLayer.visible = overlays.clickMarkers;
+		const length = overlays.displayLength;
 
-    if (overlays.cursorPath) {
-      const { lo, hi } = aliveWindow(this.frameTimes, t, length);
-      this.path.clear();
-      if (hi - lo >= 2) {
-        this.path.moveTo(this.frames[lo].x, this.frames[lo].y);
-        for (let i = lo + 1; i < hi; i++) this.path.lineTo(this.frames[i].x, this.frames[i].y);
-        // cursorpathcontainer.cs:24,30 -- pathradius 1 (2px total width), pink2
-        this.path.stroke({ width: 2, color: 0xeb4791, join: "round", cap: "round" });
-      }
-    }
-    if (overlays.frameMarkers) this.syncPool(this.framePool, this.frameLayer, this.frameTimes, t, length, (i) => this.frameSprite(i));
-    if (overlays.clickMarkers) this.syncPool(this.clickPool, this.clickLayer, this.pressTimes, t, length, (i) => this.clickSprite(i));
-  }
+		if (overlays.cursorPath) {
+			const { lo, hi } = aliveWindow(this.frameTimes, t, length);
+			this.path.clear();
+			if (hi - lo >= 2) {
+				this.path.moveTo(this.frames[lo].x, this.frames[lo].y);
+				for (let i = lo + 1; i < hi; i++) this.path.lineTo(this.frames[i].x, this.frames[i].y);
+				// cursorpathcontainer.cs:24,30 -- pathradius 1 (2px total width), pink2
+				this.path.stroke({ width: 2, color: 0xeb4791, join: "round", cap: "round" });
+			}
+		}
+		if (overlays.frameMarkers)
+			this.syncPool(this.framePool, this.frameLayer, this.frameTimes, t, length, (i) => this.frameSprite(i));
+		if (overlays.clickMarkers)
+			this.syncPool(this.clickPool, this.clickLayer, this.pressTimes, t, length, (i) => this.clickSprite(i));
+	}
 
-  destroy(): void {
-    // this.path is a raw Graphics with its own GraphicsContext, which a
-    // {children:true} cascade alone does not free (Graphics.destroy() in
-    // pixi's scene/graphics/shared/Graphics.js only calls context.destroy()
-    // when explicitly told to) -- context:true releases it alongside every
-    // pooled sprite (still a plain Sprite over a cached texture, so this
-    // does not, and must not, touch textures.ts's cache)
-    this.view.destroy({ children: true, context: true });
-  }
+	destroy(): void {
+		// this.path is a raw Graphics with its own GraphicsContext, which a
+		// {children:true} cascade alone does not free (Graphics.destroy() in
+		// pixi's scene/graphics/shared/Graphics.js only calls context.destroy()
+		// when explicitly told to) -- context:true releases it alongside every
+		// pooled sprite (still a plain Sprite over a cached texture, so this
+		// does not, and must not, touch textures.ts's cache)
+		this.view.destroy({ children: true, context: true });
+	}
 }

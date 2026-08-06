@@ -7,12 +7,12 @@ import type { OverlaySettings } from "../lib/scene-types";
 
 /** osurulesetconfigmanager.cs:27-31 */
 export const DEFAULT_OVERLAYS: OverlaySettings = {
-  cursorPath: false,
-  clickMarkers: false,
-  frameMarkers: false,
-  hideCursor: false,
-  keyOverlay: true,
-  displayLength: 800,
+	cursorPath: false,
+	clickMarkers: false,
+	frameMarkers: false,
+	hideCursor: false,
+	keyOverlay: true,
+	displayLength: 800
 };
 
 /** linear amplitude percent */
@@ -25,9 +25,9 @@ export const DISPLAY_LENGTH_MAX = 2000;
 
 /** rounds and clamps a volume percent; NaN is rejected by the callers */
 export function clampVolume(volume: number): number {
-  return Math.round(Math.min(Math.max(volume, VOLUME_MIN), VOLUME_MAX));
+	return Math.round(Math.min(Math.max(volume, VOLUME_MIN), VOLUME_MAX));
 }
 
 export function clampDisplayLength(ms: number): number {
-  return Math.round(Math.min(Math.max(ms, DISPLAY_LENGTH_MIN), DISPLAY_LENGTH_MAX));
+	return Math.round(Math.min(Math.max(ms, DISPLAY_LENGTH_MIN), DISPLAY_LENGTH_MAX));
 }

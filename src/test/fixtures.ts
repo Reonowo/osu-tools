@@ -6,9 +6,9 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "..", "..");
 
 export function fixturePath(...segments: string[]): string {
-  return join(repoRoot, "fixtures", ...segments);
+	return join(repoRoot, "fixtures", ...segments);
 }
 
 export async function loadFixture<T>(...segments: string[]): Promise<T> {
-  return (await Bun.file(fixturePath(...segments)).json()) as T;
+	return (await Bun.file(fixturePath(...segments)).json()) as T;
 }

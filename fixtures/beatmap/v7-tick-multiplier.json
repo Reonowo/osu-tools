@@ -1,242 +1,152 @@
 {
-  "format_version": 7,
-  "stack_leniency": 0.7,
-  "windows": {
-    "great": 37.5,
-    "ok": 83.5,
-    "meh": 129.5
-  },
-  "objects": [
-    {
-      "kind": "slider",
-      "start_time": 2000,
-      "end_time": 2500,
-      "position": [
-        100,
-        100
-      ],
-      "stacked_position": [
-        100,
-        100
-      ],
-      "stack_height": 0,
-      "scale": 0.57023364,
-      "preempt": 900,
-      "fade_in": 400,
-      "combo_index": 1,
-      "combo_index_with_offsets": 1,
-      "index_in_current_combo": 0,
-      "last_in_combo": false,
-      "slider": {
-        "velocity": 0.4,
-        "tick_distance": 100,
-        "span_duration": 500,
-        "duration": 500,
-        "end_position": [
-          300,
-          100
-        ],
-        "nested": [
-          {
-            "kind": "head",
-            "span_index": 0,
-            "time": 2000,
-            "position": [
-              100,
-              100
-            ],
-            "stacked_position": [
-              100,
-              100
-            ],
-            "path_progress": null,
-            "preempt": 900,
-            "fade_in": 400
-          },
-          {
-            "kind": "tick",
-            "span_index": 0,
-            "time": 2250,
-            "position": [
-              200,
-              100
-            ],
-            "stacked_position": [
-              200,
-              100
-            ],
-            "path_progress": 0.5,
-            "preempt": 719.0000236034393,
-            "fade_in": 400
-          },
-          {
-            "kind": "tail",
-            "span_index": 0,
-            "time": 2500,
-            "position": [
-              300,
-              100
-            ],
-            "stacked_position": [
-              300,
-              100
-            ],
-            "path_progress": null,
-            "preempt": 1400,
-            "fade_in": 400
-          }
-        ],
-        "ball_samples": [
-          {
-            "progress": 0,
-            "pos": [
-              0,
-              0
-            ]
-          },
-          {
-            "progress": 0.05,
-            "pos": [
-              10,
-              0
-            ]
-          },
-          {
-            "progress": 0.1,
-            "pos": [
-              20,
-              0
-            ]
-          },
-          {
-            "progress": 0.15,
-            "pos": [
-              30.000002,
-              0
-            ]
-          },
-          {
-            "progress": 0.2,
-            "pos": [
-              40,
-              0
-            ]
-          },
-          {
-            "progress": 0.25,
-            "pos": [
-              50,
-              0
-            ]
-          },
-          {
-            "progress": 0.3,
-            "pos": [
-              60.000004,
-              0
-            ]
-          },
-          {
-            "progress": 0.35,
-            "pos": [
-              70,
-              0
-            ]
-          },
-          {
-            "progress": 0.4,
-            "pos": [
-              80,
-              0
-            ]
-          },
-          {
-            "progress": 0.45,
-            "pos": [
-              90,
-              0
-            ]
-          },
-          {
-            "progress": 0.5,
-            "pos": [
-              100,
-              0
-            ]
-          },
-          {
-            "progress": 0.55,
-            "pos": [
-              110,
-              0
-            ]
-          },
-          {
-            "progress": 0.6,
-            "pos": [
-              120.00001,
-              0
-            ]
-          },
-          {
-            "progress": 0.65,
-            "pos": [
-              130,
-              0
-            ]
-          },
-          {
-            "progress": 0.7,
-            "pos": [
-              140,
-              0
-            ]
-          },
-          {
-            "progress": 0.75,
-            "pos": [
-              150,
-              0
-            ]
-          },
-          {
-            "progress": 0.8,
-            "pos": [
-              160,
-              0
-            ]
-          },
-          {
-            "progress": 0.85,
-            "pos": [
-              170,
-              0
-            ]
-          },
-          {
-            "progress": 0.9,
-            "pos": [
-              180,
-              0
-            ]
-          },
-          {
-            "progress": 0.95,
-            "pos": [
-              190,
-              0
-            ]
-          },
-          {
-            "progress": 1,
-            "pos": [
-              200,
-              0
-            ]
-          }
-        ]
-      },
-      "spinner": null
-    }
-  ]
+	"format_version": 7,
+	"stack_leniency": 0.7,
+	"windows": {
+		"great": 37.5,
+		"ok": 83.5,
+		"meh": 129.5
+	},
+	"objects": [
+		{
+			"kind": "slider",
+			"start_time": 2000,
+			"end_time": 2500,
+			"position": [100, 100],
+			"stacked_position": [100, 100],
+			"stack_height": 0,
+			"scale": 0.57023364,
+			"preempt": 900,
+			"fade_in": 400,
+			"combo_index": 1,
+			"combo_index_with_offsets": 1,
+			"index_in_current_combo": 0,
+			"last_in_combo": false,
+			"slider": {
+				"velocity": 0.4,
+				"tick_distance": 100,
+				"span_duration": 500,
+				"duration": 500,
+				"end_position": [300, 100],
+				"nested": [
+					{
+						"kind": "head",
+						"span_index": 0,
+						"time": 2000,
+						"position": [100, 100],
+						"stacked_position": [100, 100],
+						"path_progress": null,
+						"preempt": 900,
+						"fade_in": 400
+					},
+					{
+						"kind": "tick",
+						"span_index": 0,
+						"time": 2250,
+						"position": [200, 100],
+						"stacked_position": [200, 100],
+						"path_progress": 0.5,
+						"preempt": 719.0000236034393,
+						"fade_in": 400
+					},
+					{
+						"kind": "tail",
+						"span_index": 0,
+						"time": 2500,
+						"position": [300, 100],
+						"stacked_position": [300, 100],
+						"path_progress": null,
+						"preempt": 1400,
+						"fade_in": 400
+					}
+				],
+				"ball_samples": [
+					{
+						"progress": 0,
+						"pos": [0, 0]
+					},
+					{
+						"progress": 0.05,
+						"pos": [10, 0]
+					},
+					{
+						"progress": 0.1,
+						"pos": [20, 0]
+					},
+					{
+						"progress": 0.15,
+						"pos": [30.000002, 0]
+					},
+					{
+						"progress": 0.2,
+						"pos": [40, 0]
+					},
+					{
+						"progress": 0.25,
+						"pos": [50, 0]
+					},
+					{
+						"progress": 0.3,
+						"pos": [60.000004, 0]
+					},
+					{
+						"progress": 0.35,
+						"pos": [70, 0]
+					},
+					{
+						"progress": 0.4,
+						"pos": [80, 0]
+					},
+					{
+						"progress": 0.45,
+						"pos": [90, 0]
+					},
+					{
+						"progress": 0.5,
+						"pos": [100, 0]
+					},
+					{
+						"progress": 0.55,
+						"pos": [110, 0]
+					},
+					{
+						"progress": 0.6,
+						"pos": [120.00001, 0]
+					},
+					{
+						"progress": 0.65,
+						"pos": [130, 0]
+					},
+					{
+						"progress": 0.7,
+						"pos": [140, 0]
+					},
+					{
+						"progress": 0.75,
+						"pos": [150, 0]
+					},
+					{
+						"progress": 0.8,
+						"pos": [160, 0]
+					},
+					{
+						"progress": 0.85,
+						"pos": [170, 0]
+					},
+					{
+						"progress": 0.9,
+						"pos": [180, 0]
+					},
+					{
+						"progress": 0.95,
+						"pos": [190, 0]
+					},
+					{
+						"progress": 1,
+						"pos": [200, 0]
+					}
+				]
+			},
+			"spinner": null
+		}
+	]
 }

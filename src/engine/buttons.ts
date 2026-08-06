@@ -9,13 +9,13 @@ export const SMOKE = 16;
 
 /** legacyreplayframe.cs -- mouseleft is m1 or k1: one gameplay action */
 export function isLeft(raw: number): boolean {
-  return (raw & (M1 | K1)) !== 0;
+	return (raw & (M1 | K1)) !== 0;
 }
 
 export function isRight(raw: number): boolean {
-  return (raw & (M2 | K2)) !== 0;
+	return (raw & (M2 | K2)) !== 0;
 }
 
 export function isSmoke(raw: number): boolean {
-  return (raw & SMOKE) !== 0;
+	return (raw & SMOKE) !== 0;
 }
