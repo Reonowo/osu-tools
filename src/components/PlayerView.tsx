@@ -92,14 +92,18 @@ export function PlayerView() {
     };
   }, [sceneId]);
 
-  // store -> clock: playing + rate
+  // store -> clock: playing + rate + volume
   useEffect(() => {
+    // the persisted volume can land before or after this mount, so apply
+    // whatever the store already holds instead of waiting for a change event
+    playbackClock.setVolume(viewerStore.getState().volume / 100);
     return viewerStore.subscribe((state, prev) => {
       if (state.playing !== prev.playing) {
         if (state.playing) playbackClock.play();
         else playbackClock.pause();
       }
       if (state.rate !== prev.rate) playbackClock.setRate(state.rate);
+      if (state.volume !== prev.volume) playbackClock.setVolume(state.volume / 100);
     });
   }, []);
 
