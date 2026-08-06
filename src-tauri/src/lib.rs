@@ -28,6 +28,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let cache_root = app.path().app_local_data_dir()?.join("osz-cache");
