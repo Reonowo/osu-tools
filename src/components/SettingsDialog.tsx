@@ -3,9 +3,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
+import { NumberField } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { open } from "@tauri-apps/plugin-dialog";
+import { DISPLAY_LENGTH_MAX, DISPLAY_LENGTH_MIN } from "@/state/defaults";
 import { useViewerStore, type OverlaySettings } from "@/state/store";
 
 const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string }[] = [
@@ -23,6 +24,20 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
   const loadSettings = useViewerStore((s) => s.loadSettings);
   const saveStablePath = useViewerStore((s) => s.saveStablePath);
   const [saving, setSaving] = useState(false);
+
+  // the field holds its own draft so a half-typed "5" of "500" is not clamped
+  // to the 200 floor between keystrokes; the store only sees committed values
+  // (blur, stepper press, arrow key) and clamps them there
+  const displayLength = overlays.displayLength;
+  const [draftLength, setDraftLength] = useState<number | null>(displayLength);
+  useEffect(() => setDraftLength(displayLength), [displayLength]);
+
+  function commitLength(value: number | null) {
+    // an emptied field commits null: restore the last good value rather than
+    // leaving the input blank with the store silently unchanged
+    if (value === null) setDraftLength(displayLength);
+    else setOverlay("displayLength", value);
+  }
 
   useEffect(() => {
     if (isOpen) void loadSettings();
@@ -72,13 +87,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
           <label className="flex items-center justify-between gap-4 text-sm">
             display length
             <span className="flex items-center gap-2">
-              <Slider
-                className="w-32"
-                min={200} max={2000} step={200}
-                value={[overlays.displayLength]}
-                onValueChange={(v) => setOverlay("displayLength", Array.isArray(v) ? v[0] : v)}
+              <NumberField
+                min={DISPLAY_LENGTH_MIN} max={DISPLAY_LENGTH_MAX} step={50} largeStep={200}
+                value={draftLength}
+                onValueChange={setDraftLength}
+                onValueCommitted={commitLength}
               />
-              <span className="w-14 text-right tabular-nums text-zinc-400">{overlays.displayLength} ms</span>
+              <span className="text-zinc-400">ms</span>
             </span>
           </label>
         </section>
