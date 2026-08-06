@@ -1,0 +1,239 @@
+{
+  "playfield": {
+    "width": 512.0,
+    "height": 384.0
+  },
+  "comboColours": [
+    [
+      255,
+      128,
+      64,
+      255
+    ],
+    [
+      0,
+      202,
+      0,
+      255
+    ],
+    [
+      18,
+      124,
+      255,
+      255
+    ]
+  ],
+  "hitWindows": {
+    "great": 29.5,
+    "ok": 72.5,
+    "meh": 115.5,
+    "miss": 400.0
+  },
+  "scale": 0.57023364,
+  "preempt": 600.0,
+  "fadeIn": 400.0,
+  "objects": [
+    {
+      "startTime": 1000.0,
+      "endTime": 1000.0,
+      "position": [
+        248.701,
+        184.701
+      ],
+      "stackHeight": 2,
+      "comboColourIndex": 1,
+      "comboIndex": 1,
+      "indexInCombo": 0,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 1100.0,
+      "endTime": 1100.0,
+      "position": [
+        252.35051,
+        188.35051
+      ],
+      "stackHeight": 1,
+      "comboColourIndex": 1,
+      "comboIndex": 1,
+      "indexInCombo": 1,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 1200.0,
+      "endTime": 1200.0,
+      "position": [
+        256.0,
+        192.0
+      ],
+      "stackHeight": 0,
+      "comboColourIndex": 1,
+      "comboIndex": 1,
+      "indexInCombo": 2,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 2000.0,
+      "endTime": 2357.142857142857,
+      "position": [
+        100.0,
+        100.0
+      ],
+      "stackHeight": 0,
+      "comboColourIndex": 2,
+      "comboIndex": 2,
+      "indexInCombo": 0,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "slider",
+        "vertices": [
+          0.0,
+          0.0,
+          100.0,
+          0.0
+        ],
+        "cumulativeLengths": [
+          0.0,
+          100.0
+        ],
+        "distance": 100.0,
+        "segmentEnds": [
+          1.0
+        ],
+        "repeatCount": 0,
+        "spanCount": 1,
+        "spanDuration": 357.1428571428571,
+        "duration": 357.1428571428571,
+        "endPosition": [
+          200.0,
+          100.0
+        ],
+        "snakeInDuration": 200.0,
+        "nested": [
+          {
+            "kind": "head",
+            "spanIndex": 0,
+            "time": 2000.0,
+            "position": [
+              100.0,
+              100.0
+            ],
+            "pathProgress": 0.0,
+            "preempt": 600.0,
+            "fadeIn": 400.0
+          },
+          {
+            "kind": "tail",
+            "spanIndex": 0,
+            "time": 2357.142857142857,
+            "position": [
+              200.0,
+              100.0
+            ],
+            "pathProgress": 1.0,
+            "preempt": 957.1428571428569,
+            "fadeIn": 400.0
+          }
+        ]
+      }
+    },
+    {
+      "startTime": 2400.0,
+      "endTime": 2400.0,
+      "position": [
+        203.64949,
+        103.6495
+      ],
+      "stackHeight": -1,
+      "comboColourIndex": 2,
+      "comboIndex": 2,
+      "indexInCombo": 1,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 2500.0,
+      "endTime": 2500.0,
+      "position": [
+        207.299,
+        107.29899
+      ],
+      "stackHeight": -2,
+      "comboColourIndex": 2,
+      "comboIndex": 2,
+      "indexInCombo": 2,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 3400.0,
+      "endTime": 3400.0,
+      "position": [
+        296.3505,
+        196.35051
+      ],
+      "stackHeight": 1,
+      "comboColourIndex": 3,
+      "comboIndex": 3,
+      "indexInCombo": 0,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 3500.0,
+      "endTime": 3500.0,
+      "position": [
+        302.0,
+        200.0
+      ],
+      "stackHeight": 0,
+      "comboColourIndex": 3,
+      "comboIndex": 3,
+      "indexInCombo": 1,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 4800.0,
+      "endTime": 4800.0,
+      "position": [
+        420.0,
+        300.0
+      ],
+      "stackHeight": 0,
+      "comboColourIndex": 4,
+      "comboIndex": 4,
+      "indexInCombo": 0,
+      "preempt": 600.0,
+      "fadeIn": 400.0,
+      "kind": {
+        "type": "circle"
+      }
+    }
+  ]
+}
