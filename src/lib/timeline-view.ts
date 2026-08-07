@@ -29,10 +29,55 @@ export function windowAround(bounds: TimeBounds, centre: number, spanMs: number)
 	return { start, end: start + span };
 }
 
+// one wheel notch over the detail lanes; asymmetric so that zooming in and
+// back out returns close to where it started (0.8 x 1.25 === 1 exactly)
+const SPAN_WHEEL_IN = 0.8;
+const SPAN_WHEEL_OUT = 1.25;
+
+/** the span a wheel event over the detail lanes asks for, or null when it
+ * asks for nothing: a horizontal-only trackpad swipe (deltaY 0) carries no
+ * direction, and ctrl+wheel belongs to the viewport's pointer-anchored zoom
+ * -- held over the timeline it must neither zoom this tier nor scrub */
+export function detailSpanForWheel(spanMs: number, e: { deltaY: number; ctrlKey: boolean }): number | null {
+	if (e.deltaY === 0 || e.ctrlKey) return null;
+	return spanMs * (e.deltaY > 0 ? SPAN_WHEEL_OUT : SPAN_WHEEL_IN);
+}
+
 export function zoomFactor(spanMs: number, bounds: TimeBounds): number {
 	const full = Math.max(0, bounds.maxTime - bounds.minTime);
 	if (full <= 0 || spanMs <= 0) return 1;
 	return full / spanMs;
+}
+
+/** unlike lib/timeline's fractionFor, this must not clamp into [0,1]: a mark
+ * that starts or ends outside the visible window is clipped by the track's
+ * overflow box, not stuck against the 0/1 edge -- clamping here would hide
+ * the fact that a hold started before the window and make it look like it
+ * began exactly at the left edge every time */
+export function windowFraction(view: TimeWindow, t: number): number {
+	const span = view.end - view.start;
+	return span <= 0 ? 0 : (t - view.start) / span;
+}
+
+/** a time's offset along a track `trackPx` css pixels wide. the timeline does
+ * its geometry in pixels rather than percentages so every moving offset can
+ * go through snapDevicePixels before it reaches the dom */
+export function timeToPixels(view: TimeWindow, t: number, trackPx: number): number {
+	return windowFraction(view, t) * trackPx;
+}
+
+/** rounds a css-pixel offset onto the device-pixel grid. an element that
+ * moves by a fraction of a device pixel per frame rasterises differently from
+ * frame to frame -- a 1.5px stem covers 1 or 2 device pixels depending on its
+ * subpixel phase, and a span whose two endpoints round independently can have
+ * its edges step in opposite directions on one sub-pixel move. snapping keeps
+ * that phase constant. non-decreasing in `px`, which is what guarantees a
+ * span built from two snapped endpoints can never come out inside-out */
+export function snapDevicePixels(px: number, dpr: number): number {
+	// devicePixelRatio is read at the point of use and is > 0 in any real
+	// browser; guard anyway rather than divide the whole geometry to NaN
+	const ratio = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+	return Math.round(px * ratio) / ratio;
 }
 
 /** 1-2-5 decade steps, the intervals a time ruler reads naturally in */
