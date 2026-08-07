@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { FrameDto } from "../lib/scene-types";
 import { loadFixture } from "../test/fixtures";
 import { K1, K2, M1, M2, isLeft, isRight } from "./buttons";
-import { buttonEdges, cursorStateAt, pressEdges } from "./interpolation";
+import { buttonEdges, cursorStateAt, holdSpans, holdSpansFlat, pressEdges, sliceSpansFlat } from "./interpolation";
 
 interface CursorFixture {
 	cases: {
@@ -113,5 +113,70 @@ describe("press edges", () => {
 		expect(edges.k1).toEqual([32]);
 		expect(edges.k2).toEqual([64]);
 		expect(edges.m2).toEqual([96]);
+	});
+});
+
+describe("holdSpans", () => {
+	test("pairs each rising edge with its release", () => {
+		const frames = [
+			{ time: 0, x: 0, y: 0, buttons: 0 },
+			{ time: 10, x: 0, y: 0, buttons: 4 },
+			{ time: 40, x: 0, y: 0, buttons: 0 }
+		];
+		expect(holdSpans(frames, 4)).toEqual([{ start: 10, end: 40 }]);
+	});
+
+	test("closes a still-held button at the final frame", () => {
+		const frames = [
+			{ time: 0, x: 0, y: 0, buttons: 4 },
+			{ time: 30, x: 0, y: 0, buttons: 4 }
+		];
+		expect(holdSpans(frames, 4)).toEqual([{ start: 0, end: 30 }]);
+	});
+
+	test("a never-pressed button has no spans", () => {
+		expect(holdSpans([{ time: 0, x: 0, y: 0, buttons: 0 }], 4)).toEqual([]);
+	});
+});
+
+describe("holdSpansFlat", () => {
+	test("packs exactly the spans holdSpans produces, as start/end pairs", () => {
+		const frames = [
+			{ time: 0, x: 0, y: 0, buttons: 0 },
+			{ time: 10, x: 0, y: 0, buttons: 4 },
+			{ time: 40, x: 0, y: 0, buttons: 0 },
+			{ time: 60, x: 0, y: 0, buttons: 4 },
+			{ time: 90, x: 0, y: 0, buttons: 4 }
+		];
+		expect(Array.from(holdSpansFlat(frames, 4))).toEqual(holdSpans(frames, 4).flatMap((s) => [s.start, s.end]));
+		expect(Array.from(holdSpansFlat(frames, 4))).toEqual([10, 40, 60, 90]);
+	});
+
+	test("an empty frame stream packs no spans", () => {
+		expect(holdSpansFlat([], 4).length).toBe(0);
+	});
+});
+
+describe("sliceSpansFlat", () => {
+	test("returns only spans overlapping the range", () => {
+		const flat = new Float64Array([0, 10, 20, 30, 40, 50]);
+		expect(sliceSpansFlat(flat, 15, 35, 0)).toEqual([{ start: 20, end: 30 }]);
+	});
+
+	test("coalesces spans separated by at most the merge gap", () => {
+		const flat = new Float64Array([0, 10, 12, 20, 100, 110]);
+		expect(sliceSpansFlat(flat, 0, 200, 5)).toEqual([
+			{ start: 0, end: 20 },
+			{ start: 100, end: 110 }
+		]);
+	});
+
+	test("bounds a duplicate-time span flood to one rendered span", () => {
+		// duplicate frame times are legal, so a crafted replay can alternate a
+		// button millions of times at one timestamp -- the slice must coalesce
+		// that flood instead of materializing an object (and dom node) per span
+		const flood = new Float64Array(10_000);
+		flood.fill(500);
+		expect(sliceSpansFlat(flood, 0, 1000, 1)).toEqual([{ start: 500, end: 500 }]);
 	});
 });

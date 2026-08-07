@@ -84,6 +84,100 @@ export function pressEdges(frames: FrameDto[]): Press[] {
 	return presses;
 }
 
+export interface HoldSpan {
+	start: number;
+	end: number;
+}
+
+/** the streaming core of the span walk: emits every press-to-release span of
+ * a caller-chosen "is this held" predicate over the raw buttons bitfield,
+ * materializing nothing itself. shared by spansWhere/holdSpansFlat here and
+ * analysis.ts's meanHold -- all walk identical rising/falling edges and
+ * differ only in what counts as "held" and what they do with a span, and a
+ * capped replay carries millions of frames, so the scalar consumers must be
+ * able to fold spans without allocating one object each */
+export function eachSpanWhere(
+	frames: readonly FrameDto[],
+	isHeld: (buttons: number) => boolean,
+	emit: (start: number, end: number) => void
+): void {
+	let down: number | null = null;
+	let previous = 0;
+	for (const frame of frames) {
+		const held = isHeld(frame.buttons);
+		if (held && !isHeld(previous)) down = frame.time;
+		else if (!held && isHeld(previous) && down !== null) {
+			emit(down, frame.time);
+			down = null;
+		}
+		previous = frame.buttons;
+	}
+	// a press still down at the end closes at the last frame rather than being
+	// discarded -- discarding it would silently drop a hold that is still
+	// visibly in progress when the replay stream ends
+	if (down !== null) emit(down, frames[frames.length - 1].time);
+}
+
+/** every span of the predicate as objects -- for small or test-sized inputs;
+ * large retained span sets should use holdSpansFlat instead */
+export function spansWhere(frames: readonly FrameDto[], isHeld: (buttons: number) => boolean): HoldSpan[] {
+	const spans: HoldSpan[] = [];
+	eachSpanWhere(frames, isHeld, (start, end) => spans.push({ start, end }));
+	return spans;
+}
+
+/** rising-to-falling spans of one raw button bit -- what the detail lanes'
+ * K1/K2/M1/M2 rows draw. distinct from meanHold's logical-action spans: a
+ * keyboard tap sets both its K and M bit for one physical press (buttons.ts),
+ * so per-bit spans legitimately double up where meanHold's per-action spans
+ * must not */
+export function holdSpans(frames: readonly FrameDto[], bit: number): HoldSpan[] {
+	return spansWhere(frames, (buttons) => (buttons & bit) !== 0);
+}
+
+/** holdSpans pair-packed as [start0, end0, start1, end1, ...] -- the form
+ * DetailLanes retains per scene. at the frame cap the object form would pin
+ * millions of tiny heap objects for the scene's whole lifetime; a packed
+ * Float64Array is one allocation. counted in a first pass so the fill pass
+ * allocates exactly once */
+export function holdSpansFlat(frames: readonly FrameDto[], bit: number): Float64Array {
+	const isHeld = (buttons: number) => (buttons & bit) !== 0;
+	let count = 0;
+	eachSpanWhere(frames, isHeld, () => {
+		count += 1;
+	});
+	const flat = new Float64Array(count * 2);
+	let at = 0;
+	eachSpanWhere(frames, isHeld, (start, end) => {
+		flat[at] = start;
+		flat[at + 1] = end;
+		at += 2;
+	});
+	return flat;
+}
+
+/** the packed spans of holdSpansFlat intersecting [start, end], as objects
+ * for rendering. chronological spans whose gap is at most mergeGap coalesce:
+ * a gap below one lane pixel cannot render distinctly anyway, and duplicate
+ * frame times are legal, so a crafted replay can pack millions of spans into
+ * one window -- materializing (then mounting) a node per span would stall the
+ * webview, while coalescing bounds the slice by the window's pixel budget */
+export function sliceSpansFlat(flat: Float64Array, start: number, end: number, mergeGap: number): HoldSpan[] {
+	const spans: HoldSpan[] = [];
+	for (let i = 0; i < flat.length; i += 2) {
+		const spanStart = flat[i];
+		const spanEnd = flat[i + 1];
+		if (spanStart > end || spanEnd < start) continue;
+		const last = spans[spans.length - 1];
+		if (last !== undefined && spanStart - last.end <= mergeGap) {
+			if (spanEnd > last.end) last.end = spanEnd;
+		} else {
+			spans.push({ start: spanStart, end: spanEnd });
+		}
+	}
+	return spans;
+}
+
 export interface ButtonEdges {
 	k1: number[];
 	k2: number[];
