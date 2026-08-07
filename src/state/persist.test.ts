@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import type { IpcError, OverlaySettings, Settings } from "../lib/scene-types";
+import type { EditingSettings, IpcError, OverlaySettings, Settings } from "../lib/scene-types";
 import { testScene } from "../test/scene";
-import { DEFAULT_OVERLAYS } from "./defaults";
+import { DEFAULT_EDITING, DEFAULT_OVERLAYS } from "./defaults";
 import { installPrefsPersistence, type Scheduler } from "./persist";
 import { createViewerStore, type IpcDeps } from "./store";
 
-const baseSettings: Settings = { osuStablePath: null, volume: 100, overlays: DEFAULT_OVERLAYS };
+const baseSettings: Settings = {
+	osuStablePath: null,
+	volume: 100,
+	overlays: DEFAULT_OVERLAYS,
+	recents: [],
+	editing: DEFAULT_EDITING
+};
 
 function deps(): IpcDeps {
 	return {
@@ -13,7 +19,8 @@ function deps(): IpcDeps {
 		loadReplayWithBeatmap: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays) => ({ ...baseSettings, volume, overlays })
+		setViewerPrefs: async (volume, overlays, editing) => ({ ...baseSettings, volume, overlays, editing }),
+		clearRecents: async () => ({ ...baseSettings, recents: [] })
 	};
 }
 
@@ -56,11 +63,11 @@ function manualScheduler() {
 }
 
 function saveRecorder() {
-	const calls: { volume: number; overlays: OverlaySettings }[] = [];
+	const calls: { volume: number; overlays: OverlaySettings; editing: EditingSettings }[] = [];
 	return {
 		calls,
-		save: async (volume: number, overlays: OverlaySettings) => {
-			calls.push({ volume, overlays });
+		save: async (volume: number, overlays: OverlaySettings, editing: EditingSettings) => {
+			calls.push({ volume, overlays, editing });
 			return baseSettings;
 		}
 	};
@@ -117,6 +124,18 @@ describe("installPrefsPersistence", () => {
 		expect(timer.scheduled).toBe(1);
 		timer.fire();
 		expect(rec.calls[0].overlays.keyOverlay).toBe(false);
+	});
+
+	test("editing changes schedule a save too", () => {
+		const store = createViewerStore(deps());
+		const timer = manualScheduler();
+		const rec = saveRecorder();
+		installPrefsPersistence(store, rec.save, 500, timer.scheduler);
+
+		store.getState().setEditing("snapToLattice", false);
+		expect(timer.scheduled).toBe(1);
+		timer.fire();
+		expect(rec.calls[0].editing.snapToLattice).toBe(false);
 	});
 
 	test("dispose flushes the pending save and stops listening", () => {
@@ -201,6 +220,7 @@ describe("installPrefsPersistence", () => {
 		for (const call of rec.calls) {
 			expect(call.volume).toBe(store.getState().volume);
 			expect(call.overlays).toBe(store.getState().overlays);
+			expect(call.editing).toBe(store.getState().editing);
 		}
 	});
 });
