@@ -41,6 +41,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_replay,
             commands::load_replay_with_beatmap,
+            commands::load_recent_replay,
             commands::get_settings,
             commands::set_osu_stable_path,
             commands::set_viewer_prefs,

@@ -390,12 +390,38 @@ impl OszArchive {
         per_candidate_cap: u64,
         scan_budget: u64,
     ) -> Result<Option<MatchedOsu>, IpcError> {
+        let found =
+            self.find_osu_ranked(std::slice::from_ref(&md5), per_candidate_cap, scan_budget)?;
+        Ok(found.map(|(_, matched)| matched))
+    }
+
+    /// several acceptable hashes in one pass, best first: the match with the
+    /// lowest index in `md5s` wins, and the returned rank says which hash
+    /// answered. one call is one scan budget, so a caller with a preference
+    /// order must come here rather than calling `find_osu_by_md5` per hash --
+    /// that would hand the same archive a fresh `MAX_OSZ_SCAN_BYTES` for
+    /// every hash it tried
+    pub fn find_osu_by_any_md5(
+        &mut self,
+        md5s: &[&str],
+    ) -> Result<Option<(usize, MatchedOsu)>, IpcError> {
+        self.find_osu_ranked(md5s, engine::limits::MAX_OSU_FILE_BYTES, MAX_OSZ_SCAN_BYTES)
+    }
+
+    /// the caps are parameters for the same reason as above
+    pub fn find_osu_ranked(
+        &mut self,
+        md5s: &[&str],
+        per_candidate_cap: u64,
+        scan_budget: u64,
+    ) -> Result<Option<(usize, MatchedOsu)>, IpcError> {
         // every decompressed candidate byte is charged against one aggregate
         // budget, so an archive full of maximum-size .osu members cannot
         // force unbounded decompression on the way to not-found. each read
         // is also clamped to what the budget can still afford, so actual
         // decompression never outruns the cap by more than a single byte
         let mut budget = ByteBudget { used: 0, max: scan_budget, cap: "MAX_OSZ_SCAN_BYTES" };
+        let mut best: Option<(usize, MatchedOsu)> = None;
         for index in self.osu_indices_by_name() {
             let read_cap = per_candidate_cap.min(budget.remaining());
             let Some(bytes) = self.read_member_capped(index, read_cap)? else {
@@ -408,11 +434,21 @@ impl OszArchive {
             };
             budget.charge(bytes.len() as u64)?;
             let actual = format!("{:x}", md5::compute(&bytes));
-            if actual.eq_ignore_ascii_case(md5) {
-                return Ok(Some(MatchedOsu { index, bytes, md5: actual }));
+            let Some(rank) = md5s.iter().position(|m| actual.eq_ignore_ascii_case(m)) else {
+                continue;
+            };
+            let matched = MatchedOsu { index, bytes, md5: actual };
+            // the first hash can never be beaten, so it ends the scan where a
+            // single-hash search always did; a lower-ranked hit is only held
+            // until a better one turns up
+            if rank == 0 {
+                return Ok(Some((0, matched)));
+            }
+            if best.as_ref().is_none_or(|(best_rank, _)| rank < *best_rank) {
+                best = Some((rank, matched));
             }
         }
-        Ok(None)
+        Ok(best)
     }
 
     /// the deterministic override target: first .osu by entry name
@@ -633,6 +669,42 @@ mod tests {
 
         let mut archive = open_osz(&path).unwrap();
         match archive.find_osu_by_md5_with_caps(&want, 64, 7) {
+            Err(IpcError::ResourceLimit { cap, limit: 7, actual: 8 }) => {
+                assert_eq!(cap, "MAX_OSZ_SCAN_BYTES");
+            }
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_ranked_scan_spends_one_budget_and_prefers_the_earlier_hash() {
+        // searching several acceptable hashes must cost one scan budget, not
+        // one per hash: the caller that needs this (load::open_saved_source)
+        // used to call find_osu_by_md5 once per hash, handing the same
+        // archive a fresh MAX_OSZ_SCAN_BYTES every time
+        let (_dir, path) = temp_osz(&[("a.osu", b"aaaa".as_slice()), ("b.osu", b"bbbb".as_slice())]);
+        let a_hash = format!("{:x}", md5::compute(b"aaaa"));
+        let b_hash = format!("{:x}", md5::compute(b"bbbb"));
+        let absent = "0".repeat(32);
+
+        // the preferred hash wins even though the other member matches too,
+        // and even though that other member comes first by entry name
+        let mut archive = open_osz(&path).unwrap();
+        let (rank, hit) =
+            archive.find_osu_by_any_md5(&[b_hash.as_str(), a_hash.as_str()]).unwrap().unwrap();
+        assert_eq!(rank, 0);
+        assert_eq!(hit.bytes, b"bbbb");
+
+        // both members are read reaching that better-ranked hash, and both
+        // charge the same 8-byte budget
+        let mut archive = open_osz(&path).unwrap();
+        let ranked = archive.find_osu_ranked(&[b_hash.as_str(), a_hash.as_str()], 64, 8);
+        assert_eq!(ranked.unwrap().unwrap().1.bytes, b"bbbb");
+
+        // a 7-byte budget must refuse mid-scan rather than start over for the
+        // hash that has not been tried yet
+        let mut archive = open_osz(&path).unwrap();
+        match archive.find_osu_ranked(&[absent.as_str(), b_hash.as_str()], 64, 7) {
             Err(IpcError::ResourceLimit { cap, limit: 7, actual: 8 }) => {
                 assert_eq!(cap, "MAX_OSZ_SCAN_BYTES");
             }

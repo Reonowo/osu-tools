@@ -7,6 +7,10 @@
 //! v3 adds `recents`: the start screen's list of previously opened replays,
 //! most-recent-first and capped at `MAX_RECENTS`, so a v2 file hydrates it
 //! empty rather than losing the rest of the settings.
+//! v4 adds `effects`: the per-effect render toggles, behind one master.
+//! v5 adds the beatmap association each recents entry reopens through, so a
+//! manually paired beatmap survives a restart instead of being looked up
+//! again (or asked for again).
 //!
 //! every field is `#[serde(default)]` at the container level, so a v1 file --
 //! or any future file written by an older build -- hydrates the new fields
@@ -44,6 +48,7 @@ pub struct Settings {
     /// most-recent-first, capped at `MAX_RECENTS`
     pub recents: Vec<RecentReplay>,
     pub editing: EditingPrefs,
+    pub effects: EffectPrefs,
 }
 
 impl Default for Settings {
@@ -54,12 +59,15 @@ impl Default for Settings {
             overlays: OverlayPrefs::default(),
             recents: Vec::new(),
             editing: EditingPrefs::default(),
+            effects: EffectPrefs::default(),
         }
     }
 }
 
-/// one entry in the start screen's recents list. only what the card renders,
-/// so the list stays readable without reopening every replay
+/// one entry in the start screen's recents list: what the card renders, plus
+/// the beatmap association `commands::load_recent_replay` reopens through.
+/// every association field hydrates absent, so an entry written before they
+/// existed simply reopens the way it always did (the osu! stable lookup)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecentReplay {
@@ -72,6 +80,20 @@ pub struct RecentReplay {
     pub max_combo: u32,
     /// unix milliseconds, for the relative "2h ago" label
     pub opened_at_ms: i64,
+    /// the beatmap source the last open resolved: a picked `.osu`/`.osz`, or
+    /// the `.osu` the stable lookup found
+    pub beatmap_path: Option<String>,
+    /// the folder that source sits in. always a real directory that outlives
+    /// the session -- never an `.osz` extraction lease, which is deleted the
+    /// moment its scene is replaced (`cache::CacheLease`)
+    pub beatmap_dir: Option<String>,
+    /// the hash of the beatmap actually loaded, which is the replay's own
+    /// unless the user overrode a mismatch
+    pub beatmap_md5: Option<String>,
+    /// the user's recorded consent to loading this replay against a beatmap
+    /// that is not the one it was played on. it belongs to `beatmap_md5`, not
+    /// to the path: content that no longer hashes to it never inherits it
+    pub allow_mismatch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -114,6 +136,34 @@ impl Default for EditingPrefs {
         EditingPrefs {
             snap_to_lattice: true,
             warn_on_overwrite: true,
+        }
+    }
+}
+
+/// the renderer's per-effect toggles. `enabled` is the master: an effect is
+/// live only when the master and its own flag are both on, so switching the
+/// master off hides everything without erasing what the user chose
+/// underneath it. everything ships on -- the defaults are the full-fat look
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EffectPrefs {
+    pub enabled: bool,
+    pub hit_animations: bool,
+    pub hit_effects: bool,
+    pub cursor_glow: bool,
+    pub cursor_trail: bool,
+    pub follow_points: bool,
+}
+
+impl Default for EffectPrefs {
+    fn default() -> EffectPrefs {
+        EffectPrefs {
+            enabled: true,
+            hit_animations: true,
+            hit_effects: true,
+            cursor_glow: true,
+            cursor_trail: true,
+            follow_points: true,
         }
     }
 }
@@ -185,6 +235,14 @@ mod tests {
             },
             recents: Vec::new(),
             editing: EditingPrefs::default(),
+            effects: EffectPrefs {
+                enabled: true,
+                hit_animations: false,
+                hit_effects: true,
+                cursor_glow: false,
+                cursor_trail: true,
+                follow_points: false,
+            },
         }
     }
 
@@ -197,6 +255,10 @@ mod tests {
             accuracy: 0.5,
             max_combo: 300,
             opened_at_ms,
+            beatmap_path: Some(r"D:\games\osu!\Songs\1 fixture\map.osu".into()),
+            beatmap_dir: Some(r"D:\games\osu!\Songs\1 fixture".into()),
+            beatmap_md5: Some("d41d8cd98f00b204e9800998ecf8427e".into()),
+            allow_mismatch: false,
         }
     }
 
@@ -225,6 +287,18 @@ mod tests {
         assert!(!settings.overlays.cursor_path);
         assert!(settings.editing.snap_to_lattice, "snapping ships enabled");
         assert!(settings.editing.warn_on_overwrite, "the overwrite warning ships enabled");
+        assert_eq!(
+            settings.effects,
+            EffectPrefs {
+                enabled: true,
+                hit_animations: true,
+                hit_effects: true,
+                cursor_glow: true,
+                cursor_trail: true,
+                follow_points: true,
+            },
+            "every effect ships enabled, master included"
+        );
     }
 
     #[test]
@@ -253,6 +327,14 @@ mod tests {
                 },
                 "recents": [],
                 "editing": { "snapToLattice": true, "warnOnOverwrite": true },
+                "effects": {
+                    "enabled": true,
+                    "hitAnimations": false,
+                    "hitEffects": true,
+                    "cursorGlow": false,
+                    "cursorTrail": true,
+                    "followPoints": false,
+                },
             })
         );
 
@@ -271,6 +353,14 @@ mod tests {
                 },
                 "recents": [],
                 "editing": { "snapToLattice": true, "warnOnOverwrite": true },
+                "effects": {
+                    "enabled": true,
+                    "hitAnimations": true,
+                    "hitEffects": true,
+                    "cursorGlow": true,
+                    "cursorTrail": true,
+                    "followPoints": true,
+                },
             })
         );
     }
@@ -290,8 +380,47 @@ mod tests {
                 "accuracy": 0.5,
                 "maxCombo": 300,
                 "openedAtMs": 7,
+                "beatmapPath": r"D:\games\osu!\Songs\1 fixture\map.osu",
+                "beatmapDir": r"D:\games\osu!\Songs\1 fixture",
+                "beatmapMd5": "d41d8cd98f00b204e9800998ecf8427e",
+                "allowMismatch": false,
             })
         );
+    }
+
+    #[test]
+    fn a_recents_entry_written_before_the_association_reopens_without_one() {
+        // the four association fields are what a v4 file lacks; hydrating them
+        // absent is what keeps such an entry reopening through the stable
+        // lookup instead of failing to parse the whole settings file
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"recents":[{"osrPath":"C:\\a.osr","title":"Title","maxCombo":300}]}"#,
+        )
+        .unwrap();
+
+        let entry = load_settings(dir.path()).recents.remove(0);
+        assert_eq!(entry.title, "Title");
+        assert_eq!(entry.beatmap_path, None);
+        assert_eq!(entry.beatmap_dir, None);
+        assert_eq!(entry.beatmap_md5, None);
+        assert!(!entry.allow_mismatch, "no stored consent means no override on reopen");
+    }
+
+    #[test]
+    fn the_beatmap_association_survives_a_save_and_load_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.push_recent(RecentReplay {
+            beatmap_path: Some(r"D:\maps\set.osz".into()),
+            beatmap_dir: Some(r"D:\maps".into()),
+            beatmap_md5: Some("0123456789abcdef0123456789abcdef".into()),
+            allow_mismatch: true,
+            ..recent(r"C:\a.osr", 7)
+        });
+        save_settings(dir.path(), &settings).unwrap();
+        assert_eq!(load_settings(dir.path()).recents, settings.recents);
     }
 
     #[test]
@@ -311,6 +440,7 @@ mod tests {
         assert_eq!(loaded.overlays, OverlayPrefs::default());
         assert_eq!(loaded.recents, Vec::new());
         assert_eq!(loaded.editing, EditingPrefs::default());
+        assert_eq!(loaded.effects, EffectPrefs::default());
 
         // a partially-written overlays object hydrates per field too
         std::fs::write(
@@ -337,6 +467,43 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
         assert_eq!(load_settings(dir.path()).editing, EditingPrefs::default());
+    }
+
+    #[test]
+    fn a_legacy_file_hydrates_the_effect_prefs_per_field() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
+        assert_eq!(load_settings(dir.path()).effects, EffectPrefs::default());
+
+        // a partially-written effects object hydrates the rest from Default,
+        // so a build that adds a sixth effect still reads a five-effect file
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"effects":{"cursorTrail":false}}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert!(!loaded.effects.cursor_trail);
+        assert!(loaded.effects.enabled, "untouched fields keep their default");
+        assert!(loaded.effects.hit_animations);
+    }
+
+    #[test]
+    fn effect_prefs_survive_a_save_and_load_round_trip() {
+        // the master stays on while granular flags go off: turning the master
+        // off must never be what erases them, so the file has to carry both
+        // halves independently
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            effects: EffectPrefs { enabled: false, cursor_glow: false, ..EffectPrefs::default() },
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &settings).unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.effects, settings.effects);
+        assert!(!loaded.effects.enabled);
+        assert!(!loaded.effects.cursor_glow);
+        assert!(loaded.effects.hit_effects, "an effect left on stays on under a disabled master");
     }
 
     #[test]
