@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { withinInteractiveControl, withinNativeWheelUi, type GuardElement } from "./shortcut-guards";
+import { wheelFrameStep, withinInteractiveControl, withinNativeWheelUi, type GuardElement } from "./shortcut-guards";
 
 function el(tagName: string, attrs: Record<string, string> = {}, parent: GuardElement | null = null): GuardElement {
 	return {
@@ -24,6 +24,21 @@ describe("withinInteractiveControl", () => {
 	test("blocks slider thumbs and dialog content by role", () => {
 		expect(withinInteractiveControl(el("div", { role: "slider" }))).toBe(true);
 		expect(withinInteractiveControl(el("span", {}, el("div", { role: "dialog" })))).toBe(true);
+	});
+
+	test("allows an element that opts out, and its subtree", () => {
+		// the frames panel's rows: buttons for clicking and tab-reachability
+		// only, so `,` `.` space arrows home must keep firing while one of them
+		// holds the focus a click just gave it
+		const row = el("button", { "data-shortcut-passthrough": "" });
+		expect(withinInteractiveControl(row)).toBe(false);
+		expect(withinInteractiveControl(el("span", {}, row))).toBe(false);
+	});
+
+	test("still blocks a real control nested inside an opt-out", () => {
+		// innermost declaration wins: the walk reaches the input first
+		const input = el("input", {}, el("div", { "data-shortcut-passthrough": "" }));
+		expect(withinInteractiveControl(input)).toBe(true);
 	});
 
 	test("allows plain page targets", () => {
@@ -58,5 +73,33 @@ describe("withinNativeWheelUi", () => {
 		expect(withinNativeWheelUi(el("button", {}, el("footer")))).toBe(false);
 		expect(withinNativeWheelUi(null)).toBe(false);
 		expect(withinNativeWheelUi({})).toBe(false);
+	});
+});
+
+describe("wheelFrameStep", () => {
+	const canvas = el("canvas");
+
+	test("one frame per event, in the wheel's direction, whatever the magnitude", () => {
+		expect(wheelFrameStep({ deltaY: -1, ctrlKey: false, target: canvas })).toBe(-1);
+		expect(wheelFrameStep({ deltaY: -4000, ctrlKey: false, target: canvas })).toBe(-1);
+		expect(wheelFrameStep({ deltaY: 0.5, ctrlKey: false, target: canvas })).toBe(1);
+		expect(wheelFrameStep({ deltaY: 4000, ctrlKey: false, target: canvas })).toBe(1);
+	});
+
+	test("a purely horizontal wheel steps nothing", () => {
+		expect(wheelFrameStep({ deltaY: 0, ctrlKey: false, target: canvas })).toBeNull();
+	});
+
+	test("ctrl+wheel steps nothing -- it belongs to the viewport's zoom", () => {
+		// the gesture must not scrub the replay out from under the zoom, and over
+		// the timeline (data-native-wheel, so already excluded) it must not zoom
+		// the detail tier either -- see detailSpanForWheel
+		expect(wheelFrameStep({ deltaY: -100, ctrlKey: true, target: canvas })).toBeNull();
+		expect(wheelFrameStep({ deltaY: 100, ctrlKey: true, target: canvas })).toBeNull();
+	});
+
+	test("scrollable ui keeps its native scroll", () => {
+		const inDialog = el("div", {}, el("div", { role: "dialog" }));
+		expect(wheelFrameStep({ deltaY: 100, ctrlKey: false, target: inDialog })).toBeNull();
 	});
 });

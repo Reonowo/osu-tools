@@ -7,18 +7,17 @@
 
 import { useEffect } from "react";
 import { useHotkeys } from "@tanstack/react-hotkeys";
-import { adjacentFrameTime } from "@/lib/timeline";
+import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
+import { spacePan } from "@/playback/space-pan";
 import { viewerStore } from "@/state/store";
-import { withinInteractiveControl, withinNativeWheelUi } from "./shortcut-guards";
+import { wheelFrameStep, withinInteractiveControl } from "./shortcut-guards";
 
-/** seek to the neighbouring replay frame; does not pause playback, matching
- * the `,` / `.` behaviour the wheel shares */
+/** exact-select the neighbouring replay frame, one index at a time so a run
+ * of duplicate-time frames is fully steppable; does not pause playback,
+ * matching the `,` / `.` behaviour the wheel shares */
 export function stepFrame(direction: 1 | -1) {
-	const { scene } = viewerStore.getState();
-	if (scene === null) return;
-	const next = adjacentFrameTime(scene.frames, playbackClock.currentTime(), direction);
-	if (next !== undefined) playbackClock.seekTo(next);
+	frameCursor.step(direction);
 }
 
 function guarded(e: KeyboardEvent, action: () => void) {
@@ -43,7 +42,9 @@ export function usePlaybackShortcuts() {
 				// key repeat for held-key seeking. e.repeat is filtered here instead
 				// of using the library's requireReset: its hasFired flag only resets
 				// on a keyup this document receives, so releasing space while
-				// alt-tabbed away would swallow the first press after refocus
+				// alt-tabbed away would swallow the first press after refocus.
+				// filtering it is also what lets a hold be a drag: re-arming
+				// mid-hold would forget a drag already under way
 				callback: (e) => {
 					if (e.repeat) return;
 					guarded(e, () => {
@@ -51,9 +52,27 @@ export function usePlaybackShortcuts() {
 						// preventDefault option would also swallow space on a focused
 						// button before the guard could decline
 						e.preventDefault();
-						const { playing, setPlaying } = viewerStore.getState();
-						setPlaying(!playing);
+						// keydown only arms the viewport's pan drag now; the play/pause
+						// toggle moved to keyup so a space-drag can suppress it. a tap
+						// still toggles, one keystroke later than it used to
+						spacePan.press();
 					});
+				}
+			},
+			{
+				hotkey: "Space",
+				// conflictBehavior: the manager matches conflicts on the hotkey
+				// string and target alone, so the keydown registration above would
+				// warn about this one even though the two never fire on the same
+				// event
+				options: { eventType: "keyup", conflictBehavior: "allow" },
+				callback: () => {
+					// no guard needed: press() ran only if the keydown passed one, so
+					// a release with nothing armed -- a focused button's own space
+					// activation, a text field, no loaded scene -- toggles nothing
+					if (!spacePan.release()) return;
+					const { playing, setPlaying } = viewerStore.getState();
+					setPlaying(!playing);
 				}
 			},
 			{
@@ -82,14 +101,15 @@ export function usePlaybackShortcuts() {
 
 	useEffect(() => {
 		function onWheel(e: WheelEvent) {
-			// one frame per event regardless of delta magnitude (no accumulation);
-			// deltaY 0 means a purely horizontal wheel, which is not a step
-			if (e.deltaY === 0) return;
+			const step = wheelFrameStep(e);
+			if (step === null) return;
 			if (viewerStore.getState().scene === null) return;
-			if (withinNativeWheelUi(e.target)) return;
-			stepFrame(e.deltaY < 0 ? -1 : 1);
+			stepFrame(step);
 		}
 		// passive: the viewer layout never scrolls, so default is never prevented
+		// here. ctrl+wheel is the one wheel gesture that does need a
+		// preventDefault (the webview's own page zoom), and wheelFrameStep bails
+		// on it -- the viewport carries its own non-passive listener for it
 		window.addEventListener("wheel", onWheel, { passive: true });
 		return () => window.removeEventListener("wheel", onWheel);
 	}, []);
