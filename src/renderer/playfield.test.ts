@@ -1,5 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { ActiveSetTracker, objectLifetime, playfieldTransform, reconcileActiveDrawables } from "./playfield";
+import {
+	ActiveSetTracker,
+	anchoredZoomPan,
+	clampViewportPan,
+	clampViewportZoom,
+	densityBucket,
+	DENSITY_BUCKETS,
+	maxViewportPan,
+	NO_VIEWPORT_PAN,
+	objectLifetime,
+	playfieldTransform,
+	reconcileActiveDrawables,
+	steppedViewportZoom,
+	textureDensity,
+	viewportTransform,
+	VIEWPORT_ZOOM_MAX,
+	VIEWPORT_ZOOM_MIN,
+	wheelZoomFactor
+} from "./playfield";
 
 describe("playfield fit (osuplayfieldadjustmentcontainer.cs)", () => {
 	test("the reference 1024x768 target yields the stable magic 1.6 scale", () => {
@@ -19,6 +37,50 @@ describe("playfield fit (osuplayfieldadjustmentcontainer.cs)", () => {
 		const t = playfieldTransform(3000, 600);
 		// fitW = 600 * 4/3 = 800
 		expect(t.scale).toBeCloseTo((800 * 0.8) / 512, 9);
+	});
+});
+
+describe("texture density buckets", () => {
+	// the three factors compose multiplicatively: the backing store's ratio,
+	// the 4:3 fit's osu!px -> css px scale, and the user's zoom
+	const bucketFor = (dpr: number, hostW: number, hostH: number, zoom: number) =>
+		densityBucket(textureDensity(dpr, playfieldTransform(hostW, hostH).scale, zoom));
+
+	test("1080p at dpr 1 needs more than the fixed 2x the art used to bake at", () => {
+		expect(playfieldTransform(1920, 1080).scale).toBeCloseTo(2.25, 9);
+		expect(bucketFor(1, 1920, 1080, 1)).toBe(3);
+	});
+
+	test("the same window on a dpr 2 display doubles the requirement", () => {
+		expect(bucketFor(2, 1920, 1080, 1)).toBe(6);
+	});
+
+	test("zoom multiplies exactly like dpr does", () => {
+		expect(bucketFor(1, 1920, 1080, 2)).toBe(6); // 4.5, same as dpr 2 at zoom 1
+		expect(bucketFor(1, 1920, 1080, 0.5)).toBe(2); // 1.125
+	});
+
+	test("a density past the last bucket clamps rather than baking unbounded", () => {
+		expect(textureDensity(2, playfieldTransform(1920, 1080).scale, 4)).toBeCloseTo(18, 9);
+		expect(bucketFor(2, 1920, 1080, 4)).toBe(8);
+	});
+
+	test("a bucket is chosen only when it covers the density, and the next one down would not", () => {
+		// an exact hit takes that bucket rather than the one above
+		expect(densityBucket(4)).toBe(4);
+		expect(densityBucket(4.0001)).toBe(6);
+		for (const density of [0.5, 1, 1.99, 2, 2.5, 3, 3.5, 5.9, 6, 7.5, 8]) {
+			const bucket = densityBucket(density);
+			expect(bucket).toBeGreaterThanOrEqual(density);
+			for (const smaller of DENSITY_BUCKETS.filter((b) => b < bucket)) {
+				expect(smaller).toBeLessThan(density);
+			}
+		}
+	});
+
+	test("a degenerate host (zero-size, mid-mount) falls back to the smallest bucket", () => {
+		expect(bucketFor(1, 0, 0, 1)).toBe(2);
+		expect(densityBucket(Number.NaN)).toBe(2);
 	});
 });
 
@@ -244,5 +306,220 @@ describe("playfield fit edge cases", () => {
 		expect(t.scale).toBeCloseTo(expectedScale, 3);
 		expect(t.offsetX).toBeCloseTo((10_000_000 - 512 * expectedScale) / 2, 3);
 		expect(t.offsetY).toBeCloseTo((10_000_000 - 384 * expectedScale) / 2, 3);
+	});
+});
+
+// a spread wide enough to exercise both fit branches and both extremes of aspect
+const HOST_BOXES = [
+	{ w: 1024, h: 768 },
+	{ w: 1920, h: 1080 },
+	{ w: 800, h: 3000 },
+	{ w: 3000, h: 600 },
+	{ w: 640, h: 481 },
+	{ w: 1, h: 1 }
+];
+
+/** the osu!px under a host point, which is what a pointer-anchored zoom has
+ * to leave alone */
+function worldUnder(t: { scale: number; x: number; y: number }, point: { x: number; y: number }) {
+	return { x: (point.x - t.x) / t.scale, y: (point.y - t.y) / t.scale };
+}
+
+describe("viewportTransform", () => {
+	test("zoom 1 with no pan is exactly today's playfield fit", () => {
+		// the whole point of the formulation: 100% must not nudge the framing the
+		// app has always drawn, so this is exact equality rather than toBeCloseTo
+		for (const { w, h } of HOST_BOXES) {
+			const fit = playfieldTransform(w, h);
+			const t = viewportTransform(w, h, 1, NO_VIEWPORT_PAN);
+			expect(t.scale).toBe(fit.scale);
+			expect(t.x).toBe(fit.offsetX);
+			expect(t.y).toBe(fit.offsetY);
+		}
+	});
+
+	test("zoom scales about the playfield centre, which stays on the viewport centre", () => {
+		const t = viewportTransform(1024, 768, 2.5, NO_VIEWPORT_PAN);
+		expect(t.scale).toBeCloseTo(playfieldTransform(1024, 768).scale * 2.5, 12);
+		const centre = worldUnder(t, { x: 512, y: 384 });
+		expect(centre.x).toBeCloseTo(256, 9);
+		expect(centre.y).toBeCloseTo(192, 9);
+	});
+
+	test("pan translates in host pixels, one for one, at any zoom", () => {
+		for (const zoom of [0.5, 1, 4]) {
+			const base = viewportTransform(1280, 720, zoom, NO_VIEWPORT_PAN);
+			const panned = viewportTransform(1280, 720, zoom, { x: -37, y: 91 });
+			expect(panned.x - base.x).toBe(-37);
+			expect(panned.y - base.y).toBe(91);
+			expect(panned.scale).toBe(base.scale);
+		}
+	});
+});
+
+describe("viewport zoom clamping", () => {
+	test("the range is 50% to 400%", () => {
+		expect(clampViewportZoom(0.1)).toBe(VIEWPORT_ZOOM_MIN);
+		expect(clampViewportZoom(0.5)).toBe(0.5);
+		expect(clampViewportZoom(1.37)).toBe(1.37);
+		expect(clampViewportZoom(4)).toBe(4);
+		expect(clampViewportZoom(1000)).toBe(VIEWPORT_ZOOM_MAX);
+	});
+
+	test("a non-finite zoom falls back to 100% rather than poisoning the transform", () => {
+		expect(clampViewportZoom(Number.NaN)).toBe(1);
+		expect(clampViewportZoom(Number.POSITIVE_INFINITY)).toBe(1);
+	});
+});
+
+describe("the +/- buttons' zoom step", () => {
+	test("one click is ten percentage points either way", () => {
+		expect(steppedViewportZoom(1, 1)).toBe(1.1);
+		expect(steppedViewportZoom(1, -1)).toBe(0.9);
+	});
+
+	test("a run of clicks stays on whole percentages instead of drifting", () => {
+		let zoom = 1;
+		for (let i = 0; i < 20; i += 1) zoom = steppedViewportZoom(zoom, 1);
+		expect(zoom).toBe(3);
+		for (let i = 0; i < 25; i += 1) zoom = steppedViewportZoom(zoom, -1);
+		expect(zoom).toBe(0.5);
+	});
+
+	test("a step off a pointer zoom's fraction snaps onto whole percent", () => {
+		expect(steppedViewportZoom(0.8734, 1)).toBe(0.97);
+		expect(steppedViewportZoom(0.8734, -1)).toBe(0.77);
+	});
+
+	test("stepping past either end saturates", () => {
+		expect(steppedViewportZoom(VIEWPORT_ZOOM_MAX, 1)).toBe(VIEWPORT_ZOOM_MAX);
+		expect(steppedViewportZoom(VIEWPORT_ZOOM_MIN, -1)).toBe(VIEWPORT_ZOOM_MIN);
+		// 0.55 - 0.1 would land under the floor
+		expect(steppedViewportZoom(0.55, -1)).toBe(VIEWPORT_ZOOM_MIN);
+	});
+});
+
+describe("pan clamping", () => {
+	test("zoom 1 pins the playfield centred, whatever the host box", () => {
+		// the 0.8 fit leaves a fifth of the host free on the constrained axis, so
+		// the pannable area cannot outgrow the viewport until the user zooms in
+		for (const { w, h } of HOST_BOXES) {
+			expect(maxViewportPan(w, h, 1)).toEqual({ x: 0, y: 0 });
+			expect(clampViewportPan(w, h, 1, { x: 400, y: -900 })).toEqual({ x: 0, y: 0 });
+		}
+	});
+
+	test("2x and 4x open up progressively more room, symmetric about centre", () => {
+		const at2 = maxViewportPan(1024, 768, 2);
+		const at4 = maxViewportPan(1024, 768, 4);
+		expect(at2.x).toBeGreaterThan(0);
+		expect(at2.y).toBeGreaterThan(0);
+		expect(at4.x).toBeGreaterThan(at2.x);
+		expect(at4.y).toBeGreaterThan(at2.y);
+		expect(clampViewportPan(1024, 768, 4, { x: 1e6, y: -1e6 })).toEqual({ x: at4.x, y: -at4.y });
+	});
+
+	test("the bound is exactly where the pannable area's edge meets the viewport's", () => {
+		// 512x384 plus a 32 osu!px margin on every side, taken at the zoomed scale
+		const scale = playfieldTransform(1024, 768).scale * 4;
+		expect(maxViewportPan(1024, 768, 4).x).toBeCloseTo((576 * scale - 1024) / 2, 9);
+		expect(maxViewportPan(1024, 768, 4).y).toBeCloseTo((448 * scale - 768) / 2, 9);
+	});
+
+	test("a pan already inside the bound is returned untouched", () => {
+		const inside = { x: 12, y: -34 };
+		expect(clampViewportPan(1024, 768, 4, inside)).toEqual(inside);
+	});
+
+	test("a zero-size host clamps everything to nothing instead of producing NaN", () => {
+		expect(clampViewportPan(0, 0, 4, { x: 50, y: 50 })).toEqual({ x: 0, y: 0 });
+	});
+});
+
+describe("pointer-anchored zoom", () => {
+	const anchors = [
+		{ x: 0, y: 0 },
+		{ x: 512, y: 384 },
+		{ x: 1023, y: 767 },
+		{ x: 300, y: 120 }
+	];
+
+	test("the osu!px under the pointer does not move across a zoom", () => {
+		for (const anchor of anchors) {
+			for (const [zoom, nextZoom] of [
+				[1, 2],
+				[1, 0.5],
+				[2.7, 4],
+				[4, 1]
+			]) {
+				const pan = { x: 40, y: -25 };
+				const before = viewportTransform(1024, 768, zoom, pan);
+				const after = viewportTransform(
+					1024,
+					768,
+					nextZoom,
+					anchoredZoomPan(1024, 768, zoom, pan, nextZoom, anchor)
+				);
+				const pinned = worldUnder(before, anchor);
+				const moved = worldUnder(after, anchor);
+				expect(moved.x).toBeCloseTo(pinned.x, 9);
+				expect(moved.y).toBeCloseTo(pinned.y, 9);
+			}
+		}
+	});
+
+	test("zooming at the pointer and back returns to the pan it started from", () => {
+		const anchor = { x: 700, y: 200 };
+		const pan = { x: -10, y: 60 };
+		const out = anchoredZoomPan(1024, 768, 1, pan, 3, anchor);
+		const back = anchoredZoomPan(1024, 768, 3, out, 1, anchor);
+		expect(back.x).toBeCloseTo(pan.x, 9);
+		expect(back.y).toBeCloseTo(pan.y, 9);
+	});
+
+	test("a zoom that does not change leaves the pan exactly alone", () => {
+		const pan = { x: 17.5, y: -3.25 };
+		expect(anchoredZoomPan(1024, 768, 2, pan, 2, { x: 1, y: 900 })).toEqual(pan);
+	});
+
+	test("anchoring on the viewport centre keeps the framing centred", () => {
+		expect(anchoredZoomPan(1024, 768, 1, NO_VIEWPORT_PAN, 4, { x: 512, y: 384 })).toEqual(NO_VIEWPORT_PAN);
+	});
+
+	test("a zero-size host has no world point to pin and returns the pan unchanged", () => {
+		const pan = { x: 5, y: 5 };
+		expect(anchoredZoomPan(0, 0, 1, pan, 2, { x: 0, y: 0 })).toBe(pan);
+	});
+});
+
+describe("wheel zoom normalisation", () => {
+	test("wheel-up zooms in, wheel-down zooms out", () => {
+		expect(wheelZoomFactor(-100, 0)).toBeGreaterThan(1);
+		expect(wheelZoomFactor(100, 0)).toBeLessThan(1);
+		expect(wheelZoomFactor(0, 0)).toBe(1);
+	});
+
+	test("one notch is ten percent, and half a notch is its square root", () => {
+		expect(wheelZoomFactor(-100, 0)).toBeCloseTo(1.1, 12);
+		expect(wheelZoomFactor(-50, 0)).toBeCloseTo(Math.sqrt(1.1), 12);
+	});
+
+	test("four quarter-notches compose to one whole one, so a trackpad matches a wheel", () => {
+		expect(wheelZoomFactor(-25, 0) ** 4).toBeCloseTo(wheelZoomFactor(-100, 0), 12);
+	});
+
+	test("line and page delta modes are normalised to pixels", () => {
+		expect(wheelZoomFactor(-3, 1)).toBeCloseTo(wheelZoomFactor(-48, 0), 12);
+		expect(wheelZoomFactor(-0.25, 2)).toBeCloseTo(wheelZoomFactor(-100, 0), 12);
+	});
+
+	test("a batched flick is capped rather than crossing the whole zoom range", () => {
+		expect(wheelZoomFactor(-100_000, 0)).toBe(wheelZoomFactor(-150, 0));
+		expect(wheelZoomFactor(100_000, 0)).toBe(wheelZoomFactor(150, 0));
+	});
+
+	test("a non-finite delta is a no-op factor, not NaN", () => {
+		expect(wheelZoomFactor(Number.NaN, 0)).toBe(1);
+		expect(wheelZoomFactor(Number.POSITIVE_INFINITY, 0)).toBe(1);
 	});
 });
