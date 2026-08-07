@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatAccuracy, formatMods, formatTime } from "./format";
+import { formatAccuracy, formatMods, formatRelativeTime, formatTime, ticksToUnixMs } from "./format";
 
 describe("format helpers", () => {
 	test("time formats signed m:ss.SSS", () => {
@@ -28,5 +28,47 @@ describe("format helpers", () => {
 	test("accuracy renders two decimals", () => {
 		expect(formatAccuracy(1)).toBe("100.00%");
 		expect(formatAccuracy(0.98731)).toBe("98.73%");
+	});
+});
+
+describe("formatRelativeTime", () => {
+	const now = 1_770_000_000_000;
+	test("under a minute reads as just now", () => {
+		expect(formatRelativeTime(now - 30_000, now)).toBe("just now");
+	});
+	test("minutes and hours are compact", () => {
+		expect(formatRelativeTime(now - 5 * 60_000, now)).toBe("5m ago");
+		expect(formatRelativeTime(now - 2 * 3_600_000, now)).toBe("2h ago");
+	});
+	test("a day is yesterday, more are counted", () => {
+		expect(formatRelativeTime(now - 26 * 3_600_000, now)).toBe("yesterday");
+		expect(formatRelativeTime(now - 3 * 86_400_000, now)).toBe("3 days ago");
+	});
+	test("beyond a week falls back to weeks", () => {
+		expect(formatRelativeTime(now - 9 * 86_400_000, now)).toBe("last week");
+		expect(formatRelativeTime(now - 30 * 86_400_000, now)).toBe("4 weeks ago");
+	});
+	test("a future timestamp is clamped to just now", () => {
+		expect(formatRelativeTime(now + 60_000, now)).toBe("just now");
+	});
+});
+
+describe("ticksToUnixMs", () => {
+	test("converts the .net epoch offset", () => {
+		// 1970-01-01T00:00:00Z is 621355968000000000 ticks
+		expect(ticksToUnixMs("621355968000000000")).toBe(0);
+	});
+
+	test("converts a real replay timestamp", () => {
+		// 638000000000000000 / 10_000 - 62_135_596_800_000 = 1_664_403_200_000;
+		// the brief this test was transcribed from stated 1_664_064_000_000,
+		// which does not match the formula it also specifies -- corrected here
+		expect(ticksToUnixMs("638000000000000000")).toBe(1_664_403_200_000);
+	});
+
+	test("rejects zero, negatives, and non-numeric input", () => {
+		expect(ticksToUnixMs("0")).toBeNull();
+		expect(ticksToUnixMs("-1")).toBeNull();
+		expect(ticksToUnixMs("not a number")).toBeNull();
 	});
 });

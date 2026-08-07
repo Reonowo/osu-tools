@@ -43,3 +43,34 @@ export function formatMods(mods: number): string {
 export function formatAccuracy(fraction: number): string {
 	return `${(fraction * 100).toFixed(2)}%`;
 }
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
+
+/** coarse "n units ago" label for the start screen's recents list. clamps a
+ * future timestamp (clock skew, an optimistic write) to "just now" rather
+ * than printing a negative duration */
+export function formatRelativeTime(fromMs: number, nowMs: number): string {
+	const elapsed = Math.max(0, nowMs - fromMs);
+	if (elapsed < MINUTE_MS) return "just now";
+	if (elapsed < HOUR_MS) return `${Math.floor(elapsed / MINUTE_MS)}m ago`;
+	if (elapsed < DAY_MS) return `${Math.floor(elapsed / HOUR_MS)}h ago`;
+	if (elapsed < 2 * DAY_MS) return "yesterday";
+	if (elapsed < WEEK_MS) return `${Math.floor(elapsed / DAY_MS)} days ago`;
+	if (elapsed < 2 * WEEK_MS) return "last week";
+	return `${Math.floor(elapsed / WEEK_MS)} weeks ago`;
+}
+
+/** .net ticks (100ns since 0001-01-01) to unix milliseconds. the value
+ * exceeds 2^53, so it arrives as a decimal string and is reduced in bigint */
+export function ticksToUnixMs(ticks: string): number | null {
+	try {
+		const value = BigInt(ticks);
+		if (value <= 0n) return null;
+		return Number(value / 10_000n - 62_135_596_800_000n);
+	} catch {
+		return null;
+	}
+}
