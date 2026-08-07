@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { FrameDto } from "../lib/scene-types";
 import { loadFixture } from "../test/fixtures";
-import { K1, K2, M1, M2, isLeft, isRight } from "./buttons";
+import { isK1, isLeft, isM1, isRight, K1, K2, M1, M2 } from "./buttons";
 import { buttonEdges, cursorStateAt, holdSpans, holdSpansFlat, pressEdges, sliceSpansFlat } from "./interpolation";
 
 interface CursorFixture {
@@ -98,21 +98,79 @@ describe("press edges", () => {
 		expect(presses[2].frameIndex).toBe(4);
 	});
 
-	test("buttonEdges tracks raw bits independently", () => {
+	describe("Press.key (physical predicates applied to the frame and its predecessor)", () => {
+		test("a keyboard tap (raw 0 -> 5, m1|k1) reports K1, never both K1 and M1", () => {
+			const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, M1 | K1)];
+			expect(pressEdges(frames)).toEqual([{ time: 16, action: "left", frameIndex: 1, key: "K1" }]);
+		});
+
+		test("a keyboard tap on the right side (raw 0 -> 10, m2|k2) reports K2, never both K2 and M2", () => {
+			const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, M2 | K2)];
+			expect(pressEdges(frames)).toEqual([{ time: 16, action: "right", frameIndex: 1, key: "K2" }]);
+		});
+
+		test("a mouse click (raw 0 -> 1, m1 alone) reports M1", () => {
+			const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, M1)];
+			expect(pressEdges(frames)[0].key).toBe("M1");
+		});
+
+		test("bare K1 (raw 0 -> 4, k1 without m1) still reports K1", () => {
+			const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, K1)];
+			expect(pressEdges(frames)[0].key).toBe("K1");
+		});
+
+		test("a mouse press that later gains its keyboard pair does not re-fire the press or change its key", () => {
+			// m1 alone at 16 (key: M1), k1 joins at 32 without releasing left in
+			// between -- pressEdges must not emit a second "left" press, so
+			// there is nothing here for a physical key to retroactively change
+			const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, M1), frame(32, 0, 0, M1 | K1)];
+			const presses = pressEdges(frames);
+			expect(presses).toHaveLength(1);
+			expect(presses[0]).toEqual({ time: 16, action: "left", frameIndex: 1, key: "M1" });
+		});
+	});
+});
+
+describe("buttonEdges", () => {
+	test("tracks physical keys, not raw bits", () => {
 		const frames = [
 			frame(0, 0, 0, 0),
-			frame(16, 0, 0, M1),
-			frame(32, 0, 0, M1 | K1),
-			frame(48, 0, 0, K1),
-			frame(64, 0, 0, K1 | K2),
+			frame(16, 0, 0, M1), // mouse click alone -> M1
+			frame(32, 0, 0, M1 | K1), // keyboard tap joins the still-held mouse bit -> K1 rises; M1 does not re-fire
+			frame(48, 0, 0, K1), // mouse released, keyboard bit still down -> no new edges
+			frame(64, 0, 0, K1 | K2), // K2 rises
 			frame(80, 0, 0, 0),
-			frame(96, 0, 0, M2)
+			frame(96, 0, 0, M2) // mouse click alone -> M2
 		];
 		const edges = buttonEdges(frames);
 		expect(edges.m1).toEqual([16]);
 		expect(edges.k1).toEqual([32]);
 		expect(edges.k2).toEqual([64]);
 		expect(edges.m2).toEqual([96]);
+	});
+
+	test("raw 5 (k1|m1, a keyboard tap) yields a K1 edge only", () => {
+		const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, K1 | M1)];
+		const edges = buttonEdges(frames);
+		expect(edges.k1).toEqual([16]);
+		expect(edges.m1).toEqual([]);
+	});
+
+	test("raw 10 (k2|m2, a keyboard tap) yields a K2 edge only", () => {
+		const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, K2 | M2)];
+		const edges = buttonEdges(frames);
+		expect(edges.k2).toEqual([16]);
+		expect(edges.m2).toEqual([]);
+	});
+
+	test("raw 1 (m1 alone) yields an M1 edge", () => {
+		const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, M1)];
+		expect(buttonEdges(frames).m1).toEqual([16]);
+	});
+
+	test("bare 4 (k1 without m1) still yields a K1 edge", () => {
+		const frames = [frame(0, 0, 0, 0), frame(16, 0, 0, K1)];
+		expect(buttonEdges(frames).k1).toEqual([16]);
 	});
 });
 
@@ -123,7 +181,7 @@ describe("holdSpans", () => {
 			{ time: 10, x: 0, y: 0, buttons: 4 },
 			{ time: 40, x: 0, y: 0, buttons: 0 }
 		];
-		expect(holdSpans(frames, 4)).toEqual([{ start: 10, end: 40 }]);
+		expect(holdSpans(frames, isK1)).toEqual([{ start: 10, end: 40 }]);
 	});
 
 	test("closes a still-held button at the final frame", () => {
@@ -131,11 +189,22 @@ describe("holdSpans", () => {
 			{ time: 0, x: 0, y: 0, buttons: 4 },
 			{ time: 30, x: 0, y: 0, buttons: 4 }
 		];
-		expect(holdSpans(frames, 4)).toEqual([{ start: 0, end: 30 }]);
+		expect(holdSpans(frames, isK1)).toEqual([{ start: 0, end: 30 }]);
 	});
 
 	test("a never-pressed button has no spans", () => {
-		expect(holdSpans([{ time: 0, x: 0, y: 0, buttons: 0 }], 4)).toEqual([]);
+		expect(holdSpans([{ time: 0, x: 0, y: 0, buttons: 0 }], isK1)).toEqual([]);
+	});
+
+	test("a physical M1 span ends when K1 joins, even though the raw m1 bit stays set -- this is what makes the detail lanes' K1 row light up alone instead of alongside M1", () => {
+		const frames = [
+			{ time: 0, x: 0, y: 0, buttons: 0 },
+			{ time: 10, x: 0, y: 0, buttons: M1 }, // mouse click alone
+			{ time: 20, x: 0, y: 0, buttons: M1 | K1 }, // keyboard tap joins -- physically a K1 hold now
+			{ time: 40, x: 0, y: 0, buttons: 0 }
+		];
+		expect(holdSpans(frames, isM1)).toEqual([{ start: 10, end: 20 }]);
+		expect(holdSpans(frames, isK1)).toEqual([{ start: 20, end: 40 }]);
 	});
 });
 
@@ -148,12 +217,14 @@ describe("holdSpansFlat", () => {
 			{ time: 60, x: 0, y: 0, buttons: 4 },
 			{ time: 90, x: 0, y: 0, buttons: 4 }
 		];
-		expect(Array.from(holdSpansFlat(frames, 4))).toEqual(holdSpans(frames, 4).flatMap((s) => [s.start, s.end]));
-		expect(Array.from(holdSpansFlat(frames, 4))).toEqual([10, 40, 60, 90]);
+		expect(Array.from(holdSpansFlat(frames, isK1))).toEqual(
+			holdSpans(frames, isK1).flatMap((s) => [s.start, s.end])
+		);
+		expect(Array.from(holdSpansFlat(frames, isK1))).toEqual([10, 40, 60, 90]);
 	});
 
 	test("an empty frame stream packs no spans", () => {
-		expect(holdSpansFlat([], 4).length).toBe(0);
+		expect(holdSpansFlat([], isK1).length).toBe(0);
 	});
 });
 

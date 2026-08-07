@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatAccuracy, formatMods, formatRelativeTime, formatTime, ticksToUnixMs } from "./format";
+import { formatAccuracy, formatButtons, formatMods, formatRelativeTime, formatTime, ticksToUnixMs } from "./format";
 
 describe("format helpers", () => {
 	test("time formats signed m:ss.SSS", () => {
@@ -28,6 +28,15 @@ describe("format helpers", () => {
 	test("accuracy renders two decimals", () => {
 		expect(formatAccuracy(1)).toBe("100.00%");
 		expect(formatAccuracy(0.98731)).toBe("98.73%");
+	});
+
+	test("buttons decode to physical keys, not raw bits", () => {
+		expect(formatButtons(0)).toBe("");
+		expect(formatButtons(5)).toBe("K1"); // k1|m1 keyboard tap -- never both
+		expect(formatButtons(10)).toBe("K2"); // k2|m2 keyboard tap -- never both
+		expect(formatButtons(1)).toBe("M1");
+		expect(formatButtons(4)).toBe("K1"); // bare k1, no paired m1
+		expect(formatButtons(4 | 8)).toBe("K1 K2");
 	});
 });
 

@@ -5,7 +5,7 @@
 // agreement between the two ports alone is not evidence
 
 import type { FrameDto } from "../lib/scene-types";
-import { isLeft, isRight } from "./buttons";
+import { isK1, isK2, isLeft, isRight, PHYSICAL_BUTTONS, type PhysicalKey } from "./buttons";
 import { f32 } from "./vec";
 
 export interface CursorSample {
@@ -18,6 +18,13 @@ export interface Press {
 	time: number;
 	action: "left" | "right";
 	frameIndex: number;
+	/** the physical key that rose for this press -- isK1/isK2 applied to this
+	 * frame and its predecessor (not the raw bits), so a keyboard tap (raw
+	 * transition e.g. 0 -> 5) reports K1 alone, never both K1 and M1: the
+	 * physical predicates already read that combination as K1 only
+	 * (buttons.ts). the side is always the one action already belongs to --
+	 * a "left" press reports K1 or M1, never K2/M2 */
+	key: PhysicalKey;
 }
 
 /** index of the first frame with time > t (frames sorted by time) */
@@ -74,10 +81,12 @@ export function pressEdges(frames: FrameDto[]): Press[] {
 	let prev = 0;
 	frames.forEach((frame, frameIndex) => {
 		if (isLeft(frame.buttons) && !isLeft(prev)) {
-			presses.push({ time: frame.time, action: "left", frameIndex });
+			const key = isK1(frame.buttons) && !isK1(prev) ? "K1" : "M1";
+			presses.push({ time: frame.time, action: "left", frameIndex, key });
 		}
 		if (isRight(frame.buttons) && !isRight(prev)) {
-			presses.push({ time: frame.time, action: "right", frameIndex });
+			const key = isK2(frame.buttons) && !isK2(prev) ? "K2" : "M2";
+			presses.push({ time: frame.time, action: "right", frameIndex, key });
 		}
 		prev = frame.buttons;
 	});
@@ -126,13 +135,13 @@ export function spansWhere(frames: readonly FrameDto[], isHeld: (buttons: number
 	return spans;
 }
 
-/** rising-to-falling spans of one raw button bit -- what the detail lanes'
- * K1/K2/M1/M2 rows draw. distinct from meanHold's logical-action spans: a
- * keyboard tap sets both its K and M bit for one physical press (buttons.ts),
- * so per-bit spans legitimately double up where meanHold's per-action spans
- * must not */
-export function holdSpans(frames: readonly FrameDto[], bit: number): HoldSpan[] {
-	return spansWhere(frames, (buttons) => (buttons & bit) !== 0);
+/** rising-to-falling spans of one held predicate -- what the detail lanes'
+ * K1/K2/M1/M2 rows draw, one physical predicate (buttons.ts) per row.
+ * distinct from meanHold's logical-action spans: a keyboard tap sets both
+ * its K and M bit for one physical press, so per-key spans legitimately
+ * double up where meanHold's per-action spans must not */
+export function holdSpans(frames: readonly FrameDto[], isHeld: (buttons: number) => boolean): HoldSpan[] {
+	return spansWhere(frames, isHeld);
 }
 
 /** holdSpans pair-packed as [start0, end0, start1, end1, ...] -- the form
@@ -140,8 +149,7 @@ export function holdSpans(frames: readonly FrameDto[], bit: number): HoldSpan[] 
  * millions of tiny heap objects for the scene's whole lifetime; a packed
  * Float64Array is one allocation. counted in a first pass so the fill pass
  * allocates exactly once */
-export function holdSpansFlat(frames: readonly FrameDto[], bit: number): Float64Array {
-	const isHeld = (buttons: number) => (buttons & bit) !== 0;
+export function holdSpansFlat(frames: readonly FrameDto[], isHeld: (buttons: number) => boolean): Float64Array {
 	let count = 0;
 	eachSpanWhere(frames, isHeld, () => {
 		count += 1;
@@ -185,20 +193,15 @@ export interface ButtonEdges {
 	m2: number[];
 }
 
-/** rising-edge times per raw button bit -- the keypress overlay's counts
- * display what the replay recorded, bit by bit */
+/** rising-edge times per physical key -- the keypress overlay's counts
+ * display which physical key the replay decodes to (buttons.ts's
+ * PHYSICAL_BUTTONS), not the raw bits */
 export function buttonEdges(frames: FrameDto[]): ButtonEdges {
 	const edges: ButtonEdges = { k1: [], k2: [], m1: [], m2: [] };
-	const bits: [number, keyof ButtonEdges][] = [
-		[1, "m1"],
-		[2, "m2"],
-		[4, "k1"],
-		[8, "k2"]
-	];
 	let prev = 0;
 	for (const frame of frames) {
-		for (const [bit, key] of bits) {
-			if ((frame.buttons & bit) !== 0 && (prev & bit) === 0) edges[key].push(frame.time);
+		for (const button of PHYSICAL_BUTTONS) {
+			if (button.is(frame.buttons) && !button.is(prev)) edges[button.edgesKey].push(frame.time);
 		}
 		prev = frame.buttons;
 	}

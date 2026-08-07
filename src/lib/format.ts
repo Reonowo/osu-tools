@@ -1,5 +1,7 @@
 // display formatting only -- no gameplay math lives here
 
+import { PHYSICAL_BUTTONS } from "../engine/buttons";
+
 export function formatTime(ms: number): string {
 	const sign = ms < 0 ? "-" : "";
 	const abs = Math.abs(ms);
@@ -42,6 +44,15 @@ export function formatMods(mods: number): string {
 
 export function formatAccuracy(fraction: number): string {
 	return `${(fraction * 100).toFixed(2)}%`;
+}
+
+/** decoded physical keys, space-joined in K1/K2/M1/M2 order (e.g. "K1 K2");
+ * empty when no button is down. FramesPanel's k column -- the raw integer
+ * belongs in the row tooltip alongside this, since it is the editing surface */
+export function formatButtons(raw: number): string {
+	return PHYSICAL_BUTTONS.filter((button) => button.is(raw))
+		.map((button) => button.label)
+		.join(" ");
 }
 
 const MINUTE_MS = 60_000;
