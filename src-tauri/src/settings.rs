@@ -4,6 +4,9 @@
 //! v2 adds the viewer preferences that should survive a restart: playback
 //! volume and the analysis-overlay toggles. playback rate stays session-only
 //! (it belongs to the replay you are watching, not to the app).
+//! v3 adds `recents`: the start screen's list of previously opened replays,
+//! most-recent-first and capped at `MAX_RECENTS`, so a v2 file hydrates it
+//! empty rather than losing the rest of the settings.
 //!
 //! every field is `#[serde(default)]` at the container level, so a v1 file --
 //! or any future file written by an older build -- hydrates the new fields
@@ -24,6 +27,9 @@ pub const DISPLAY_LENGTH_MIN: f64 = 200.0;
 pub const DISPLAY_LENGTH_MAX: f64 = 2000.0;
 pub const DISPLAY_LENGTH_DEFAULT: f64 = 800.0;
 
+/// how many recently opened replays the start screen keeps
+pub const MAX_RECENTS: usize = 12;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -35,12 +41,37 @@ pub struct Settings {
     /// (TrackBass.cs:371), so a linear slider is the osu!-matching one
     pub volume: u32,
     pub overlays: OverlayPrefs,
+    /// most-recent-first, capped at `MAX_RECENTS`
+    pub recents: Vec<RecentReplay>,
+    pub editing: EditingPrefs,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { osu_stable_path: None, volume: 100, overlays: OverlayPrefs::default() }
+        Settings {
+            osu_stable_path: None,
+            volume: 100,
+            overlays: OverlayPrefs::default(),
+            recents: Vec::new(),
+            editing: EditingPrefs::default(),
+        }
     }
+}
+
+/// one entry in the start screen's recents list. only what the card renders,
+/// so the list stays readable without reopening every replay
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RecentReplay {
+    pub osr_path: String,
+    pub title: String,
+    pub version: String,
+    pub player_name: Option<String>,
+    /// 0-1
+    pub accuracy: f64,
+    pub max_combo: u32,
+    /// unix milliseconds, for the relative "2h ago" label
+    pub opened_at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +99,25 @@ impl Default for OverlayPrefs {
     }
 }
 
+/// the (future) replay-editing surface's preferences. kept separate from
+/// `OverlayPrefs` -- these are not analysis overlays, they govern how frame
+/// edits behave once the replay-document ipc lands
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EditingPrefs {
+    pub snap_to_lattice: bool,
+    pub warn_on_overwrite: bool,
+}
+
+impl Default for EditingPrefs {
+    fn default() -> EditingPrefs {
+        EditingPrefs {
+            snap_to_lattice: true,
+            warn_on_overwrite: true,
+        }
+    }
+}
+
 impl Settings {
     /// force every range-limited field back inside its bounds. applied after
     /// parsing a file (which the user can edit by hand) and before persisting
@@ -81,6 +131,22 @@ impl Settings {
         } else {
             DISPLAY_LENGTH_DEFAULT
         };
+        self.recents.truncate(MAX_RECENTS);
+        for recent in &mut self.recents {
+            recent.accuracy = if recent.accuracy.is_finite() {
+                recent.accuracy.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+    }
+
+    /// most recent first, one entry per path. re-opening a replay moves it to
+    /// the front rather than adding a duplicate
+    pub fn push_recent(&mut self, entry: RecentReplay) {
+        self.recents.retain(|r| r.osr_path != entry.osr_path);
+        self.recents.insert(0, entry);
+        self.recents.truncate(MAX_RECENTS);
     }
 }
 
@@ -117,6 +183,20 @@ mod tests {
                 key_overlay: false,
                 display_length: 1200.0,
             },
+            recents: Vec::new(),
+            editing: EditingPrefs::default(),
+        }
+    }
+
+    fn recent(path: &str, opened_at_ms: i64) -> RecentReplay {
+        RecentReplay {
+            osr_path: path.to_string(),
+            title: "Title".into(),
+            version: "Insane".into(),
+            player_name: Some("adminuser".into()),
+            accuracy: 0.5,
+            max_combo: 300,
+            opened_at_ms,
         }
     }
 
@@ -143,6 +223,8 @@ mod tests {
         assert!(settings.overlays.key_overlay, "the key overlay ships enabled");
         assert_eq!(settings.overlays.display_length, DISPLAY_LENGTH_DEFAULT);
         assert!(!settings.overlays.cursor_path);
+        assert!(settings.editing.snap_to_lattice, "snapping ships enabled");
+        assert!(settings.editing.warn_on_overwrite, "the overwrite warning ships enabled");
     }
 
     #[test]
@@ -169,6 +251,8 @@ mod tests {
                     "keyOverlay": false,
                     "displayLength": 1200.0,
                 },
+                "recents": [],
+                "editing": { "snapToLattice": true, "warnOnOverwrite": true },
             })
         );
 
@@ -185,6 +269,27 @@ mod tests {
                     "keyOverlay": true,
                     "displayLength": 800.0,
                 },
+                "recents": [],
+                "editing": { "snapToLattice": true, "warnOnOverwrite": true },
+            })
+        );
+    }
+
+    #[test]
+    fn recents_serialize_with_camel_case_keys() {
+        let mut settings = Settings::default();
+        settings.push_recent(recent(r"C:\a.osr", 7));
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            value["recents"][0],
+            json!({
+                "osrPath": r"C:\a.osr",
+                "title": "Title",
+                "version": "Insane",
+                "playerName": "adminuser",
+                "accuracy": 0.5,
+                "maxCombo": 300,
+                "openedAtMs": 7,
             })
         );
     }
@@ -204,6 +309,8 @@ mod tests {
         assert_eq!(loaded.osu_stable_path.as_deref(), Some(r"D:\games\osu!"));
         assert_eq!(loaded.volume, 100);
         assert_eq!(loaded.overlays, OverlayPrefs::default());
+        assert_eq!(loaded.recents, Vec::new());
+        assert_eq!(loaded.editing, EditingPrefs::default());
 
         // a partially-written overlays object hydrates per field too
         std::fs::write(
@@ -216,6 +323,79 @@ mod tests {
         assert!(loaded.overlays.cursor_path);
         assert!(loaded.overlays.key_overlay, "untouched fields keep their default");
         assert_eq!(loaded.overlays.display_length, DISPLAY_LENGTH_DEFAULT);
+    }
+
+    #[test]
+    fn a_v2_settings_file_hydrates_an_empty_recents_list() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
+        assert_eq!(load_settings(dir.path()).recents, Vec::new());
+    }
+
+    #[test]
+    fn a_legacy_file_hydrates_the_editing_prefs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
+        assert_eq!(load_settings(dir.path()).editing, EditingPrefs::default());
+    }
+
+    #[test]
+    fn a_recents_entry_missing_fields_still_hydrates_the_rest_of_settings() {
+        // recents is user-editable too, and one hand-trimmed entry must not
+        // fail serde_json::from_str for the whole file -- that would fall
+        // through to unwrap_or_default() and silently drop osuStablePath,
+        // volume, overlays and editing, which the next save_settings would
+        // then write to disk as data loss
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"osuStablePath":"D:\\games\\osu!","volume":42,"recents":[{"osrPath":"C:\\a.osr"}]}"#,
+        )
+        .unwrap();
+
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.osu_stable_path.as_deref(), Some(r"D:\games\osu!"));
+        assert_eq!(loaded.volume, 42);
+        assert_eq!(loaded.overlays, OverlayPrefs::default());
+        assert_eq!(loaded.editing, EditingPrefs::default());
+        assert_eq!(
+            loaded.recents,
+            vec![RecentReplay { osr_path: r"C:\a.osr".into(), ..RecentReplay::default() }]
+        );
+    }
+
+    #[test]
+    fn push_recent_dedupes_by_path_and_keeps_the_newest_first() {
+        let mut settings = Settings::default();
+        settings.push_recent(recent(r"C:\a.osr", 1));
+        settings.push_recent(recent(r"C:\b.osr", 2));
+        settings.push_recent(recent(r"C:\a.osr", 3));
+
+        let paths: Vec<&str> = settings.recents.iter().map(|r| r.osr_path.as_str()).collect();
+        assert_eq!(paths, vec![r"C:\a.osr", r"C:\b.osr"]);
+        assert_eq!(settings.recents[0].opened_at_ms, 3);
+    }
+
+    #[test]
+    fn push_recent_caps_the_list() {
+        let mut settings = Settings::default();
+        for i in 0..(MAX_RECENTS + 5) {
+            settings.push_recent(recent(&format!("C:\\{i}.osr"), i as i64));
+        }
+        assert_eq!(settings.recents.len(), MAX_RECENTS);
+        assert_eq!(settings.recents[0].osr_path, format!("C:\\{}.osr", MAX_RECENTS + 4));
+    }
+
+    #[test]
+    fn sanitize_truncates_and_clamps_a_hand_edited_recents_list() {
+        let mut settings = Settings {
+            recents: (0..(MAX_RECENTS + 3)).map(|i| recent(&format!("C:\\{i}.osr"), i as i64)).collect(),
+            ..Settings::default()
+        };
+        settings.recents[0].accuracy = 9.0;
+        settings.sanitize();
+        assert_eq!(settings.recents.len(), MAX_RECENTS);
+        assert_eq!(settings.recents[0].accuracy, 1.0);
     }
 
     #[test]
