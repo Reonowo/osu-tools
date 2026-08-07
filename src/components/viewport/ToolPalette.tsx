@@ -4,7 +4,7 @@
 // single-consumer module -- it lives here, next to the palette it visually
 // pairs with, rather than in Viewport.tsx, which only composes
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Eraser, Lasso, type LucideIcon, Magnet, Move, MousePointer2, Spline } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -12,8 +12,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cursorStateAt } from "@/engine/interpolation";
 import { isOnLattice } from "@/lib/lattice";
 import { cn } from "@/lib/utils";
+import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
-import { countAtOrBefore } from "@/renderer/overlays/analysis";
 import { useViewerStore, type ToolId } from "@/state/store";
 
 const IPC_BLOCKER = "needs the replay-document ipc commands";
@@ -122,10 +122,6 @@ export function CoordinateReadout() {
 	const frameRef = useRef<HTMLSpanElement>(null);
 	const latticeRef = useRef<HTMLSpanElement>(null);
 
-	// recomputed only when a new scene installs -- the loop below just
-	// binary-searches this array each tick, same split as FramesPanel
-	const frameTimes = useMemo(() => scene?.frames.map((f) => f.time) ?? [], [scene]);
-
 	useEffect(() => {
 		if (scene === null || derived === null) return;
 		const frames = scene.frames;
@@ -133,8 +129,13 @@ export function CoordinateReadout() {
 		let raf = 0;
 		const loop = () => {
 			const t = playbackClock.currentTime();
-			const sample = cursorStateAt(frames, t);
-			const frameIndex = frames.length > 0 ? Math.max(0, countAtOrBefore(frameTimes, t) - 1) : -1;
+			const selected = frames.length > 0 ? frameCursor.selectedIndex() : null;
+			const frameIndex = frames.length > 0 ? frameCursor.currentIndex() : -1;
+			// sampling by time resolves a tied-time run to its last frame, so an
+			// exact selection has to be read off the frame itself: otherwise this
+			// readout names one frame and prints another's coordinates, and the
+			// lattice check below judges the frame the user did not select
+			const sample = selected !== null ? frames[selected] : cursorStateAt(frames, t);
 
 			if (xRef.current !== null) xRef.current.textContent = sample === null ? "—" : sample.x.toFixed(1);
 			if (yRef.current !== null) yRef.current.textContent = sample === null ? "—" : sample.y.toFixed(1);
@@ -156,7 +157,7 @@ export function CoordinateReadout() {
 		};
 		raf = requestAnimationFrame(loop);
 		return () => cancelAnimationFrame(raf);
-	}, [scene, derived, frameTimes]);
+	}, [scene, derived]);
 
 	if (scene === null || derived === null) return null;
 

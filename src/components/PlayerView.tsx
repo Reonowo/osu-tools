@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { audioExtendedBounds } from "@/lib/timeline";
 import { htmlAudioAdapter } from "@/playback/clock";
+import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { GameplayRenderer } from "@/renderer/GameplayRenderer";
 import { useViewerStore, viewerStore } from "@/state/store";
@@ -11,6 +12,9 @@ export function PlayerView() {
 	const rendererRef = useRef<GameplayRenderer | null>(null);
 	const sceneId = useViewerStore((s) => s.sceneId);
 	const overlays = useViewerStore((s) => s.overlays);
+	const effects = useViewerStore((s) => s.effects);
+	const viewportZoom = useViewerStore((s) => s.viewportZoom);
+	const viewportPan = useViewerStore((s) => s.viewportPan);
 	const backgroundPath = useViewerStore((s) => s.scene?.backgroundPath ?? null);
 
 	// renderer + raf loop live for the component's lifetime
@@ -23,9 +27,14 @@ export function PlayerView() {
 				return;
 			}
 			rendererRef.current = renderer;
-			const { scene, derived, overlays: currentOverlays } = viewerStore.getState();
-			renderer.setScene(scene, derived);
-			renderer.setOverlays(currentOverlays);
+			const state = viewerStore.getState();
+			// effects before the scene: hitAnimations is baked into the object
+			// timelines, so setting it first means the very first build already
+			// uses the persisted value instead of rebuilding to reach it
+			renderer.setEffects(state.effects);
+			renderer.setScene(state.scene, state.derived);
+			renderer.setOverlays(state.overlays);
+			renderer.setViewport(state.viewportZoom, state.viewportPan);
 			const loop = () => {
 				const t = playbackClock.tick();
 				renderer.render(t);
@@ -54,6 +63,7 @@ export function PlayerView() {
 		if (scene === null || derived === null) return;
 
 		playbackClock.setBounds(derived.bounds.minTime, derived.bounds.maxTime);
+		frameCursor.setFrames(scene.frames.map((f) => f.time));
 		playbackClock.seekTo(derived.bounds.minTime);
 		if (scene.audioPath === null) return;
 
@@ -109,6 +119,14 @@ export function PlayerView() {
 	useEffect(() => {
 		rendererRef.current?.setOverlays(overlays);
 	}, [overlays]);
+
+	useEffect(() => {
+		rendererRef.current?.setEffects(effects);
+	}, [effects]);
+
+	useEffect(() => {
+		rendererRef.current?.setViewport(viewportZoom, viewportPan);
+	}, [viewportZoom, viewportPan]);
 
 	return (
 		<div className="absolute inset-0">
