@@ -10,53 +10,52 @@ import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import { isLeft, isRight } from "../../engine/buttons";
 import type { Press } from "../../engine/interpolation";
 import type { FrameDto } from "../../lib/scene-types";
+import { countAtOrBefore } from "../../lib/timeline";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
-
-export function countAtOrBefore(times: number[], t: number): number {
-	let lo = 0,
-		hi = times.length;
-	while (lo < hi) {
-		const mid = (lo + hi) >> 1;
-		if (times[mid] <= t) lo = mid + 1;
-		else hi = mid;
-	}
-	return lo;
-}
 
 /** indices alive at t under the [time, time + displayLength) lifetime */
 export function aliveWindow(times: number[], t: number, displayLength: number): { lo: number; hi: number } {
 	return { lo: countAtOrBefore(times, t - displayLength), hi: countAtOrBefore(times, t) };
 }
 
-// marker textures (canvas, 2x): sizes/colours from clickmarker.cs:27-77 /
+/** the marker footprint every stroke below is written against
+ * (clickmarker.cs's 16px box), in osu!px; the sprite's own width/height
+ * rescales it to its final on-screen size */
+const MARKER_SIZE = 16;
+/** the canvas those strokes were originally measured on, back when the bake
+ * was a fixed 2x. keeping the constants in that frame and scaling by `s`
+ * leaves every number below directly comparable with its citation */
+const MARKER_REFERENCE_CANVAS = MARKER_SIZE * 2;
+
+// marker textures: sizes/colours from clickmarker.cs:27-77 /
 // framemarker.cs:25-63 / cursorpathcontainer.cs:24,30 -- gray5 #555 (osucolour.cs:388),
 // gray4 #444 (osucolour.cs:387), pink2 #eb4791 (osucolour.cs:411), yellow
-// #ffcc22 (osucolour.cs:331), half-arcs progress 0.5. all baked at a fixed
-// 32px reference canvas (2x a 16px marker footprint) regardless of the
-// marker's final on-screen size, which the sprite's width/height scale to
+// #ffcc22 (osucolour.cs:331), half-arcs progress 0.5
 function markerTexture(ctx: RenderContext, kind: string): Texture {
-	return ctx.textures.canvasTexture(32, `analysis:${kind}`, (c, size) => {
+	return ctx.textures.canvasTexture(MARKER_SIZE, `analysis:${kind}`, (c, size) => {
+		const s = size / MARKER_REFERENCE_CANVAS;
 		const half = size / 2;
 		const arc = (side: "left" | "right", inner: number, outer: number) => {
 			c.fillStyle = "#ffcc22";
 			c.beginPath();
 			const from = side === "left" ? Math.PI / 2 : -Math.PI / 2;
-			c.arc(half, half, outer, from, from + Math.PI);
-			c.arc(half, half, inner, from + Math.PI, from, true);
+			c.arc(half, half, outer * s, from, from + Math.PI);
+			c.arc(half, half, inner * s, from + Math.PI, from, true);
 			c.fill();
 		};
 		if (kind.startsWith("click")) {
-			// clickmarker.cs:27-77 -- 16px marker box, so canvas half (16) stands
-			// in for its full radius at 2x. centre dot: Size(0.125) additive gray5
+			// clickmarker.cs:27-77 -- 16px marker box, so the reference canvas'
+			// half (16) stands in for its full radius. centre dot: Size(0.125)
+			// additive gray5
 			c.fillStyle = "#555";
 			c.beginPath();
-			c.arc(half, half, 2, 0, Math.PI * 2);
+			c.arc(half, half, 2 * s, 0, Math.PI * 2);
 			c.fill();
 			// white ring: circularcontainer border, 2.2px thickness
 			c.strokeStyle = "#fff";
-			c.lineWidth = 4.4;
+			c.lineWidth = 4.4 * s;
 			c.beginPath();
-			c.arc(half, half, 13.8, 0, Math.PI * 2);
+			c.arc(half, half, 13.8 * s, 0, Math.PI * 2);
 			c.stroke();
 			// half-arc: Size(0.95) -> outer = 0.95*16 = 15.2; circularprogressdrawnode.cs:157-158
 			// derives inner = outer*(1 - InnerRadius), InnerRadius(0.18) -> 15.2*0.82 = 12.464
@@ -65,7 +64,7 @@ function markerTexture(ctx: RenderContext, kind: string): Texture {
 			const held = kind !== "frame-none";
 			c.fillStyle = held ? "#444" : "#eb4791";
 			c.beginPath();
-			c.arc(half, half, half - 2, 0, Math.PI * 2);
+			c.arc(half, half, half - 2 * s, 0, Math.PI * 2);
 			c.fill();
 			// half-arc: Size(0.8) -> outer = 0.8*16 = 12.8; InnerRadius(0.5) is its
 			// own fixed point under the same formula -- inner = 12.8*0.5 = 6.4

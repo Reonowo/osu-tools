@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { aliveWindow, countAtOrBefore } from "./analysis";
+import { aliveWindow } from "./analysis";
 
 describe("aliveWindow (analysisframeentry.cs lifetime [t, t+len))", () => {
 	const times = [0, 100, 200, 300, 400];
@@ -38,24 +38,5 @@ describe("aliveWindow (analysisframeentry.cs lifetime [t, t+len))", () => {
 			// window (200, 300]: only the trailing 300 qualifies
 			expect(aliveWindow(dup, 300, 100)).toEqual({ lo: 5, hi: 6 });
 		});
-	});
-});
-
-describe("countAtOrBefore", () => {
-	test("binary search over press-edge times", () => {
-		const times = [10, 20, 20, 30];
-		expect(countAtOrBefore(times, 5)).toBe(0);
-		expect(countAtOrBefore(times, 20)).toBe(3);
-		expect(countAtOrBefore(times, 99)).toBe(4);
-	});
-
-	test("empty input is always zero", () => {
-		expect(countAtOrBefore([], 0)).toBe(0);
-	});
-
-	test("boundary ties: t exactly at a duplicated value counts the whole run", () => {
-		const times = [5, 5, 5];
-		expect(countAtOrBefore(times, 4)).toBe(0);
-		expect(countAtOrBefore(times, 5)).toBe(3);
 	});
 });

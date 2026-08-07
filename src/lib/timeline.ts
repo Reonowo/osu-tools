@@ -48,22 +48,19 @@ export function statsAt(
 	return { combo: events[lo - 1].comboAfter, accuracy: events[lo - 1].accuracyAfter };
 }
 
-/** the neighbouring frame time strictly after (direction 1) or strictly
- * before (direction -1) t, or undefined at the ends; frames must be
- * time-sorted, as scene.frames already is */
-export function adjacentFrameTime(
-	frames: readonly { time: number }[],
-	t: number,
-	direction: 1 | -1
-): number | undefined {
-	let lo = 0;
-	let hi = frames.length;
+/** count of entries at-or-before t; the last at-or-before index is one less
+ * (floor that at 0 for "nothing at or before t" -- callers that need "no
+ * such entry" as a distinct value guard times.length themselves). times must
+ * be sorted ascending, as scene.frames and its derived time arrays already
+ * are. moved here from renderer/overlays/analysis.ts, which still uses it
+ * for aliveWindow, so every consumer shares one definition */
+export function countAtOrBefore(times: readonly number[], t: number): number {
+	let lo = 0,
+		hi = times.length;
 	while (lo < hi) {
 		const mid = (lo + hi) >> 1;
-		const before = direction === 1 ? frames[mid].time <= t : frames[mid].time < t;
-		if (before) lo = mid + 1;
+		if (times[mid] <= t) lo = mid + 1;
 		else hi = mid;
 	}
-	if (direction === 1) return frames[lo]?.time;
-	return lo > 0 ? frames[lo - 1].time : undefined;
+	return lo;
 }

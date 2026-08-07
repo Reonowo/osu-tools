@@ -55,6 +55,7 @@ export class PlaybackClock {
 
 	private boundsMin = 0;
 	private boundsMax = 0;
+	private seeks = 0;
 	private isPlaying = false;
 	private currentRate = 1;
 	/** linear amplitude 0-1, held here so it survives audio swaps */
@@ -78,6 +79,14 @@ export class PlaybackClock {
 	}
 	get volume() {
 		return this.currentVolume;
+	}
+	/** how many seeks this clock has served. a consumer that time-stamped a
+	 * decision can compare times to notice playback drifting underneath it, but
+	 * not a seek that left and came back to the very same millisecond -- the two
+	 * are indistinguishable by time alone, and only this tells them apart
+	 * (playback/frame-cursor.ts is the one that cares) */
+	get seekVersion() {
+		return this.seeks;
 	}
 
 	attachAudio(audio: ClockAudio | null): void {
@@ -131,6 +140,7 @@ export class PlaybackClock {
 	}
 
 	seekTo(ms: number): void {
+		this.seeks++;
 		this.time = Math.min(Math.max(ms, this.boundsMin), this.boundsMax);
 		this.lastNow = this.now();
 		if (this.isPlaying) this.enterModeFor(this.time);

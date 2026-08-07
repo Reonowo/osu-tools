@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { adjacentFrameTime, audioExtendedBounds, fractionFor, statsAt, timeFor } from "./timeline";
+import { audioExtendedBounds, countAtOrBefore, fractionFor, statsAt, timeFor } from "./timeline";
 
 const bounds = { minTime: -1500, maxTime: 8500 };
 
@@ -110,34 +110,21 @@ describe("statsAt", () => {
 	});
 });
 
-describe("adjacentFrameTime", () => {
-	const frames = [{ time: 10 }, { time: 20 }, { time: 30 }];
-
-	test("finds the next strictly-later frame time", () => {
-		expect(adjacentFrameTime(frames, 15, 1)).toBe(20);
-		expect(adjacentFrameTime(frames, 5, 1)).toBe(10);
+describe("countAtOrBefore", () => {
+	test("binary search over press-edge times", () => {
+		const times = [10, 20, 20, 30];
+		expect(countAtOrBefore(times, 5)).toBe(0);
+		expect(countAtOrBefore(times, 20)).toBe(3);
+		expect(countAtOrBefore(times, 99)).toBe(4);
 	});
 
-	test("finds the previous strictly-earlier frame time", () => {
-		expect(adjacentFrameTime(frames, 15, -1)).toBe(10);
-		expect(adjacentFrameTime(frames, 35, -1)).toBe(30);
+	test("empty input is always zero", () => {
+		expect(countAtOrBefore([], 0)).toBe(0);
 	});
 
-	test("skips frames at exactly t in both directions", () => {
-		expect(adjacentFrameTime(frames, 20, 1)).toBe(30);
-		expect(adjacentFrameTime(frames, 20, -1)).toBe(10);
-	});
-
-	test("returns undefined past either end", () => {
-		expect(adjacentFrameTime(frames, 30, 1)).toBeUndefined();
-		expect(adjacentFrameTime(frames, 10, -1)).toBeUndefined();
-		expect(adjacentFrameTime([], 0, 1)).toBeUndefined();
-		expect(adjacentFrameTime([], 0, -1)).toBeUndefined();
-	});
-
-	test("steps over duplicate frame times as one boundary", () => {
-		const dupes = [{ time: 10 }, { time: 20 }, { time: 20 }, { time: 30 }];
-		expect(adjacentFrameTime(dupes, 20, 1)).toBe(30);
-		expect(adjacentFrameTime(dupes, 20, -1)).toBe(10);
+	test("boundary ties: t exactly at a duplicated value counts the whole run", () => {
+		const times = [5, 5, 5];
+		expect(countAtOrBefore(times, 4)).toBe(0);
+		expect(countAtOrBefore(times, 5)).toBe(3);
 	});
 });
