@@ -13,6 +13,8 @@ import { audioExtendedBounds, fractionFor, timeFor } from "@/lib/timeline";
 import { windowAround } from "@/lib/timeline-view";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore } from "@/state/store";
+import { Playhead, playheadTransform } from "./Playhead";
+import { useTrackMetrics } from "./use-track-metrics";
 
 const TICK_CLASS: Record<"ok" | "meh" | "miss", string> = {
 	miss: "absolute bottom-0 w-0.5 top-0 bg-[#ed1121]",
@@ -26,7 +28,7 @@ export function OverviewStrip() {
 	const mode = useViewerStore((s) => s.mode);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 
-	const trackRef = useRef<HTMLDivElement>(null);
+	const track = useTrackMetrics();
 	const playedRef = useRef<HTMLDivElement>(null);
 	const fillRef = useRef<HTMLDivElement>(null);
 	const bracketRef = useRef<HTMLDivElement>(null);
@@ -48,10 +50,15 @@ export function OverviewStrip() {
 		let raf = 0;
 		const loop = () => {
 			const t = playbackClock.currentTime();
-			const fraction = fractionFor(bounds, t) * 100;
-			if (playedRef.current !== null) playedRef.current.style.width = `${fraction}%`;
-			if (fillRef.current !== null) fillRef.current.style.width = `${fraction}%`;
-			if (playheadRef.current !== null) playheadRef.current.style.left = `${fraction}%`;
+			const fraction = fractionFor(bounds, t);
+			if (playedRef.current !== null) playedRef.current.style.width = `${fraction * 100}%`;
+			if (fillRef.current !== null) fillRef.current.style.width = `${fraction * 100}%`;
+			// the playhead moves in snapped pixels, not percent: its head and stem
+			// have to land on the same device-pixel phase as each other every frame
+			if (playheadRef.current !== null) {
+				const offset = fraction * track.widthPx.current;
+				playheadRef.current.style.transform = playheadTransform(offset, window.devicePixelRatio);
+			}
 			// null when the bracket isn't mounted (watch mode) -- cheaper to skip
 			// the windowAround call than to compute a position nothing reads
 			if (bracketRef.current !== null) {
@@ -79,14 +86,14 @@ export function OverviewStrip() {
 	const showBracket = mode === "edit";
 
 	function seekFromPointer(e: PointerEvent<HTMLDivElement>) {
-		const rect = trackRef.current!.getBoundingClientRect();
+		const rect = track.element.current!.getBoundingClientRect();
 		playbackClock.seekTo(timeFor(bounds, (e.clientX - rect.left) / rect.width));
 	}
 
 	if (derived === null) return null;
 	return (
 		<div
-			ref={trackRef}
+			ref={track.attach}
 			// touch-none carries over from Timeline.tsx: without it, a touch drag
 			// fights the browser's own scroll/gesture handling instead of staying
 			// a clean pointer-capture seek
@@ -124,12 +131,7 @@ export function OverviewStrip() {
 				/>
 			)}
 			{/* 6: playhead, rAF-driven */}
-			<div
-				ref={playheadRef}
-				className="pointer-events-none absolute inset-y-0 w-[1.5px] -translate-x-1/2 bg-primary"
-			>
-				<div className="absolute top-0 left-1/2 h-[9px] w-2 -translate-x-1/2 rounded-b-[2px] bg-primary" />
-			</div>
+			<Playhead ref={playheadRef} />
 		</div>
 	);
 }
