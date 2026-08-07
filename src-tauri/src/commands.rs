@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use crate::error::IpcError;
 use crate::load::{self, LoadOutcome};
 use crate::scene::LoadedScene;
-use crate::settings::{save_settings, OverlayPrefs, Settings};
+use crate::settings::{save_settings, EditingPrefs, OverlayPrefs, RecentReplay, Settings};
 use crate::state::AppState;
 
 fn join_err(e: tauri::Error) -> IpcError {
@@ -31,6 +31,47 @@ fn install_scene<R: Runtime>(app: &AppHandle<R>, state: &AppState, outcome: Load
     scene
 }
 
+/// standard accuracy over the header counts -- the same weighting the replay
+/// panel shows, computed here so the recents card needs no scene
+fn header_accuracy(replay: &crate::scene::ReplayMeta) -> f64 {
+    let judged = u32::from(replay.count_300)
+        + u32::from(replay.count_100)
+        + u32::from(replay.count_50)
+        + u32::from(replay.count_miss);
+    if judged == 0 {
+        return 0.0;
+    }
+    let weighted = 300.0 * f64::from(replay.count_300)
+        + 100.0 * f64::from(replay.count_100)
+        + 50.0 * f64::from(replay.count_50);
+    weighted / (300.0 * f64::from(judged))
+}
+
+/// a recents write is a convenience, never a reason to fail a load that
+/// already succeeded: an unwritable settings file must still leave the
+/// replay open
+fn record_recent(state: &AppState, osr_path: &str, scene: &LoadedScene) {
+    let opened_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let entry = RecentReplay {
+        osr_path: osr_path.to_string(),
+        title: scene.beatmap.title.clone(),
+        version: scene.beatmap.version.clone(),
+        player_name: scene.replay.player_name.clone(),
+        accuracy: header_accuracy(&scene.replay),
+        max_combo: u32::from(scene.replay.max_combo),
+        opened_at_ms,
+    };
+    let mut settings = state.settings.lock().expect("settings lock");
+    let mut candidate = settings.clone();
+    candidate.push_recent(entry);
+    if save_settings(&state.config_dir, &candidate).is_ok() {
+        *settings = candidate;
+    }
+}
+
 #[tauri::command]
 pub async fn load_replay<R: Runtime>(
     app: AppHandle<R>,
@@ -39,6 +80,7 @@ pub async fn load_replay<R: Runtime>(
 ) -> Result<LoadedScene, IpcError> {
     let override_path = state.settings.lock().expect("settings lock").osu_stable_path.clone();
     let listing_cache = Arc::clone(&state.listing_cache);
+    let osr_path_for_recents = osr_path.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         load::load_replay_auto(
             Path::new(&osr_path),
@@ -49,7 +91,9 @@ pub async fn load_replay<R: Runtime>(
     })
     .await
     .map_err(join_err)??;
-    Ok(install_scene(&app, state.inner(), outcome))
+    let scene = install_scene(&app, state.inner(), outcome);
+    record_recent(state.inner(), &osr_path_for_recents, &scene);
+    Ok(scene)
 }
 
 #[tauri::command]
@@ -61,6 +105,7 @@ pub async fn load_replay_with_beatmap<R: Runtime>(
     allow_mismatch: bool,
 ) -> Result<LoadedScene, IpcError> {
     let cache_root = state.cache_root.clone();
+    let osr_path_for_recents = osr_path.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         load::load_with_beatmap(
             Path::new(&osr_path),
@@ -71,7 +116,9 @@ pub async fn load_replay_with_beatmap<R: Runtime>(
     })
     .await
     .map_err(join_err)??;
-    Ok(install_scene(&app, state.inner(), outcome))
+    let scene = install_scene(&app, state.inner(), outcome);
+    record_recent(state.inner(), &osr_path_for_recents, &scene);
+    Ok(scene)
 }
 
 #[tauri::command]
@@ -104,13 +151,26 @@ pub fn set_viewer_prefs(
     state: State<'_, AppState>,
     volume: u32,
     overlays: OverlayPrefs,
+    editing: EditingPrefs,
 ) -> Result<Settings, IpcError> {
     let mut settings = state.settings.lock().expect("settings lock");
     // persist before publishing, as in set_osu_stable_path
     let mut candidate = settings.clone();
     candidate.volume = volume;
     candidate.overlays = overlays;
+    candidate.editing = editing;
     candidate.sanitize();
+    save_settings(&state.config_dir, &candidate)?;
+    *settings = candidate;
+    Ok(settings.clone())
+}
+
+#[tauri::command]
+pub fn clear_recents(state: State<'_, AppState>) -> Result<Settings, IpcError> {
+    let mut settings = state.settings.lock().expect("settings lock");
+    // persist before publishing, as in set_osu_stable_path
+    let mut candidate = settings.clone();
+    candidate.recents.clear();
     save_settings(&state.config_dir, &candidate)?;
     *settings = candidate;
     Ok(settings.clone())
@@ -130,7 +190,8 @@ mod tests {
                 load_replay_with_beatmap,
                 get_settings,
                 set_osu_stable_path,
-                set_viewer_prefs
+                set_viewer_prefs,
+                clear_recents
             ])
             .manage(AppState::new(config_dir, cache_root))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -273,12 +334,14 @@ mod tests {
             display_length: 50.0, // below the range floor
             ..OverlayPrefs::default()
         };
-        let updated = set_viewer_prefs(app.state(), 250, prefs).unwrap(); // volume over 100
+        let editing = EditingPrefs { snap_to_lattice: false, warn_on_overwrite: false };
+        let updated = set_viewer_prefs(app.state(), 250, prefs, editing.clone()).unwrap(); // volume over 100
 
         assert_eq!(updated.volume, 100);
         assert_eq!(updated.overlays.display_length, crate::settings::DISPLAY_LENGTH_MIN);
         assert!(updated.overlays.cursor_path);
         assert!(!updated.overlays.key_overlay);
+        assert_eq!(updated.editing, editing);
 
         // persisted in sanitized form, not just published
         let from_disk = crate::settings::load_settings(&config_dir);
@@ -293,7 +356,8 @@ mod tests {
         let app = mock_app(config_dir.clone(), dir.path().join("cache"));
 
         set_osu_stable_path(app.state(), Some(r"D:\osu!".into())).unwrap();
-        let updated = set_viewer_prefs(app.state(), 30, OverlayPrefs::default()).unwrap();
+        let updated =
+            set_viewer_prefs(app.state(), 30, OverlayPrefs::default(), EditingPrefs::default()).unwrap();
 
         assert_eq!(updated.osu_stable_path.as_deref(), Some(r"D:\osu!"));
         assert_eq!(crate::settings::load_settings(&config_dir).osu_stable_path.as_deref(), Some(r"D:\osu!"));
@@ -306,8 +370,73 @@ mod tests {
         std::fs::write(&blocker, b"not a directory").unwrap();
         let app = mock_app(blocker.join("config"), dir.path().join("cache"));
 
-        let err = set_viewer_prefs(app.state(), 25, OverlayPrefs::default()).unwrap_err();
+        let err =
+            set_viewer_prefs(app.state(), 25, OverlayPrefs::default(), EditingPrefs::default()).unwrap_err();
         assert!(matches!(err, IpcError::Io { .. }));
         assert_eq!(get_settings(app.state()).volume, 100, "the rejected volume must not linger");
+    }
+
+    #[test]
+    fn a_successful_load_records_a_recent() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+        let (osr_path, osu_path) = staged_replay(dir.path());
+
+        tauri::async_runtime::block_on(load_replay_with_beatmap(
+            app.handle().clone(),
+            app.state(),
+            osr_path.display().to_string(),
+            osu_path.display().to_string(),
+            false,
+        ))
+        .unwrap();
+
+        let settings = get_settings(app.state());
+        assert_eq!(settings.recents.len(), 1);
+        assert_eq!(settings.recents[0].osr_path, osr_path.display().to_string());
+        assert_eq!(settings.recents[0].title, "Stacking Fixture");
+        // persisted, not just published
+        assert_eq!(crate::settings::load_settings(&config_dir).recents.len(), 1);
+    }
+
+    #[test]
+    fn clear_recents_empties_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+        let (osr_path, osu_path) = staged_replay(dir.path());
+
+        tauri::async_runtime::block_on(load_replay_with_beatmap(
+            app.handle().clone(),
+            app.state(),
+            osr_path.display().to_string(),
+            osu_path.display().to_string(),
+            false,
+        ))
+        .unwrap();
+        assert_eq!(get_settings(app.state()).recents.len(), 1);
+
+        assert!(clear_recents(app.state()).unwrap().recents.is_empty());
+        assert!(crate::settings::load_settings(&config_dir).recents.is_empty());
+    }
+
+    #[test]
+    fn an_unwritable_settings_file_does_not_fail_the_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let app = mock_app(blocker.join("config"), dir.path().join("cache"));
+        let (osr_path, osu_path) = staged_replay(dir.path());
+
+        let scene = tauri::async_runtime::block_on(load_replay_with_beatmap(
+            app.handle().clone(),
+            app.state(),
+            osr_path.display().to_string(),
+            osu_path.display().to_string(),
+            false,
+        ));
+        assert!(scene.is_ok(), "a recents write failure must not fail the load");
+        assert!(get_settings(app.state()).recents.is_empty());
     }
 }

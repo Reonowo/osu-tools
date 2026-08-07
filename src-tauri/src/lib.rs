@@ -43,7 +43,8 @@ pub fn run() {
             commands::load_replay_with_beatmap,
             commands::get_settings,
             commands::set_osu_stable_path,
-            commands::set_viewer_prefs
+            commands::set_viewer_prefs,
+            commands::clear_recents
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
