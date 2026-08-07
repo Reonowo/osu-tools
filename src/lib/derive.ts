@@ -3,6 +3,8 @@
 
 import { HIT_FADE_OUT_TIME } from "../engine/argon";
 import { buttonEdges, pressEdges, type ButtonEdges, type Press } from "../engine/interpolation";
+import { analyseScene, type ReplayAnalysis } from "./analysis";
+import { inferLattice, type Lattice } from "./lattice";
 import type { JudgementEventDto, LoadedScene } from "./scene-types";
 
 export interface DerivedScene {
@@ -12,6 +14,11 @@ export interface DerivedScene {
 	/** indexed by objectIndex; empty arrays when not simulated */
 	judgementsByObject: JudgementEventDto[][];
 	timelineMarkers: { time: number; grade: "ok" | "meh" | "miss" }[];
+	/** hit-timing and cursor statistics for the analysis panel */
+	analysis: ReplayAnalysis;
+	/** the inferred input quantisation, or null when the frames do not
+	 * support one (windowed play, or an already-synthesised stream) */
+	lattice: Lattice | null;
 }
 
 export function deriveScene(scene: LoadedScene): DerivedScene {
@@ -39,14 +46,18 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		}
 	}
 
+	const presses = pressEdges(scene.frames);
+
 	return {
-		presses: pressEdges(scene.frames),
+		presses,
 		edges: buttonEdges(scene.frames),
 		bounds: {
 			minTime: Math.min(0, -scene.beatmap.audioLeadIn, firstFrame, firstAppear),
 			maxTime: Math.max(lastFrame, lastEventTime + HIT_FADE_OUT_TIME)
 		},
 		judgementsByObject,
-		timelineMarkers
+		timelineMarkers,
+		analysis: analyseScene(scene, presses),
+		lattice: inferLattice(scene.frames)
 	};
 }
