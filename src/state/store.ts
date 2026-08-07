@@ -5,20 +5,31 @@ import { createStore, useStore, type StoreApi } from "zustand";
 import {
 	invokeClearRecents,
 	invokeGetSettings,
+	invokeLoadRecentReplay,
 	invokeLoadReplay,
 	invokeLoadReplayWithBeatmap,
 	invokeSetOsuStablePath,
 	invokeSetViewerPrefs,
 	isIpcError
 } from "../lib/ipc";
-import type { EditingSettings, IpcError, LoadedScene, OverlaySettings, Settings } from "../lib/scene-types";
+import type {
+	EditingSettings,
+	EffectSettings,
+	IpcError,
+	LoadedScene,
+	OverlaySettings,
+	RecentReplay,
+	Settings
+} from "../lib/scene-types";
 import { deriveScene, type DerivedScene } from "../lib/derive";
+import { clampViewportZoom, DEFAULT_VIEWPORT_ZOOM, NO_VIEWPORT_PAN, type ViewportPan } from "../renderer/playfield";
 import {
 	clampDetailSpan,
 	clampDisplayLength,
 	clampVolume,
 	DEFAULT_DETAIL_SPAN,
 	DEFAULT_EDITING,
+	DEFAULT_EFFECTS,
 	DEFAULT_OVERLAYS,
 	DEFAULT_VOLUME
 } from "./defaults";
@@ -27,7 +38,7 @@ import { describeIpcError } from "./errors";
 // OverlaySettings moved to the wire contract (scene-types.ts) when the
 // overlays became a persisted setting; re-exported so the renderer and the
 // settings dialog keep importing it from here
-export type { EditingSettings, OverlaySettings };
+export type { EditingSettings, EffectSettings, OverlaySettings };
 
 // watch shows a replay; edit is the (future) mutation surface
 export type ViewerMode = "watch" | "edit";
@@ -37,9 +48,15 @@ export type ToolId = "select" | "lasso" | "move" | "smooth" | "erase";
 export interface IpcDeps {
 	loadReplay(osrPath: string): Promise<LoadedScene>;
 	loadReplayWithBeatmap(osrPath: string, beatmapPath: string, allowMismatch: boolean): Promise<LoadedScene>;
+	loadRecentReplay(osrPath: string): Promise<LoadedScene>;
 	getSettings(): Promise<Settings>;
 	setOsuStablePath(path: string | null): Promise<Settings>;
-	setViewerPrefs(volume: number, overlays: OverlaySettings, editing: EditingSettings): Promise<Settings>;
+	setViewerPrefs(
+		volume: number,
+		overlays: OverlaySettings,
+		editing: EditingSettings,
+		effects: EffectSettings
+	): Promise<Settings>;
 	clearRecents(): Promise<Settings>;
 }
 
@@ -76,6 +93,9 @@ export interface ViewerState {
 	settings: Settings | null;
 	overlays: OverlaySettings;
 	editing: EditingSettings;
+	/** the raw per-effect toggles, master included -- consumers gate on
+	 * effectiveEffects(effects), never on the granular flags alone */
+	effects: EffectSettings;
 	playing: boolean;
 	rate: number;
 	/** linear amplitude percent 0-100; persisted (unlike rate, which belongs
@@ -87,8 +107,18 @@ export interface ViewerState {
 	tool: ToolId;
 	/** ms; the detail tier's visible timeline span */
 	detailSpanMs: number;
+	/** the viewport's framing, session-only: it belongs to the replay being
+	 * looked at rather than to the app, so it is never persisted and every
+	 * scene install puts it back to 100% centred */
+	viewportZoom: number;
+	viewportPan: ViewportPan;
 
 	openReplay(osrPath: string): Promise<void>;
+	/** reopens a recents entry. the whole entry is the argument to keep this
+	 * action honest about what it is for -- the backend resolves the beatmap
+	 * from the association it holds for that exact path, so an arbitrary path
+	 * belongs in openReplay instead */
+	openRecent(entry: RecentReplay): Promise<void>;
 	openWithBeatmap(osrPath: string, beatmapPath: string): Promise<void>;
 	confirmMismatch(): Promise<void>;
 	dismissMismatch(): void;
@@ -96,6 +126,7 @@ export interface ViewerState {
 	setAudioDuration(durationMs: number): void;
 	setOverlay<K extends keyof OverlaySettings>(key: K, value: OverlaySettings[K]): void;
 	setEditing<K extends keyof EditingSettings>(key: K, value: EditingSettings[K]): void;
+	setEffect<K extends keyof EffectSettings>(key: K, value: EffectSettings[K]): void;
 	setPlaying(playing: boolean): void;
 	setRate(rate: number): void;
 	setVolume(volume: number): void;
@@ -104,6 +135,17 @@ export interface ViewerState {
 	setPanelTab(tab: PanelTab): void;
 	setTool(tool: ToolId): void;
 	setDetailSpan(spanMs: number): void;
+	/** zoom and pan move together or not at all: a pointer-anchored zoom shifts
+	 * the pan by construction, and writing them separately would paint a frame
+	 * at the new zoom with the old pan. the pan arrives already clamped --
+	 * clampViewportPan needs the host box, which only the viewport itself
+	 * measures (renderer/playfield.ts) */
+	setViewportZoom(zoom: number, pan: ViewportPan): void;
+	/** the absolute pan a drag has reached, clamped by the caller for the same
+	 * reason. absolute rather than a delta so a drag held against the clamp
+	 * and brought back tracks the pointer instead of sticking */
+	panViewport(pan: ViewportPan): void;
+	resetViewport(): void;
 	/** startup only: pulls the persisted settings and applies volume + overlays
 	 * into the store. distinct from loadSettings, which the settings dialog
 	 * calls on every open and which must NOT touch volume/overlays -- doing so
@@ -166,6 +208,10 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 				osrPath,
 				audioDurationMs: null,
 				playing: false,
+				// a new replay gets the default framing: a zoom held over from
+				// the last one would be pointing at nothing in particular
+				viewportZoom: DEFAULT_VIEWPORT_ZOOM,
+				viewportPan: NO_VIEWPORT_PAN,
 				...(current ? { loading: false, lastError: null, pendingRecovery: null, pendingMismatch: null } : {})
 			});
 			// the load command records the recent backend-side, so the
@@ -249,6 +295,7 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 			settings: null,
 			overlays: DEFAULT_OVERLAYS,
 			editing: DEFAULT_EDITING,
+			effects: DEFAULT_EFFECTS,
 			playing: false,
 			rate: 1,
 			volume: DEFAULT_VOLUME,
@@ -257,8 +304,11 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 			panelTab: "replay",
 			tool: "select",
 			detailSpanMs: DEFAULT_DETAIL_SPAN,
+			viewportZoom: DEFAULT_VIEWPORT_ZOOM,
+			viewportPan: NO_VIEWPORT_PAN,
 
 			openReplay: (osrPath) => run(osrPath, () => deps.loadReplay(osrPath)),
+			openRecent: (entry) => run(entry.osrPath, () => deps.loadRecentReplay(entry.osrPath)),
 			openWithBeatmap: (osrPath, beatmapPath) =>
 				run(osrPath, () => deps.loadReplayWithBeatmap(osrPath, beatmapPath, false), beatmapPath),
 			confirmMismatch: async () => {
@@ -286,6 +336,10 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 				set({ overlays: { ...get().overlays, [key]: next } });
 			},
 			setEditing: (key, value) => set({ editing: { ...get().editing, [key]: value } }),
+			// the master and the granular flags are stored side by side and
+			// written the same way: turning `enabled` off must not touch the five
+			// below it, so the user gets their own selection back when it returns
+			setEffect: (key, value) => set({ effects: { ...get().effects, [key]: value } }),
 			setPlaying: (playing) => set({ playing }),
 			setRate: (rate) => set({ rate }),
 			setVolume: (volume) => {
@@ -301,6 +355,9 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 			setPanelTab: (panelTab) => set({ panelTab, panelOpen: true }),
 			setTool: (tool) => set({ tool }),
 			setDetailSpan: (spanMs) => set({ detailSpanMs: clampDetailSpan(spanMs) }),
+			setViewportZoom: (zoom, pan) => set({ viewportZoom: clampViewportZoom(zoom), viewportPan: pan }),
+			panViewport: (pan) => set({ viewportPan: pan }),
+			resetViewport: () => set({ viewportZoom: DEFAULT_VIEWPORT_ZOOM, viewportPan: NO_VIEWPORT_PAN }),
 			hydrateSettings: async () => {
 				// the volume slider and overlay toggles are usable before the read
 				// resolves, so capture what could be edited in flight: applying the
@@ -309,6 +366,7 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 				// so nothing would re-save it)
 				const overlaysBefore = get().overlays;
 				const editingBefore = get().editing;
+				const effectsBefore = get().effects;
 				const volumeEditsBefore = volumeEdits;
 				// claimed at initiation, like install()'s refresh: bumping only at
 				// publication would let this read -- when it resolves late --
@@ -325,19 +383,22 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 					return;
 				}
 				const volumeEdited = volumeEdits !== volumeEditsBefore;
-				// reference equality: setOverlay/setEditing always build a new object
+				// reference equality: setOverlay/setEditing/setEffect always build a
+				// new object
 				const overlaysEdited = get().overlays !== overlaysBefore;
 				const editingEdited = get().editing !== editingBefore;
-				// volume/overlays/editing are frontend-owned -- nothing backend-side
-				// ever changes them on its own -- so they apply even when a newer
-				// read has claimed the slot; the settings object itself (recents
-				// move under a concurrent load) publishes only while this read is
-				// still the newest claim
+				const effectsEdited = get().effects !== effectsBefore;
+				// volume/overlays/editing/effects are frontend-owned -- nothing
+				// backend-side ever changes them on its own -- so they apply even when
+				// a newer read has claimed the slot; the settings object itself
+				// (recents move under a concurrent load) publishes only while this
+				// read is still the newest claim
 				set({
 					...(refreshSeq === settingsRefreshSeq ? { settings } : {}),
 					...(volumeEdited ? {} : { volume: clampVolume(settings.volume) }),
 					...(overlaysEdited ? {} : { overlays: { ...DEFAULT_OVERLAYS, ...settings.overlays } }),
-					...(editingEdited ? {} : { editing: { ...DEFAULT_EDITING, ...settings.editing } })
+					...(editingEdited ? {} : { editing: { ...DEFAULT_EDITING, ...settings.editing } }),
+					...(effectsEdited ? {} : { effects: { ...DEFAULT_EFFECTS, ...settings.effects } })
 				});
 				// an edit made while the read was in flight predates the persistence
 				// subscription (App installs it only once this resolves), and the
@@ -348,16 +409,17 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 				// while the save was in flight; edits after the stable save cannot
 				// slip past install, because App's subscription lands in the same
 				// microtask drain as this resolution, ahead of any queued input
-				if (volumeEdited || overlaysEdited || editingEdited) {
+				if (volumeEdited || overlaysEdited || editingEdited || effectsEdited) {
 					for (;;) {
-						const { volume, overlays, editing } = get();
+						const { volume, overlays, editing, effects } = get();
 						const volumeEditsAtSave = volumeEdits;
 						try {
-							const saved = await deps.setViewerPrefs(volume, overlays, editing);
+							const saved = await deps.setViewerPrefs(volume, overlays, editing, effects);
 							const stable =
 								volumeEdits === volumeEditsAtSave &&
 								get().overlays === overlays &&
-								get().editing === editing;
+								get().editing === editing &&
+								get().effects === effects;
 							if (stable) {
 								publishSettings(saved);
 								break;
@@ -409,6 +471,7 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 export const viewerStore = createViewerStore({
 	loadReplay: invokeLoadReplay,
 	loadReplayWithBeatmap: invokeLoadReplayWithBeatmap,
+	loadRecentReplay: invokeLoadRecentReplay,
 	getSettings: invokeGetSettings,
 	setOsuStablePath: invokeSetOsuStablePath,
 	setViewerPrefs: invokeSetViewerPrefs,

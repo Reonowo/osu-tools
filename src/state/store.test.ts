@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { IpcError, LoadedScene, RecentReplay, Settings } from "../lib/scene-types";
 import { testScene } from "../test/scene";
-import { DEFAULT_EDITING, DEFAULT_OVERLAYS, DETAIL_SPAN_MAX, DETAIL_SPAN_MIN } from "./defaults";
+import { VIEWPORT_ZOOM_MAX, VIEWPORT_ZOOM_MIN } from "../renderer/playfield";
+import {
+	DEFAULT_EDITING,
+	DEFAULT_EFFECTS,
+	DEFAULT_OVERLAYS,
+	DETAIL_SPAN_MAX,
+	DETAIL_SPAN_MIN,
+	effectiveEffects
+} from "./defaults";
 import { createViewerStore, type IpcDeps } from "./store";
 
 const baseSettings: Settings = {
@@ -9,7 +17,8 @@ const baseSettings: Settings = {
 	volume: 100,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
-	editing: DEFAULT_EDITING
+	editing: DEFAULT_EDITING,
+	effects: DEFAULT_EFFECTS
 };
 
 const sampleRecent: RecentReplay = {
@@ -19,16 +28,27 @@ const sampleRecent: RecentReplay = {
 	playerName: "adminuser",
 	accuracy: 0.9651,
 	maxCombo: 300,
-	openedAtMs: 1_770_000_000_000
+	openedAtMs: 1_770_000_000_000,
+	beatmapPath: "D:\\maps\\set\\map.osu",
+	beatmapDir: "D:\\maps\\set",
+	beatmapMd5: "0123456789abcdef0123456789abcdef",
+	allowMismatch: false
 };
 
 function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 	return {
 		loadReplay: async () => testScene(),
 		loadReplayWithBeatmap: async () => testScene(),
+		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing) => ({ ...baseSettings, volume, overlays, editing }),
+		setViewerPrefs: async (volume, overlays, editing, effects) => ({
+			...baseSettings,
+			volume,
+			overlays,
+			editing,
+			effects
+		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
 		...overrides
 	};
@@ -54,6 +74,44 @@ describe("load flow", () => {
 		const store = createViewerStore(deps());
 		await store.getState().openReplay("C:/replays/a.osr");
 		expect(store.getState().osrPath).toBe("C:/replays/a.osr");
+	});
+
+	test("openRecent goes through load_recent_replay and sends only the entry's path", async () => {
+		// the beatmap association lives in rust's settings file; sending it back
+		// across the boundary would be a second copy to keep in sync, so the
+		// entry's other fields must not reach the ipc call
+		const calls: string[] = [];
+		const openedRecent: string[] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async (osrPath) => {
+					calls.push(osrPath);
+					return testScene();
+				},
+				loadRecentReplay: async (osrPath) => {
+					openedRecent.push(osrPath);
+					return testScene();
+				}
+			})
+		);
+
+		await store.getState().openRecent(sampleRecent);
+		expect(openedRecent).toEqual([sampleRecent.osrPath]);
+		expect(calls).toEqual([]);
+		expect(store.getState().scene).not.toBeNull();
+		expect(store.getState().osrPath).toBe(sampleRecent.osrPath);
+	});
+
+	test("a recent whose beatmap is gone surfaces the same picker recovery as any other load", async () => {
+		// rust ends the resolution walk on beatmapNotFound precisely so this
+		// path reaches the manual picker, exactly as a fresh open would
+		const store = createViewerStore(deps({ loadRecentReplay: reject({ kind: "beatmapNotFound", md5: "abc" }) }));
+		await store.getState().openRecent(sampleRecent);
+		const s = store.getState();
+		expect(s.lastError?.error.kind).toBe("beatmapNotFound");
+		expect(s.lastError?.osrPath).toBe(sampleRecent.osrPath);
+		expect(s.pendingRecovery).toBe(sampleRecent.osrPath);
+		expect(s.loading).toBe(false);
 	});
 
 	test("a failing load leaves osrPath pointing at the still-displayed scene, exactly like scene itself", async () => {
@@ -315,7 +373,8 @@ describe("viewer preferences", () => {
 			volume: 42,
 			overlays: { ...DEFAULT_OVERLAYS, cursorPath: true, keyOverlay: false, displayLength: 1400 },
 			recents: [],
-			editing: { ...DEFAULT_EDITING, snapToLattice: false }
+			editing: { ...DEFAULT_EDITING, snapToLattice: false },
+			effects: DEFAULT_EFFECTS
 		};
 		const store = createViewerStore(deps({ getSettings: async () => stored }));
 
@@ -457,9 +516,9 @@ describe("viewer preferences", () => {
 					new Promise<Settings>((resolve) => {
 						resolveSettings = resolve;
 					}),
-				setViewerPrefs: async (volume, overlays, editing) => {
+				setViewerPrefs: async (volume, overlays, editing, effects) => {
 					saved.push({ volume, editing });
-					return { ...baseSettings, volume, overlays, editing };
+					return { ...baseSettings, volume, overlays, editing, effects };
 				}
 			})
 		);
@@ -489,10 +548,10 @@ describe("viewer preferences", () => {
 					new Promise<Settings>((resolve) => {
 						resolveSettings = resolve;
 					}),
-				setViewerPrefs: (volume, overlays, editing) => {
+				setViewerPrefs: (volume, overlays, editing, effects) => {
 					saved.push(editing);
 					return new Promise<Settings>((resolve) => {
-						resolvers.push(() => resolve({ ...baseSettings, volume, overlays, editing }));
+						resolvers.push(() => resolve({ ...baseSettings, volume, overlays, editing, effects }));
 					});
 				}
 			})
@@ -521,9 +580,9 @@ describe("viewer preferences", () => {
 		let saves = 0;
 		const store = createViewerStore(
 			deps({
-				setViewerPrefs: async (volume, overlays, editing) => {
+				setViewerPrefs: async (volume, overlays, editing, effects) => {
 					saves += 1;
-					return { ...baseSettings, volume, overlays, editing };
+					return { ...baseSettings, volume, overlays, editing, effects };
 				}
 			})
 		);
@@ -575,6 +634,96 @@ describe("viewer preferences", () => {
 		// booleans are untouched by the numeric guard
 		store.getState().setOverlay("hideCursor", true);
 		expect(store.getState().overlays.hideCursor).toBe(true);
+	});
+});
+
+describe("effect settings", () => {
+	test("everything ships on, mirroring settings.rs EffectPrefs::default", () => {
+		expect(createViewerStore(deps()).getState().effects).toEqual({
+			enabled: true,
+			hitAnimations: true,
+			hitEffects: true,
+			cursorGlow: true,
+			cursorTrail: true,
+			followPoints: true
+		});
+	});
+
+	test("the master gates every effect without erasing what is stored underneath", () => {
+		const store = createViewerStore(deps());
+		store.getState().setEffect("cursorTrail", false);
+		store.getState().setEffect("enabled", false);
+
+		// stored: only the one the user actually turned off is off
+		expect(store.getState().effects.hitEffects).toBe(true);
+		expect(store.getState().effects.cursorTrail).toBe(false);
+		// effective: the master takes everything down with it
+		expect(effectiveEffects(store.getState().effects)).toEqual({
+			enabled: false,
+			hitAnimations: false,
+			hitEffects: false,
+			cursorGlow: false,
+			cursorTrail: false,
+			followPoints: false
+		});
+
+		// and switching the master back on restores exactly what was chosen
+		store.getState().setEffect("enabled", true);
+		const live = effectiveEffects(store.getState().effects);
+		expect(live.hitEffects).toBe(true);
+		expect(live.cursorTrail).toBe(false);
+	});
+
+	test("effectiveEffects hands back the same object when the master is on", () => {
+		// the renderer compares the resolved hitAnimations to decide on a scene
+		// rebuild, so this must be a plain pass-through, never a rewrite
+		const store = createViewerStore(deps());
+		const effects = store.getState().effects;
+		expect(effectiveEffects(effects)).toBe(effects);
+	});
+
+	test("hydrateSettings applies the persisted effects and fills gaps from the defaults", async () => {
+		const stored = { ...baseSettings, effects: { ...DEFAULT_EFFECTS, enabled: false, cursorGlow: false } };
+		const store = createViewerStore(deps({ getSettings: async () => stored }));
+		await store.getState().hydrateSettings();
+		expect(store.getState().effects).toEqual(stored.effects);
+
+		// a settings file written before this section existed
+		const legacy = createViewerStore(
+			deps({
+				getSettings: async () =>
+					({ osuStablePath: null, volume: 70, overlays: {}, recents: [] }) as unknown as Settings
+			})
+		);
+		await legacy.getState().hydrateSettings();
+		expect(legacy.getState().effects).toEqual(DEFAULT_EFFECTS);
+	});
+
+	test("an effect toggled while hydration is in flight survives and is written through", async () => {
+		const saved: Settings["effects"][] = [];
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					}),
+				setViewerPrefs: async (volume, overlays, editing, effects) => {
+					saved.push(effects);
+					return { ...baseSettings, volume, overlays, editing, effects };
+				}
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setEffect("hitAnimations", false);
+		resolveSettings({ ...baseSettings, effects: DEFAULT_EFFECTS });
+		await hydrating;
+
+		expect(store.getState().effects.hitAnimations).toBe(false); // the edit wins over the loaded value
+		expect(saved).toHaveLength(1);
+		expect(saved[0].hitAnimations).toBe(false); // and it reaches disk
+		expect(store.getState().settings?.effects.hitAnimations).toBe(false);
 	});
 });
 
@@ -881,5 +1030,56 @@ describe("shell state", () => {
 		expect(store.getState().detailSpanMs).toBe(DETAIL_SPAN_MAX);
 		store.getState().setDetailSpan(Number.NaN);
 		expect(store.getState().detailSpanMs).toBe(DETAIL_SPAN_MAX);
+	});
+});
+
+describe("viewport framing", () => {
+	test("a fresh store opens at 100%, centred", () => {
+		const store = createViewerStore(deps());
+		expect(store.getState().viewportZoom).toBe(1);
+		expect(store.getState().viewportPan).toEqual({ x: 0, y: 0 });
+	});
+
+	test("the zoom is clamped to 50-400% however it is set", () => {
+		const store = createViewerStore(deps());
+		store.getState().setViewportZoom(9, { x: 0, y: 0 });
+		expect(store.getState().viewportZoom).toBe(VIEWPORT_ZOOM_MAX);
+		store.getState().setViewportZoom(0.01, { x: 0, y: 0 });
+		expect(store.getState().viewportZoom).toBe(VIEWPORT_ZOOM_MIN);
+	});
+
+	test("zoom and pan land in one write, so no frame shows the new zoom at the old pan", () => {
+		const store = createViewerStore(deps());
+		let writes = 0;
+		const unsubscribe = store.subscribe(() => (writes += 1));
+		store.getState().setViewportZoom(2, { x: 40, y: -12 });
+		unsubscribe();
+		expect(writes).toBe(1);
+		expect(store.getState().viewportZoom).toBe(2);
+		expect(store.getState().viewportPan).toEqual({ x: 40, y: -12 });
+	});
+
+	test("panning moves the pan and leaves the zoom alone", () => {
+		const store = createViewerStore(deps());
+		store.getState().setViewportZoom(3, { x: 0, y: 0 });
+		store.getState().panViewport({ x: -80, y: 15 });
+		expect(store.getState().viewportZoom).toBe(3);
+		expect(store.getState().viewportPan).toEqual({ x: -80, y: 15 });
+	});
+
+	test("reset puts both back to the default framing", () => {
+		const store = createViewerStore(deps());
+		store.getState().setViewportZoom(3.4, { x: -80, y: 15 });
+		store.getState().resetViewport();
+		expect(store.getState().viewportZoom).toBe(1);
+		expect(store.getState().viewportPan).toEqual({ x: 0, y: 0 });
+	});
+
+	test("loading a replay resets the framing -- a held zoom would point at nothing", async () => {
+		const store = createViewerStore(deps());
+		store.getState().setViewportZoom(2.5, { x: 100, y: 100 });
+		await store.getState().openReplay("C:\\r.osr");
+		expect(store.getState().viewportZoom).toBe(1);
+		expect(store.getState().viewportPan).toEqual({ x: 0, y: 0 });
 	});
 });

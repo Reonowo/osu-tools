@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EditingSettings, IpcError, LoadedScene, OverlaySettings, Settings } from "./scene-types";
+import type { EditingSettings, EffectSettings, IpcError, LoadedScene, OverlaySettings, Settings } from "./scene-types";
 
 const IPC_ERROR_KINDS = new Set([
 	"replayParse",
@@ -35,6 +35,13 @@ export function invokeLoadReplayWithBeatmap(
 	return invoke<LoadedScene>("load_replay_with_beatmap", { osrPath, beatmapPath, allowMismatch });
 }
 
+/** reopens a recents entry through the beatmap association rust stored with
+ * it. only the path travels: the association is rust's copy to read and
+ * refresh, and sending it back would be a second copy to keep in sync */
+export function invokeLoadRecentReplay(osrPath: string): Promise<LoadedScene> {
+	return invoke<LoadedScene>("load_recent_replay", { osrPath });
+}
+
 export function invokeGetSettings(): Promise<Settings> {
 	return invoke<Settings>("get_settings");
 }
@@ -46,9 +53,10 @@ export function invokeSetOsuStablePath(path: string | null): Promise<Settings> {
 export function invokeSetViewerPrefs(
 	volume: number,
 	overlays: OverlaySettings,
-	editing: EditingSettings
+	editing: EditingSettings,
+	effects: EffectSettings
 ): Promise<Settings> {
-	return invoke<Settings>("set_viewer_prefs", { volume, overlays, editing });
+	return invoke<Settings>("set_viewer_prefs", { volume, overlays, editing, effects });
 }
 
 export function invokeClearRecents(): Promise<Settings> {

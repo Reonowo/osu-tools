@@ -3,7 +3,7 @@
 // mirror settings.rs's OverlayPrefs::default / Settings::default, which is
 // what a fresh (or legacy) settings.json hydrates to
 
-import type { EditingSettings, OverlaySettings } from "../lib/scene-types";
+import type { EditingSettings, EffectSettings, OverlaySettings } from "../lib/scene-types";
 
 /** osurulesetconfigmanager.cs:27-31 */
 export const DEFAULT_OVERLAYS: OverlaySettings = {
@@ -20,6 +20,33 @@ export const DEFAULT_EDITING: EditingSettings = {
 	snapToLattice: true,
 	warnOnOverwrite: true
 };
+
+/** mirrors settings.rs EffectPrefs::default() -- the full-fat look */
+export const DEFAULT_EFFECTS: EffectSettings = {
+	enabled: true,
+	hitAnimations: true,
+	hitEffects: true,
+	cursorGlow: true,
+	cursorTrail: true,
+	followPoints: true
+};
+
+/** the master folded into every granular flag, which is what the renderer
+ * actually gates on: an effect is live only when both are on. the stored
+ * values are never rewritten, so turning the master back on restores exactly
+ * what the user had. the sole place that fold happens -- consumers read the
+ * resolved flags and never re-check `enabled` themselves */
+export function effectiveEffects(effects: EffectSettings): EffectSettings {
+	if (effects.enabled) return effects;
+	return {
+		enabled: false,
+		hitAnimations: false,
+		hitEffects: false,
+		cursorGlow: false,
+		cursorTrail: false,
+		followPoints: false
+	};
+}
 
 /** linear amplitude percent */
 export const DEFAULT_VOLUME = 100;

@@ -8,10 +8,15 @@
 
 import type { StoreApi } from "zustand";
 import { isIpcError } from "../lib/ipc";
-import type { EditingSettings, IpcError, OverlaySettings } from "../lib/scene-types";
+import type { EditingSettings, EffectSettings, IpcError, OverlaySettings } from "../lib/scene-types";
 import type { ViewerState } from "./store";
 
-export type PrefsSaver = (volume: number, overlays: OverlaySettings, editing: EditingSettings) => Promise<unknown>;
+export type PrefsSaver = (
+	volume: number,
+	overlays: OverlaySettings,
+	editing: EditingSettings,
+	effects: EffectSettings
+) => Promise<unknown>;
 
 export interface Scheduler {
 	schedule(fn: () => void, ms: number): unknown;
@@ -40,8 +45,8 @@ export function installPrefsPersistence(
 	// reads at call time, so a burst collapses to one save carrying the
 	// latest values rather than the ones that scheduled it
 	const flush = () => {
-		const { volume, overlays, editing } = store.getState();
-		save(volume, overlays, editing).catch((e: unknown) => {
+		const { volume, overlays, editing, effects } = store.getState();
+		save(volume, overlays, editing, effects).catch((e: unknown) => {
 			// a silently dropped rejection would let the ui imply the prefs were
 			// saved while they revert on restart; route it through the same toast
 			// flow as saveStablePath
@@ -51,11 +56,18 @@ export function installPrefsPersistence(
 	};
 
 	const unsubscribe = store.subscribe((state, prev) => {
-		// reference equality on overlays/editing: setOverlay/setEditing always
-		// build a new object, and every other store write (scene installs,
-		// playback, rate) leaves all three fields untouched, so those never
-		// schedule a save
-		if (state.volume === prev.volume && state.overlays === prev.overlays && state.editing === prev.editing) return;
+		// reference equality on overlays/editing/effects: setOverlay/setEditing/
+		// setEffect always build a new object, and every other store write (scene
+		// installs, playback, rate) leaves all four fields untouched, so those
+		// never schedule a save
+		if (
+			state.volume === prev.volume &&
+			state.overlays === prev.overlays &&
+			state.editing === prev.editing &&
+			state.effects === prev.effects
+		) {
+			return;
+		}
 		if (handle !== null) scheduler.cancel(handle);
 		handle = scheduler.schedule(() => {
 			handle = null;

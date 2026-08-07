@@ -174,7 +174,10 @@ export interface OverlaySettings {
 	displayLength: number;
 }
 
-/** mirrors settings.rs RecentReplay */
+/** mirrors settings.rs RecentReplay. the beatmap association is what
+ * load_recent_replay reopens through; it is rust's to read and refresh, so
+ * openRecent sends only osrPath back across the boundary. every association
+ * field is absent on entries written before it existed */
 export interface RecentReplay {
 	osrPath: string;
 	title: string;
@@ -185,6 +188,13 @@ export interface RecentReplay {
 	maxCombo: number;
 	/** unix milliseconds */
 	openedAtMs: number;
+	/** the .osu or .osz the last open resolved */
+	beatmapPath: string | null;
+	/** the folder that source sits in -- never an .osz cache lease */
+	beatmapDir: string | null;
+	beatmapMd5: string | null;
+	/** the user's recorded consent to a hash mismatch, tied to beatmapMd5 */
+	allowMismatch: boolean;
 }
 
 /** mirrors settings.rs EditingPrefs. governs the (future) replay-editing
@@ -192,6 +202,19 @@ export interface RecentReplay {
 export interface EditingSettings {
 	snapToLattice: boolean;
 	warnOnOverwrite: boolean;
+}
+
+/** mirrors settings.rs EffectPrefs. `enabled` is the master: an effect is
+ * live only when the master and its own flag are both on (state/defaults.ts's
+ * effectiveEffects is the one place that fold happens), so switching the
+ * master off never rewrites the granular values */
+export interface EffectSettings {
+	enabled: boolean;
+	hitAnimations: boolean;
+	hitEffects: boolean;
+	cursorGlow: boolean;
+	cursorTrail: boolean;
+	followPoints: boolean;
 }
 
 /** mirrors settings.rs Settings */
@@ -202,4 +225,5 @@ export interface Settings {
 	overlays: OverlaySettings;
 	recents: RecentReplay[];
 	editing: EditingSettings;
+	effects: EffectSettings;
 }

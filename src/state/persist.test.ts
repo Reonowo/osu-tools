@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { EditingSettings, IpcError, OverlaySettings, Settings } from "../lib/scene-types";
+import type { EditingSettings, EffectSettings, IpcError, OverlaySettings, Settings } from "../lib/scene-types";
 import { testScene } from "../test/scene";
-import { DEFAULT_EDITING, DEFAULT_OVERLAYS } from "./defaults";
+import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "./defaults";
 import { installPrefsPersistence, type Scheduler } from "./persist";
 import { createViewerStore, type IpcDeps } from "./store";
 
@@ -10,16 +10,24 @@ const baseSettings: Settings = {
 	volume: 100,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
-	editing: DEFAULT_EDITING
+	editing: DEFAULT_EDITING,
+	effects: DEFAULT_EFFECTS
 };
 
 function deps(): IpcDeps {
 	return {
 		loadReplay: async () => testScene(),
 		loadReplayWithBeatmap: async () => testScene(),
+		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing) => ({ ...baseSettings, volume, overlays, editing }),
+		setViewerPrefs: async (volume, overlays, editing, effects) => ({
+			...baseSettings,
+			volume,
+			overlays,
+			editing,
+			effects
+		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] })
 	};
 }
@@ -63,11 +71,16 @@ function manualScheduler() {
 }
 
 function saveRecorder() {
-	const calls: { volume: number; overlays: OverlaySettings; editing: EditingSettings }[] = [];
+	const calls: {
+		volume: number;
+		overlays: OverlaySettings;
+		editing: EditingSettings;
+		effects: EffectSettings;
+	}[] = [];
 	return {
 		calls,
-		save: async (volume: number, overlays: OverlaySettings, editing: EditingSettings) => {
-			calls.push({ volume, overlays, editing });
+		save: async (volume: number, overlays: OverlaySettings, editing: EditingSettings, effects: EffectSettings) => {
+			calls.push({ volume, overlays, editing, effects });
 			return baseSettings;
 		}
 	};
@@ -108,7 +121,7 @@ describe("installPrefsPersistence", () => {
 		expect(rec.calls[0].overlays.cursorPath).toBe(true);
 	});
 
-	test("overlay changes schedule a save; rate, playing and scene loads do not", async () => {
+	test("overlay changes schedule a save; rate, playing, framing and scene loads do not", async () => {
 		const store = createViewerStore(deps());
 		const timer = manualScheduler();
 		const rec = saveRecorder();
@@ -117,6 +130,10 @@ describe("installPrefsPersistence", () => {
 		store.getState().setRate(1.5);
 		store.getState().setPlaying(true);
 		store.getState().setAudioDuration(1234);
+		// the viewport framing is session-only and must never reach settings.json
+		store.getState().setViewportZoom(2.5, { x: 60, y: -20 });
+		store.getState().panViewport({ x: 0, y: 0 });
+		store.getState().resetViewport();
 		await store.getState().openReplay("C:\\r.osr");
 		expect(timer.scheduled).toBe(0);
 
@@ -136,6 +153,25 @@ describe("installPrefsPersistence", () => {
 		expect(timer.scheduled).toBe(1);
 		timer.fire();
 		expect(rec.calls[0].editing.snapToLattice).toBe(false);
+	});
+
+	test("effect changes schedule a save too, master and granular alike", () => {
+		const store = createViewerStore(deps());
+		const timer = manualScheduler();
+		const rec = saveRecorder();
+		installPrefsPersistence(store, rec.save, 500, timer.scheduler);
+
+		store.getState().setEffect("cursorTrail", false);
+		store.getState().setEffect("enabled", false);
+		expect(timer.scheduled).toBe(2);
+		timer.fire();
+
+		// the raw values are what persists -- the master is stored beside the
+		// granular flags, never folded into them
+		expect(rec.calls).toHaveLength(1);
+		expect(rec.calls[0].effects.enabled).toBe(false);
+		expect(rec.calls[0].effects.cursorTrail).toBe(false);
+		expect(rec.calls[0].effects.hitEffects).toBe(true);
 	});
 
 	test("dispose flushes the pending save and stops listening", () => {
@@ -221,6 +257,7 @@ describe("installPrefsPersistence", () => {
 			expect(call.volume).toBe(store.getState().volume);
 			expect(call.overlays).toBe(store.getState().overlays);
 			expect(call.editing).toBe(store.getState().editing);
+			expect(call.effects).toBe(store.getState().effects);
 		}
 	});
 });
