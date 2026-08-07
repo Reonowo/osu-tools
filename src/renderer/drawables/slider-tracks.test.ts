@@ -81,7 +81,7 @@ describe("completionProgress", () => {
 
 describe("ticks (drawableslidertick.cs)", () => {
 	test("fade in over 150 starting preempt before the tick; hit pops 1.5x", () => {
-		const tracks = tickTracks({ time: 1500, preempt: 500 }, "hit");
+		const tracks = tickTracks({ time: 1500, preempt: 500 }, "hit", true);
 		expect(trackValueAt(tracks.alpha, 1000, 0)).toBe(0);
 		expect(trackValueAt(tracks.alpha, 1075, 0)).toBeCloseTo(0.5, 9);
 		expect(trackValueAt(tracks.alpha, 1650, 0)).toBe(0);
@@ -90,15 +90,24 @@ describe("ticks (drawableslidertick.cs)", () => {
 
 	test("miss fades the same as hit but never pops the scale", () => {
 		const nested = { time: 1500, preempt: 500 };
-		const miss = tickTracks(nested, "miss");
-		const hit = tickTracks(nested, "hit");
+		const miss = tickTracks(nested, "miss", true);
+		const hit = tickTracks(nested, "hit", true);
 		expect(miss.alpha).toEqual(hit.alpha); // same 150ms OutQuint fade either way
 		expect(trackValueAt(miss.scale, 1500 + 150, 0.5)).toBeCloseTo(1, 6); // no x1.5 pop
 	});
 
 	test("result === null (notSimulated) behaves exactly like a hit -- decision 5's time-only stand-in", () => {
 		const nested = { time: 1500, preempt: 500 };
-		expect(tickTracks(nested, null)).toEqual(tickTracks(nested, "hit"));
+		expect(tickTracks(nested, null, true)).toEqual(tickTracks(nested, "hit", true));
+	});
+
+	test("hitAnimations off drops the pop but keeps the appear tween and the fade", () => {
+		const nested = { time: 1500, preempt: 500 };
+		const off = tickTracks(nested, "hit", false);
+		expect(off.alpha).toEqual(tickTracks(nested, "hit", true).alpha); // the plain fade is untouched
+		expect(trackValueAt(off.scale, 1000, 0.5)).toBeCloseTo(0.5, 6); // still grows in on appear
+		expect(trackValueAt(off.scale, 1600, 0.5)).toBeCloseTo(1, 6); // the appear elastic settles at 1
+		expect(trackValueAt(off.scale, 1500 + 150, 0.5)).toBeCloseTo(1, 6); // no x1.5 pop
 	});
 });
 
@@ -116,25 +125,35 @@ describe("repeat pulse (argonreversearrow.cs:92-113)", () => {
 describe("repeat hit scale (argonreversearrow.cs:80-89)", () => {
 	test("null (idle) before the piece's own judgement time, then ramps the whole arrow 1 -> 1.5", () => {
 		const nested = { time: 1500 };
-		expect(repeatHitScale(1499, nested, 300, "hit")).toBeNull();
-		expect(repeatHitScale(1500, nested, 300, "hit")).toBeCloseTo(1, 9);
-		expect(repeatHitScale(1650, nested, 300, "hit")).toBeCloseTo(1.375, 9); // outQuad(0.5) = 0.75
-		expect(repeatHitScale(1800, nested, 300, "hit")).toBeCloseTo(1.5, 9);
+		expect(repeatHitScale(1499, nested, 300, "hit", true)).toBeNull();
+		expect(repeatHitScale(1500, nested, 300, "hit", true)).toBeCloseTo(1, 9);
+		expect(repeatHitScale(1650, nested, 300, "hit", true)).toBeCloseTo(1.375, 9); // outQuad(0.5) = 0.75
+		expect(repeatHitScale(1800, nested, 300, "hit", true)).toBeCloseTo(1.5, 9);
 	});
 
 	test("caps the ramp duration to spanDuration when it is under 300ms", () => {
 		const nested = { time: 1500 };
-		expect(repeatHitScale(1700, nested, 200, "hit")).toBeCloseTo(1.5, 9); // fully ramped by 1500+200
+		expect(repeatHitScale(1700, nested, 200, "hit", true)).toBeCloseTo(1.5, 9); // fully ramped by 1500+200
 	});
 
 	test("miss never gates -- stays null so the idle pulse keeps running", () => {
 		const nested = { time: 1500 };
-		expect(repeatHitScale(1600, nested, 300, "miss")).toBeNull();
+		expect(repeatHitScale(1600, nested, 300, "miss", true)).toBeNull();
 	});
 
 	test("result === null (notSimulated) behaves like a hit", () => {
 		const nested = { time: 1500 };
-		expect(repeatHitScale(1650, nested, 300, null)).toEqual(repeatHitScale(1650, nested, 300, "hit"));
+		expect(repeatHitScale(1650, nested, 300, null, true)).toEqual(repeatHitScale(1650, nested, 300, "hit", true));
+	});
+
+	test("hitAnimations off still freezes the idle pulse at the hit, it just never grows", () => {
+		// a flat 1 rather than null: null would hand the arrow back to the idle
+		// loop, which source stops for good once the piece is hit
+		const nested = { time: 1500 };
+		expect(repeatHitScale(1499, nested, 300, "hit", false)).toBeNull();
+		expect(repeatHitScale(1500, nested, 300, "hit", false)).toBe(1);
+		expect(repeatHitScale(1650, nested, 300, "hit", false)).toBe(1);
+		expect(repeatHitScale(1800, nested, 300, "hit", false)).toBe(1);
 	});
 });
 

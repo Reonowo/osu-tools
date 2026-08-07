@@ -50,7 +50,7 @@ describe("circle tracks (argonmaincirclepiece.cs / drawablehitcircle.cs)", () =>
 		// per transforms.ts's documented tie rule (later-in-array wins ties), that
 		// coincidence would make the hard-cut win and read 0 instead of the natural
 		// ramp's 0.9, which isn't what this test is exercising
-		const tracks = circleTracks(obj, { time: 1050, grade: "great" }, true);
+		const tracks = circleTracks(obj, { time: 1050, grade: "great" }, true, true);
 		expect(trackValueAt(tracks.pieceAlpha, 400, 0)).toBe(0); // appear
 		expect(trackValueAt(tracks.pieceAlpha, 600, 0)).toBeCloseTo(0.5, 9);
 		expect(trackValueAt(tracks.approachScale, 400, 4)).toBe(4);
@@ -62,14 +62,14 @@ describe("circle tracks (argonmaincirclepiece.cs / drawablehitcircle.cs)", () =>
 	});
 
 	test("the dim releases over 100ms ending at startTime - 300", () => {
-		const tracks = circleTracks(obj, { time: 1000, grade: "great" }, true);
+		const tracks = circleTracks(obj, { time: 1000, grade: "great" }, true, true);
 		expect(trackValueAt(tracks.dim, 500, 1)).toBeCloseTo(195 / 255, 9);
 		expect(trackValueAt(tracks.dim, 650, 1)).toBeCloseTo((195 / 255 + 1) / 2, 9);
 		expect(trackValueAt(tracks.dim, 700, 1)).toBe(1);
 	});
 
 	test("miss: container fades over 100ms, no flash", () => {
-		const tracks = circleTracks(obj, { time: 1180, grade: "miss" }, true);
+		const tracks = circleTracks(obj, { time: 1180, grade: "miss" }, true, true);
 		expect(trackValueAt(tracks.containerAlpha, 1230, 1)).toBeCloseTo(0.5, 9);
 		expect(trackValueAt(tracks.containerAlpha, 1280, 1)).toBe(0);
 		expect(trackValueAt(tracks.flashAlpha, 2000, 0)).toBe(0);
@@ -77,7 +77,7 @@ describe("circle tracks (argonmaincirclepiece.cs / drawablehitcircle.cs)", () =>
 
 	test("hit: the argon explosion timeline", () => {
 		const hit = 1010;
-		const tracks = circleTracks(obj, { time: hit, grade: "great" }, true);
+		const tracks = circleTracks(obj, { time: hit, grade: "great" }, true, true);
 		expect(trackValueAt(tracks.numberAlpha, hit + 75, 1)).toBe(0);
 		expect(trackValueAt(tracks.fillAlpha, hit + 150, 1)).toBe(0);
 		// border lands at (128*0.8 + border_thickness)/128 with the elastic ease
@@ -95,6 +95,40 @@ describe("circle tracks (argonmaincirclepiece.cs / drawablehitcircle.cs)", () =>
 		expect(trackValueAt(tracks.approachAlpha, hit + 1, 0)).toBe(0);
 	});
 
+	test("hit with hitAnimations off: the plain fade only, no explosion", () => {
+		// the effects toggle drops the explosion but must leave the circle's own
+		// lifecycle intact -- it still fades out over the same window and still
+		// cuts its approach circle at the hit, or the object would simply hang
+		// on screen with the effect switched off
+		const hit = 1010;
+		const tracks = circleTracks(obj, { time: hit, grade: "great" }, true, false);
+		expect(trackValueAt(tracks.pieceAlpha, hit + 400, 1)).toBeGreaterThan(0);
+		expect(trackValueAt(tracks.pieceAlpha, hit + 800, 1)).toBe(0);
+		expect(trackValueAt(tracks.containerAlpha, hit + 799, 1)).toBe(1);
+		expect(trackValueAt(tracks.containerAlpha, hit + 800, 1)).toBe(0);
+		expect(trackValueAt(tracks.approachAlpha, hit + 1, 0)).toBe(0);
+
+		// every explosion channel holds its pre-hit value for the whole fade
+		for (const t of [hit, hit + 75, hit + 150, hit + 400, hit + 799]) {
+			expect(trackValueAt(tracks.flashAlpha, t, 0)).toBe(0);
+			expect(trackValueAt(tracks.numberAlpha, t, 1)).toBe(1);
+			expect(trackValueAt(tracks.fillAlpha, t, 1)).toBe(1);
+			expect(trackValueAt(tracks.innerGradientAlpha, t, 1)).toBe(1);
+			expect(trackValueAt(tracks.borderScale, t, 1)).toBe(1);
+			expect(trackValueAt(tracks.borderAlpha, t, 1)).toBe(1);
+			expect(trackValueAt(tracks.borderAccentMix, t, 0)).toBe(0);
+			expect(trackValueAt(tracks.outerGradientScale, t, 1)).toBe(1);
+			expect(trackValueAt(tracks.outerGradientWhite, t, 0)).toBe(0);
+			expect(trackValueAt(tracks.outerGradientAlpha, t, 1)).toBe(1);
+		}
+	});
+
+	test("a miss is unchanged by the hitAnimations toggle -- it was never an animation", () => {
+		const on = circleTracks(obj, { time: 1180, grade: "miss" }, true, true);
+		const off = circleTracks(obj, { time: 1180, grade: "miss" }, true, false);
+		expect(off).toEqual(on);
+	});
+
 	test("hit: an early hit permanently silences the approach circle, no resurrection at startTime", () => {
 		// a negative-offset hit (hit < startTime) is the common case in real
 		// replays. the startTime-anchored FadeOut(50) tween is still queued
@@ -105,7 +139,7 @@ describe("circle tracks (argonmaincirclepiece.cs / drawablehitcircle.cs)", () =>
 		// superseded queued transform outright
 		// (targetgroupingtransformtracker.cs:239-253)
 		const hit = 985;
-		const tracks = circleTracks(obj, { time: hit, grade: "great" }, true);
+		const tracks = circleTracks(obj, { time: hit, grade: "great" }, true, true);
 		expect(trackValueAt(tracks.approachAlpha, 984, 0)).toBeCloseTo(0.876, 9); // still ramping, pre-hit
 		expect(trackValueAt(tracks.approachAlpha, hit, 0)).toBe(0); // hard cut
 		expect(trackValueAt(tracks.approachAlpha, 999, 0)).toBe(0);
@@ -119,7 +153,7 @@ describe("circle tracks (argonmaincirclepiece.cs / drawablehitcircle.cs)", () =>
 		// exercise the actual composed pathway (not a hand-built CircleResult) so a
 		// regression in either function individually, or in how they compose, is caught
 		const result = resolveCircleResult([], obj.startTime);
-		const tracks = circleTracks(obj, result, true);
+		const tracks = circleTracks(obj, result, true, true);
 		expect(trackValueAt(tracks.approachAlpha, obj.startTime, 0)).toBe(0);
 		expect(trackValueAt(tracks.approachAlpha, obj.startTime + 40, 0)).toBe(0);
 		expect(trackValueAt(tracks.pieceAlpha, obj.startTime + 800, 1)).toBe(0);

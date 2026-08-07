@@ -11,8 +11,9 @@ import { describe, expect, test } from "bun:test";
 import { Container, RenderLayer, Texture, type Renderer } from "pixi.js";
 import { fromBytes } from "../../engine/color";
 import { deriveScene } from "../../lib/derive";
+import { DEFAULT_EFFECTS } from "../../state/defaults";
 import { testScene } from "../../test/scene";
-import type { RenderContext } from "../GameplayRenderer";
+import type { RenderContext, TextureBaker } from "../GameplayRenderer";
 import * as textures from "../textures";
 import { JudgementsDrawable } from "./judgements";
 
@@ -34,6 +35,7 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
 			keyOverlay: true,
 			displayLength: 800
 		}),
+		getEffects: () => DEFAULT_EFFECTS,
 		layers: {
 			followPoints: new Container(),
 			objects: new Container(),
@@ -52,7 +54,7 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
  * (buildResult/buildTickMiss) run headlessly for the orphan regression below */
 function stubContextWithoutCanvas(scene: ReturnType<typeof testScene>): RenderContext {
 	const ctx = stubContext(scene);
-	const noCanvas: typeof textures = {
+	const noCanvas: TextureBaker = {
 		canvasTexture: () => Texture.WHITE,
 		glowTexture: () => Texture.WHITE,
 		circleTexture: () => Texture.WHITE,

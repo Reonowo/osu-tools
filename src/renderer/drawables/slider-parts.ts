@@ -9,7 +9,8 @@ import { GRADIENT_THICKNESS, OUTER_GRADIENT_SIZE } from "../../engine/argon";
 import { darken, toNumber, type Rgba } from "../../engine/color";
 import type { RenderContext } from "../GameplayRenderer";
 
-/** the chevron glyphs are baked onto a square canvas this many px across */
+/** the square the chevron glyphs are drawn on, in osu!px; the bake scales
+ * with the density bucket, the logical size does not */
 const CHEVRON_TEXTURE_SIZE = 64;
 
 /** canvas-drawn chevron glyphs (decision 8): ">" and ">>" strokes */
@@ -36,6 +37,8 @@ function chevronTexture(ctx: RenderContext, key: string, double: boolean) {
 /** argonsliderball.cs:24 -- the icon's 48px box, scaled to (0.6, 0.8) */
 const ICON_SIZE = 48;
 const ICON_ASPECT = { x: 0.6, y: 0.8 };
+/** argonfollowcircle.cs -- the follow circle's border thickness */
+const FOLLOW_BORDER_THICKNESS = 4;
 
 export class ArgonSliderBall {
 	readonly view = new Container();
@@ -45,17 +48,12 @@ export class ArgonSliderBall {
 	constructor(ctx: RenderContext, accent: Rgba) {
 		const key = toNumber(accent).toString(16);
 		this.fill = new Sprite(
-			ctx.textures.gradientCircleTexture(
-				Math.round(OUTER_GRADIENT_SIZE * 2),
-				`ball:${key}`,
-				accent,
-				darken(accent, 0.5)
-			)
+			ctx.textures.gradientCircleTexture(OUTER_GRADIENT_SIZE, `ball:${key}`, accent, darken(accent, 0.5))
 		);
 		this.fill.anchor.set(0.5);
 		this.fill.width = this.fill.height = OUTER_GRADIENT_SIZE;
 
-		const ring = new Sprite(ctx.textures.ringTexture(Math.round(OUTER_GRADIENT_SIZE * 2), GRADIENT_THICKNESS * 2));
+		const ring = new Sprite(ctx.textures.ringTexture(OUTER_GRADIENT_SIZE, GRADIENT_THICKNESS));
 		ring.anchor.set(0.5);
 		ring.width = ring.height = OUTER_GRADIENT_SIZE;
 
@@ -88,17 +86,12 @@ export class ArgonFollowCircle {
 	constructor(ctx: RenderContext, accent: Rgba) {
 		const key = toNumber(accent).toString(16);
 		const fill = new Sprite(
-			ctx.textures.gradientCircleTexture(
-				Math.round(OUTER_GRADIENT_SIZE * 2),
-				`follow:${key}`,
-				accent,
-				darken(accent, 0.5)
-			)
+			ctx.textures.gradientCircleTexture(OUTER_GRADIENT_SIZE, `follow:${key}`, accent, darken(accent, 0.5))
 		);
 		fill.anchor.set(0.5);
 		fill.width = fill.height = OUTER_GRADIENT_SIZE;
 		fill.alpha = 0.3;
-		const ring = new Sprite(ctx.textures.ringTexture(Math.round(OUTER_GRADIENT_SIZE * 2), 4 * 2));
+		const ring = new Sprite(ctx.textures.ringTexture(OUTER_GRADIENT_SIZE, FOLLOW_BORDER_THICKNESS));
 		ring.anchor.set(0.5);
 		ring.width = ring.height = OUTER_GRADIENT_SIZE;
 		ring.tint = toNumber(accent);

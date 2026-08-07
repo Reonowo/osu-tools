@@ -3,9 +3,9 @@ import { Container, RenderLayer, Texture, type Renderer } from "pixi.js";
 import { fromBytes } from "../../engine/color";
 import { deriveScene } from "../../lib/derive";
 import type { RenderObject } from "../../lib/scene-types";
+import { DEFAULT_EFFECTS, effectiveEffects } from "../../state/defaults";
 import { testScene } from "../../test/scene";
-import type { RenderContext } from "../GameplayRenderer";
-import * as textures from "../textures";
+import type { RenderContext, TextureBaker } from "../GameplayRenderer";
 import { FollowPointsDrawable, generateFollowPoints } from "./follow-points";
 
 function circle(startTime: number, x: number, y: number, comboIndex: number): RenderObject {
@@ -80,9 +80,9 @@ describe("follow point generation (followpointconnection.cs)", () => {
 /** ctx.textures.canvasTexture routes to a real `document`, which bun test
  * doesn't provide -- see judgements.test.ts's stubContextWithoutCanvas for
  * the same substitution reasoning. Texture.WHITE needs no canvas at all */
-function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
+function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFECTS): RenderContext {
 	const palette = scene.renderPlan.comboColours;
-	const noCanvas: typeof textures = {
+	const noCanvas: TextureBaker = {
 		canvasTexture: () => Texture.WHITE,
 		glowTexture: () => Texture.WHITE,
 		circleTexture: () => Texture.WHITE,
@@ -104,6 +104,7 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
 			keyOverlay: true,
 			displayLength: 800
 		}),
+		getEffects: () => effects,
 		layers: {
 			followPoints: new Container(),
 			objects: new Container(),
@@ -142,5 +143,44 @@ describe("FollowPointsDrawable, backward-seek orphan regression (playfield.ts's 
 		// additively-blended second child, frozen at its seek-instant pose
 		expect(drawable.view.children.length).toBe(1);
 		expect(drawable.view.children[0]).toBe(original);
+	});
+});
+
+describe("FollowPointsDrawable, the followPoints effect", () => {
+	function sceneWithOneChevron() {
+		return testScene({
+			renderPlan: {
+				...testScene().renderPlan,
+				scale: 0.5,
+				objects: [circle(1000, 0, 0, 1), circle(2000, 100, 0, 1)]
+			}
+		});
+	}
+
+	test("the effect hides the view but keeps the chevrons pooled and positioned", () => {
+		// a visibility flip, not a teardown: the chevron stays live so the
+		// instant the effect returns it shows the current frame, not a stale one
+		const off = { ...DEFAULT_EFFECTS, followPoints: false };
+		const drawable = new FollowPointsDrawable(stubContext(sceneWithOneChevron(), off));
+
+		drawable.update(1200);
+		expect(drawable.view.visible).toBe(false);
+		expect(drawable.view.children.length).toBe(1);
+	});
+
+	test("the view is visible with the effect on", () => {
+		const drawable = new FollowPointsDrawable(stubContext(sceneWithOneChevron()));
+		drawable.update(1200);
+		expect(drawable.view.visible).toBe(true);
+	});
+
+	test("the master switch alone hides it, without the granular flag moving", () => {
+		// effectiveEffects is what the renderer hands the drawable, so the
+		// drawable itself never re-checks `enabled`
+		const stored = { ...DEFAULT_EFFECTS, enabled: false };
+		const drawable = new FollowPointsDrawable(stubContext(sceneWithOneChevron(), effectiveEffects(stored)));
+		drawable.update(1200);
+		expect(drawable.view.visible).toBe(false);
+		expect(stored.followPoints).toBe(true);
 	});
 });

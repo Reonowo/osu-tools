@@ -10,6 +10,7 @@ import { trackValueAt, type Track } from "../../engine/transforms";
 import type { JudgementEventDto, RenderNested, RenderSlider } from "../../lib/scene-types";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
 import { SliderBodyRenderer } from "../slider/body";
+import { APPROACH_CIRCLE_SIZE } from "../textures";
 import { ArgonCirclePiece } from "./circle";
 import { circleTracks, resolveCircleResult, type CircleTracks } from "./circle-tracks";
 import { ArgonFollowCircle, ArgonReverseArrow, ArgonSliderBall, ArgonTick } from "./slider-parts";
@@ -57,6 +58,9 @@ export class SliderDrawable implements ObjectDrawable {
 	private readonly slider: RenderSlider;
 	private readonly planScale: number;
 	private readonly simulated: boolean;
+	/** read once at construction, like the tracks it feeds: setEffects rebuilds
+	 * the object drawables when this flips */
+	private readonly hitAnimations: boolean;
 	private readonly body: SliderBodyRenderer;
 	private readonly head: ArgonCirclePiece;
 	private readonly headTracks: CircleTracks;
@@ -77,6 +81,7 @@ export class SliderDrawable implements ObjectDrawable {
 		this.slider = slider;
 		this.planScale = ctx.scene.renderPlan.scale;
 		this.simulated = ctx.scene.simulation.status === "authoritative";
+		this.hitAnimations = ctx.getEffects().hitAnimations;
 		const accent = ctx.accents[objectIndex];
 		const events = ctx.derived.judgementsByObject[objectIndex];
 
@@ -92,7 +97,7 @@ export class SliderDrawable implements ObjectDrawable {
 		// sliderHead event (falls back to hit-on-time, decision 5)
 		const headResult = resolveCircleResult(events, obj.startTime);
 		this.headHit = { time: headResult.time, miss: headResult.grade === "miss" };
-		this.headTracks = circleTracks(obj, headResult, true);
+		this.headTracks = circleTracks(obj, headResult, true, this.hitAnimations);
 		this.head = new ArgonCirclePiece(ctx, accent, obj.indexInCombo, false);
 		this.head.view.scale.set(this.planScale);
 		this.view.addChild(this.head.view);
@@ -106,7 +111,9 @@ export class SliderDrawable implements ObjectDrawable {
 		this.approach.tint = toNumber(accent);
 		this.view.addChild(this.approach);
 		ctx.layers.approach.attach(this.approach);
-		this.baseApproachScale = this.planScale * (128 / 256) * (128 / 118);
+		// against the texture's *logical* size, not its canvas size: the bake
+		// grows with the density bucket while the sprite must not
+		this.baseApproachScale = this.planScale * (128 / APPROACH_CIRCLE_SIZE) * (128 / 118);
 
 		// container + body fades; the aggregate event carries the end result
 		const aggregate = events.find((e) => e.kind.type === "sliderAggregate");
@@ -128,7 +135,7 @@ export class SliderDrawable implements ObjectDrawable {
 			if (nested.kind === "tick") {
 				const tick = new ArgonTick(accent);
 				view.addChild(tick.view);
-				const tracks = st.tickTracks(nested, result);
+				const tracks = st.tickTracks(nested, result, this.hitAnimations);
 				this.pieces.push({
 					nested,
 					view,
@@ -218,7 +225,13 @@ export class SliderDrawable implements ObjectDrawable {
 			piece.view.alpha = trackValueAt(piece.alpha, t, 0);
 			if (piece.scale !== null) piece.view.scale.set(this.planScale * trackValueAt(piece.scale, t, 0.5));
 			if (piece.arrow !== null) {
-				const hitScale = st.repeatHitScale(t, piece.nested, this.slider.spanDuration, piece.result);
+				const hitScale = st.repeatHitScale(
+					t,
+					piece.nested,
+					this.slider.spanDuration,
+					piece.result,
+					this.hitAnimations
+				);
 				// drawablesliderrepeat.cs:118-161's UpdateSnakingPosition: position/
 				// rotation freeze once hit ("the arrow should fade out on spot
 				// rather than following the slider"). repeatAim's `aimed`

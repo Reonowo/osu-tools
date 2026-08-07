@@ -49,10 +49,15 @@ const FLASH_IN = 150;
 const RESIZE = 400;
 const SHRINK = 0.8;
 
+/** `hitAnimations` is the effect toggle: with it off the circle answers a hit
+ * with the plain fade-out alone, skipping the explosion below. it is baked in
+ * here rather than read per frame because these tracks are precomputed once
+ * per drawable -- GameplayRenderer.setEffects rebuilds the scene when it flips */
 export function circleTracks(
 	obj: { startTime: number; preempt: number; fadeIn: number },
 	result: CircleResult,
-	withApproach: boolean
+	withApproach: boolean,
+	hitAnimations: boolean
 ): CircleTracks {
 	const appear = obj.startTime - obj.preempt;
 	const hit = result.time;
@@ -89,7 +94,8 @@ export function circleTracks(
 		return tracks;
 	}
 
-	// hit explosion (argonmaincirclepiece.cs:163-231, hit lighting on)
+	// the approach circle is cut at the hit either way -- it is the object's
+	// own state, not a hit animation
 	tracks.approachAlpha.push(jump(hit, 0));
 	// an early hit (hit < startTime, the common negative-offset case) must stay
 	// cut past startTime too, or the greatest-start-wins evaluator hands the
@@ -101,25 +107,32 @@ export function circleTracks(
 	// equivalent for the one property here that has a fixed-time track queued
 	// independently of the hit
 	if (withApproach && hit < obj.startTime) tracks.approachAlpha.push(jump(obj.startTime, 0));
-	tracks.numberAlpha.push(tween(hit, FLASH_IN / 2, 1, 0));
-	tracks.fillAlpha.push(tween(hit, FLASH_IN, 1, 0, outQuint));
-	tracks.innerGradientAlpha.push(tween(hit, FLASH_IN, 1, 0, outQuint));
 
-	// bordercolour: white -> accent gradient(0.5a -> 0a) over 800 linear;
-	// approximated as an accent-mix ramp plus an alpha ramp to the gradient's
-	// 0.25 average; the piece is fully faded by then anyway
-	tracks.borderAccentMix.push(tween(hit, HIT_FADE_OUT_TIME, 0, 1));
-	tracks.borderAlpha.push(tween(hit, HIT_FADE_OUT_TIME, 1, 0.25));
-	tracks.borderScale.push(
-		tween(hit, RESIZE, 1, (CIRCLE_SIZE * SHRINK + BORDER_THICKNESS) / CIRCLE_SIZE, outElasticHalf)
-	);
+	// hit explosion (argonmaincirclepiece.cs:163-231, hit lighting on). the
+	// only part the hitAnimations effect drops -- without it every piece holds
+	// its pre-hit value and the fade-out below is the whole hit response
+	if (hitAnimations) {
+		tracks.numberAlpha.push(tween(hit, FLASH_IN / 2, 1, 0));
+		tracks.fillAlpha.push(tween(hit, FLASH_IN, 1, 0, outQuint));
+		tracks.innerGradientAlpha.push(tween(hit, FLASH_IN, 1, 0, outQuint));
 
-	const gradientDelay = hit + FLASH_IN / 12;
-	tracks.outerGradientScale.push(tween(gradientDelay, RESIZE, 1, SHRINK, outElasticHalf));
-	tracks.outerGradientWhite.push(tween(gradientDelay, 80, 0, 1, none));
-	tracks.outerGradientAlpha.push(tween(gradientDelay + 80, FLASH_IN, 1, 0, none));
+		// bordercolour: white -> accent gradient(0.5a -> 0a) over 800 linear;
+		// approximated as an accent-mix ramp plus an alpha ramp to the gradient's
+		// 0.25 average; the piece is fully faded by then anyway
+		tracks.borderAccentMix.push(tween(hit, HIT_FADE_OUT_TIME, 0, 1));
+		tracks.borderAlpha.push(tween(hit, HIT_FADE_OUT_TIME, 1, 0.25));
+		tracks.borderScale.push(
+			tween(hit, RESIZE, 1, (CIRCLE_SIZE * SHRINK + BORDER_THICKNESS) / CIRCLE_SIZE, outElasticHalf)
+		);
 
-	tracks.flashAlpha.push(tween(hit, FLASH_IN, 0, 1, outQuint));
+		const gradientDelay = hit + FLASH_IN / 12;
+		tracks.outerGradientScale.push(tween(gradientDelay, RESIZE, 1, SHRINK, outElasticHalf));
+		tracks.outerGradientWhite.push(tween(gradientDelay, 80, 0, 1, none));
+		tracks.outerGradientAlpha.push(tween(gradientDelay + 80, FLASH_IN, 1, 0, none));
+
+		tracks.flashAlpha.push(tween(hit, FLASH_IN, 0, 1, outQuint));
+	}
+
 	tracks.pieceAlpha.push(tween(hit, HIT_FADE_OUT_TIME, 1, 0, outQuad));
 	tracks.containerAlpha.push(jump(hit + HIT_FADE_OUT_TIME, 0));
 	return tracks;

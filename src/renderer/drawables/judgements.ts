@@ -23,9 +23,6 @@ const POPUP_LIFETIME = 1800;
 const RING_THICKNESS = 4;
 /** argonsliderscorepoint.cs:19 -- the tick-miss piece's diameter */
 const TICK_MISS_SIZE = 12;
-/** bake the stand-in ring/circle textures at 2x so their edges stay crisp
- * once scaled by the object's cs-scale */
-const TEXTURE_SCALE = 2;
 
 interface Popup {
 	view: Container;
@@ -53,7 +50,7 @@ export class JudgementsDrawable implements ObjectDrawable {
 
 	private buildTickMiss(spec: JudgementSpec): Popup {
 		const colour = toNumber(GRADE_COLOURS[spec.grade]);
-		const texture = this.ctx.textures.circleTexture(TICK_MISS_SIZE * TEXTURE_SCALE);
+		const texture = this.ctx.textures.circleTexture(TICK_MISS_SIZE);
 		const circle = new Sprite(texture);
 		circle.anchor.set(0.5);
 		circle.tint = colour;
@@ -97,10 +94,7 @@ export class JudgementsDrawable implements ObjectDrawable {
 		const rings: { sprite: Sprite; ring: RingSpec }[] = [];
 		if (spec.grade !== "miss") {
 			for (const ring of ringExplosion(spec.grade, spec.seed)) {
-				const texture = this.ctx.textures.ringTexture(
-					ring.size * TEXTURE_SCALE,
-					RING_THICKNESS * TEXTURE_SCALE
-				);
+				const texture = this.ctx.textures.ringTexture(ring.size, RING_THICKNESS);
 				const sprite = new Sprite(texture);
 				sprite.anchor.set(0.5);
 				sprite.tint = colour;
@@ -137,6 +131,11 @@ export class JudgementsDrawable implements ObjectDrawable {
 	}
 
 	update(t: number): void {
+		// the hitEffects toggle covers everything this drawable builds -- the
+		// judgement text, the ring explosion and the tick-miss piece. a pure
+		// visibility flip, so the popups it hides stay live and correct for the
+		// instant it is turned back on (AnalysisDrawable's precedent)
+		this.view.visible = this.ctx.getEffects().hitEffects;
 		// reconcileActiveDrawables guards against re-creating an index the map
 		// already holds -- load-bearing on a backward seek, where the tracker's
 		// rebuild reports a popup in `added` with no matching `removed` if it

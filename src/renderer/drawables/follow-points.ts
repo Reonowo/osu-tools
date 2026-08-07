@@ -69,6 +69,10 @@ export function generateFollowPoints(objects: RenderObject[], globalScale: numbe
 }
 
 const CHEVRON_TOP = fromHex("FC618F");
+/** the square the double chevron is drawn on, in osu!px: the glyph itself
+ * spans ~45% of it, which lands argonfollowpoint.cs's 8px chevron with room
+ * for its round caps */
+const CHEVRON_SIZE = 12;
 
 export class FollowPointsDrawable implements ObjectDrawable {
 	readonly view = new Container();
@@ -90,6 +94,10 @@ export class FollowPointsDrawable implements ObjectDrawable {
 	}
 
 	update(t: number): void {
+		// a pure visibility flip, like JudgementsDrawable's: the chevrons keep
+		// being pooled and positioned while hidden, so re-enabling shows the
+		// right frame immediately rather than a stale one
+		this.view.visible = this.ctx.getEffects().followPoints;
 		// reconcileActiveDrawables guards against re-creating an index the map
 		// already holds -- load-bearing on a backward seek, where the tracker's
 		// rebuild reports a chevron in `added` with no matching `removed` if it
@@ -102,15 +110,18 @@ export class FollowPointsDrawable implements ObjectDrawable {
 			(index) => {
 				const spec = this.specs[index];
 				const sprite = new Sprite(
-					this.ctx.textures.canvasTexture(32, "followpoint", (c, size) => {
+					this.ctx.textures.canvasTexture(CHEVRON_SIZE, "followpoint", (c, size) => {
+						// the glyph is written as fractions of the canvas, which is
+						// CHEVRON_SIZE osu!px at whatever the density bucket bakes
+						const arm = size / 8;
 						c.strokeStyle = "#fff";
-						c.lineWidth = 4;
+						c.lineWidth = size / 8;
 						c.lineCap = "round";
 						const draw = (x: number) => {
 							c.beginPath();
-							c.moveTo(x - 4, size / 4);
-							c.lineTo(x + 4, size / 2);
-							c.lineTo(x - 4, (3 * size) / 4);
+							c.moveTo(x - arm, size / 4);
+							c.lineTo(x + arm, size / 2);
+							c.lineTo(x - arm, (3 * size) / 4);
 							c.stroke();
 						};
 						draw(size * 0.4);
@@ -143,7 +154,9 @@ export class FollowPointsDrawable implements ObjectDrawable {
 			);
 			entry.sprite.alpha = trackValueAt(entry.alpha, t, 0);
 			const s = trackValueAt(entry.scale, t, 1.5) * this.scale;
-			entry.sprite.scale.set(s * 0.375); // 12x8 target over the 32px texture
+			// the texture measures CHEVRON_SIZE osu!px whatever bucket baked it,
+			// so the tracked scale is the entire factor
+			entry.sprite.scale.set(s);
 		}
 	}
 

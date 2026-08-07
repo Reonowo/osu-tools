@@ -81,8 +81,10 @@ const RING_BORDER_INNER = 2;
 const DOT_RELATIVE_SCALE = 0.2;
 /** argoncursor.cs:73 -- EdgeEffectParameters.Radius on the dot's glow */
 const DOT_GLOW_RADIUS = 20;
-/** bake the ring texture at 2x so its edges stay crisp */
-const TEXTURE_SCALE = 2;
+/** argoncursor.cs:63-69 -- the centre dot's own diameter */
+const DOT_SIZE = CURSOR_SIZE * DOT_RELATIVE_SCALE;
+/** the dot plus the glow's radius on either side */
+const DOT_GLOW_SIZE = DOT_SIZE + 2 * DOT_GLOW_RADIUS;
 
 /** osuconfigmanager.cs:115,117 -- GameplayCursorSize defaults to 1.0 and
  * AutoCursorSize defaults to false, so OsuCursor.CalculateCursorScale() is
@@ -166,6 +168,9 @@ export class CursorDrawable implements ObjectDrawable {
 	 * were spawned in, so this container is never itself moved -- unlike
 	 * cursorSprite, it stays a direct child of the unmoved `view` */
 	private readonly trailLayer = new Container();
+	/** the dot's additive glow, kept as a field only so the cursorGlow effect
+	 * can hide it -- the dot and ring underneath it never hide */
+	private readonly glow: Sprite;
 	private readonly expand: Track[];
 	private readonly frames: FrameDto[];
 	private readonly parts: TrailPart[] = [];
@@ -190,9 +195,10 @@ export class CursorDrawable implements ObjectDrawable {
 		// unlike hit objects it does not apply renderPlan.scale -- CURSOR_SIZE
 		// is a fixed UI constant (osucursor.cs:25), not CS-derived
 
-		// ring stack: canvas-drawn CURSOR_SIZE box, supersampled by TEXTURE_SCALE
+		// ring stack: a CURSOR_SIZE osu!px box, canvas-drawn at whatever the
+		// current density bucket supersamples that to
 		const ring = new Sprite(
-			ctx.textures.canvasTexture(CURSOR_SIZE * TEXTURE_SCALE, "argon-cursor", (c, size) => {
+			ctx.textures.canvasTexture(CURSOR_SIZE, "argon-cursor", (c, size) => {
 				const s = size / CURSOR_SIZE;
 				const radius = CURSOR_SIZE / 2;
 				// fill disc: fc618f darkened x0.625 at 0.4 alpha, spans the full ring (argoncursor.cs:37-42)
@@ -225,18 +231,17 @@ export class CursorDrawable implements ObjectDrawable {
 		// centre dot: a fixed-size white core (argoncursor.cs:63-69) with an
 		// additive cyan glow behind it (argoncursor.cs:70-75); the dot itself
 		// is not a child of expandTarget, so it never scales on press
-		const dotSize = CURSOR_SIZE * DOT_RELATIVE_SCALE;
-		const glow = new Sprite(ctx.textures.glowTexture(128, dotSize / 2 / (dotSize / 2 + DOT_GLOW_RADIUS)));
-		glow.anchor.set(0.5);
-		glow.width = glow.height = dotSize + 2 * DOT_GLOW_RADIUS;
-		glow.tint = toNumber(fromHex("ABFFFF"));
-		glow.alpha = 100 / 255; // argoncursor.cs:74 -- Color4(171, 255, 255, 100), a byte alpha
-		glow.blendMode = "add"; // compositedrawable.drawnode.cs:142 -- EdgeEffectType.Glow blends additively
-		const dot = new Sprite(ctx.textures.circleTexture(32));
+		this.glow = new Sprite(ctx.textures.glowTexture(DOT_GLOW_SIZE, DOT_SIZE / 2 / (DOT_GLOW_SIZE / 2)));
+		this.glow.anchor.set(0.5);
+		this.glow.width = this.glow.height = DOT_GLOW_SIZE;
+		this.glow.tint = toNumber(fromHex("ABFFFF"));
+		this.glow.alpha = 100 / 255; // argoncursor.cs:74 -- Color4(171, 255, 255, 100), a byte alpha
+		this.glow.blendMode = "add"; // compositedrawable.drawnode.cs:142 -- EdgeEffectType.Glow blends additively
+		const dot = new Sprite(ctx.textures.circleTexture(DOT_SIZE));
 		dot.anchor.set(0.5);
-		dot.width = dot.height = dotSize;
+		dot.width = dot.height = DOT_SIZE;
 
-		this.cursorSprite.addChild(this.expandTarget, glow, dot);
+		this.cursorSprite.addChild(this.expandTarget, this.glow, dot);
 	}
 
 	private spawnPart(x: number, y: number, bornAt: number, scale: number): void {
@@ -245,7 +250,7 @@ export class CursorDrawable implements ObjectDrawable {
 			if (this.parts.length >= TRAIL_POOL) {
 				sprite = this.parts.shift()!.sprite;
 			} else {
-				sprite = new Sprite(this.ctx.textures.glowTexture(64, 0.1));
+				sprite = new Sprite(this.ctx.textures.glowTexture(TRAIL_PART_SIZE, 0.1));
 				sprite.anchor.set(0.5);
 				sprite.blendMode = "add"; // argoncursortrail.cs:24 -- BlendingParameters.Additive
 				this.trailLayer.addChild(sprite);
@@ -277,6 +282,22 @@ export class CursorDrawable implements ObjectDrawable {
 		this.cursorSprite.position.set(state.x, state.y);
 		const expandScale = trackValueAt(this.expand, t, 1);
 		this.expandTarget.scale.set(expandScale);
+
+		// the ring, dot and press expansion above are the cursor itself and are
+		// never gated; only the glow and the trail are effects
+		const effects = this.ctx.getEffects();
+		this.glow.visible = effects.cursorGlow;
+		this.trailLayer.visible = effects.cursorTrail;
+		if (!effects.cursorTrail) {
+			// a disabled trail is dropped rather than frozen -- parts left in
+			// place would replay a stale streak the instant it comes back. the
+			// position bookkeeping keeps advancing, so re-enabling picks up from
+			// `now` instead of spawning a line back to wherever it stopped
+			this.releaseAllParts();
+			this.lastPos = [state.x, state.y];
+			this.lastT = t;
+			return;
+		}
 
 		if (isTrailReset(this.lastT, t, SEEK_RESET_MS)) {
 			this.releaseAllParts();

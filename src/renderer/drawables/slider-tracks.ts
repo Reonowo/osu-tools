@@ -95,16 +95,19 @@ export function followCircleTracks(
 	return { scale, alpha };
 }
 
+/** `hitAnimations` is the effect toggle: it drops the tick's pop on being hit,
+ * leaving the appear tween and the plain alpha fade the tick has either way */
 export function tickTracks(
 	nested: { time: number; preempt: number },
-	result: "hit" | "miss" | null
+	result: "hit" | "miss" | null,
+	hitAnimations: boolean
 ): { alpha: Track[]; scale: Track[] } {
 	const appear = nested.time - nested.preempt;
 	const resolved = result ?? "hit";
 	const resultTime = nested.time;
 	const alpha: Track[] = [tween(appear, 150, 0, 1), tween(resultTime, 150, 1, 0, outQuint)];
 	const scale: Track[] = [tween(appear, 600, 0.5, 1, outElasticHalf)];
-	if (resolved === "hit") scale.push(tween(resultTime, 150, 1, 1.5, out));
+	if (resolved === "hit" && hitAnimations) scale.push(tween(resultTime, 150, 1, 1.5, out));
 	return { alpha, scale };
 }
 
@@ -148,14 +151,19 @@ export function repeatPulse(t: number, animationStart: number): { mainScale: num
  * should keep running the idle `repeatPulse` loop instead (not yet hit, a
  * miss never gates the idle loop per source, or before its own judgement
  * time). `result === null` (notSimulated) is decision 5's stand-in: play
- * the hit animation on time, same convention as tickTracks/repeatTracks */
+ * the hit animation on time, same convention as tickTracks/repeatTracks.
+ * `hitAnimations` is the effect toggle: with it off the hit still stops the
+ * idle loop (a flat 1 rather than null), it just no longer grows -- the arrow
+ * is left to the plain alpha fade repeatTracks already gives it */
 export function repeatHitScale(
 	t: number,
 	nested: { time: number },
 	spanDuration: number,
-	result: "hit" | "miss" | null
+	result: "hit" | "miss" | null,
+	hitAnimations: boolean
 ): number | null {
 	if ((result ?? "hit") !== "hit" || t < nested.time) return null;
+	if (!hitAnimations) return 1;
 	const duration = Math.min(300, spanDuration);
 	if (duration <= 0) return 1.5;
 	// interpolation.valueat has no clamp past the window either; harmless

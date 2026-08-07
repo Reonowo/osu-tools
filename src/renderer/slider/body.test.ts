@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Container, Matrix, updateRenderGroupTransforms } from "pixi.js";
-import { COMPOSITE_FRAGMENT } from "./body";
+import { DENSITY_BUCKETS } from "../playfield";
+import { COMPOSITE_FRAGMENT, distanceTextureOptions } from "./body";
 
 // body.ts's SliderBodyRenderer can't be constructed headlessly (Shader.from
 // touches GlProgram, which probes a real <canvas> for max fragment
@@ -135,6 +136,45 @@ describe("body tint/alpha propagation (uColor's source, updateRenderGroupTransfo
 		updateRenderGroupTransforms(root.renderGroup, true);
 
 		expect(meshStandIn.groupColorAlpha >>> 0).toBe(0xffffffff);
+	});
+});
+
+describe("distance texture options", () => {
+	const smallBody = { width: 200, height: 120 };
+
+	test("osu!px -> texels follows the density bucket, so a body is as sharp as the circles on it", () => {
+		expect(distanceTextureOptions(2, smallBody)).toMatchObject({ width: 400, height: 240 });
+		expect(distanceTextureOptions(4, smallBody)).toMatchObject({ width: 800, height: 480 });
+		expect(distanceTextureOptions(8, smallBody)).toMatchObject({ width: 1600, height: 960 });
+	});
+
+	test("the dimension cap holds whatever the bucket asks for", () => {
+		// a body spanning most of the playfield at the top bucket would be 4k+
+		const marathon = { width: 500, height: 380 };
+		for (const bucket of DENSITY_BUCKETS) {
+			const { width, height } = distanceTextureOptions(bucket, marathon);
+			expect(Math.max(width, height)).toBeLessThanOrEqual(2048);
+		}
+		// the cap scales both axes by the same factor, preserving the aspect the
+		// composite quad samples over
+		const capped = distanceTextureOptions(8, marathon);
+		expect(capped.width).toBe(2048);
+		expect(capped.height / capped.width).toBeCloseTo(380 / 500, 2);
+	});
+
+	test("a degenerate body still asks for a texture the gpu will accept", () => {
+		expect(distanceTextureOptions(4, { width: 0, height: 0 })).toMatchObject({ width: 1, height: 1 });
+	});
+
+	test("linear sampling and antialias on, mipmaps off", () => {
+		const options = distanceTextureOptions(4, smallBody);
+		// linear is load-bearing: the target holds a distance field, and nearest
+		// would replicate the lut's aa ramp into blocky steps on diagonals
+		expect(options.scaleMode).toBe("linear");
+		expect(options.antialias).toBe(true);
+		// setRange() re-rasterises this target every time the snake range moves,
+		// so a mip chain would be regenerated per frame for no benefit
+		expect(options.autoGenerateMipmaps).toBe(false);
 	});
 });
 

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { Container, RenderLayer, Texture, type Renderer } from "pixi.js";
 import { trackValueAt } from "../../engine/transforms";
-import { advanceTrail, expandTracks, holdIntervals, isTrailReset, trailAlpha } from "./cursor";
+import type { EffectSettings } from "../../lib/scene-types";
+import { DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "../../state/defaults";
+import { testScene } from "../../test/scene";
+import type { RenderContext, TextureBaker } from "../GameplayRenderer";
+import { advanceTrail, CursorDrawable, expandTracks, holdIntervals, isTrailReset, trailAlpha } from "./cursor";
 
 const frame = (time: number, buttons: number) => ({ time, x: 0, y: 0, buttons });
 
@@ -114,6 +119,88 @@ describe("trail reset detection (cursortrail.cs's AddTrail assumes continuous mo
 
 	test("a forward jump past the threshold resets", () => {
 		expect(isTrailReset(500, 701, 200)).toBe(true);
+	});
+});
+
+describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
+	// a straight left-to-right sweep, far enough per step to spawn trail parts
+	// (TRAIL_INTERVAL is ~10.24 osu!px)
+	const frames = Array.from({ length: 12 }, (_, i) => ({ time: i * 16, x: i * 40, y: 100, buttons: 0 }));
+
+	// a getter, not a value: the renderer reads the effects live, and the
+	// disable path below has to flip them between two update() calls
+	function stubContext(getEffects: () => EffectSettings): RenderContext {
+		const noCanvas: TextureBaker = {
+			canvasTexture: () => Texture.WHITE,
+			glowTexture: () => Texture.WHITE,
+			circleTexture: () => Texture.WHITE,
+			ringTexture: () => Texture.WHITE,
+			gradientCircleTexture: () => Texture.WHITE,
+			approachCircleTexture: () => Texture.WHITE
+		};
+		return {
+			scene: { ...testScene(), frames },
+			derived: {} as RenderContext["derived"],
+			accents: [],
+			textures: noCanvas,
+			renderer: {} as unknown as Renderer,
+			getOverlays: () => DEFAULT_OVERLAYS,
+			getEffects,
+			layers: {
+				followPoints: new Container(),
+				objects: new Container(),
+				approach: new RenderLayer(),
+				judgements: new Container(),
+				analysis: new Container(),
+				cursor: new Container()
+			}
+		};
+	}
+
+	/** the trail parts live under the drawable's second child (the ring/dot
+	 * container is the first); a part counts as live while it is visible */
+	function liveTrailParts(drawable: CursorDrawable): number {
+		const trailLayer = drawable.view.children[0] as Container;
+		return trailLayer.children.filter((c) => c.visible).length;
+	}
+
+	/** the ring/dot container is the drawable's second child; inside it the
+	 * order is expandTarget (ring), glow, dot */
+	function cursorPieces(drawable: CursorDrawable) {
+		const [expandTarget, glow, dot] = (drawable.view.children[1] as Container).children;
+		return { expandTarget, glow, dot };
+	}
+
+	test("both on: the glow shows and the trail accumulates parts", () => {
+		const drawable = new CursorDrawable(stubContext(() => DEFAULT_EFFECTS));
+		for (const frame of frames) drawable.update(frame.time);
+		expect(liveTrailParts(drawable)).toBeGreaterThan(0);
+		expect(cursorPieces(drawable).glow.visible).toBe(true);
+	});
+
+	test("cursorGlow off hides only the glow -- the ring and dot stay", () => {
+		const drawable = new CursorDrawable(stubContext(() => ({ ...DEFAULT_EFFECTS, cursorGlow: false })));
+		drawable.update(0);
+		const { expandTarget, glow, dot } = cursorPieces(drawable);
+		expect(glow.visible).toBe(false);
+		expect(expandTarget.visible).toBe(true);
+		expect(dot.visible).toBe(true);
+		expect(drawable.view.visible).toBe(true);
+	});
+
+	test("cursorTrail off hides the layer and releases every live part", () => {
+		// a trail left in place would replay a stale streak the instant the
+		// effect comes back, since every part sits where the cursor used to be,
+		// not where it is now
+		let effects: EffectSettings = DEFAULT_EFFECTS;
+		const drawable = new CursorDrawable(stubContext(() => effects));
+		for (const frame of frames) drawable.update(frame.time);
+		expect(liveTrailParts(drawable)).toBeGreaterThan(0);
+
+		effects = { ...DEFAULT_EFFECTS, cursorTrail: false };
+		drawable.update(frames[frames.length - 1].time + 16);
+		expect((drawable.view.children[0] as Container).visible).toBe(false);
+		expect(liveTrailParts(drawable)).toBe(0);
 	});
 });
 

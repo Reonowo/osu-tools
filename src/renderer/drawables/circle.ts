@@ -18,13 +18,15 @@ import {
 import { darken, toNumber, type Rgba } from "../../engine/color";
 import { trackValueAt } from "../../engine/transforms";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
+import { APPROACH_CIRCLE_SIZE } from "../textures";
 import { circleTracks, resolveCircleResult, type CircleTracks } from "./circle-tracks";
 
 /** osuhitobject.cs:27 -- OBJECT_DIMENSIONS, the circle's full osu!px size */
 const CIRCLE_SIZE = OBJECT_RADIUS * 2;
 
-/** bake textures at 2x the osu!px size so cs scaling stays crisp */
-const TEXTURE_SCALE = 2;
+/** flashpiece: a 64px invisible body whose glow spans 64 + 2*76.8 px (edge
+ * effect radius = radius * 1.2, hit lighting on) */
+const FLASH_SIZE = OBJECT_RADIUS + 2 * (OBJECT_RADIUS * 1.2);
 
 function sprite(texture: import("pixi.js").Texture, sizeOsuPx: number): Sprite {
 	const s = new Sprite(texture);
@@ -60,25 +62,20 @@ export class ArgonCirclePiece {
 		const t = ctx.textures;
 
 		// slightly inset to prevent bleeding outside the ring (argonmaincirclepiece.cs:70)
-		this.outerFill = withOuterFill ? sprite(t.circleTexture(CIRCLE_SIZE * TEXTURE_SCALE), CIRCLE_SIZE - 1) : null;
+		this.outerFill = withOuterFill ? sprite(t.circleTexture(CIRCLE_SIZE), CIRCLE_SIZE - 1) : null;
 		if (this.outerFill !== null) this.outerFill.tint = dark;
 
 		const key = toNumber(accent).toString(16);
 		this.outerGradient = sprite(
-			t.gradientCircleTexture(OUTER_GRADIENT_SIZE * TEXTURE_SCALE, `outer:${key}`, accent, darken(accent, 0.1)),
+			t.gradientCircleTexture(OUTER_GRADIENT_SIZE, `outer:${key}`, accent, darken(accent, 0.1)),
 			OUTER_GRADIENT_SIZE
 		);
-		this.outerGradientWhite = sprite(t.circleTexture(OUTER_GRADIENT_SIZE * TEXTURE_SCALE), OUTER_GRADIENT_SIZE);
+		this.outerGradientWhite = sprite(t.circleTexture(OUTER_GRADIENT_SIZE), OUTER_GRADIENT_SIZE);
 		this.innerGradient = sprite(
-			t.gradientCircleTexture(
-				INNER_GRADIENT_SIZE * TEXTURE_SCALE,
-				`inner:${key}`,
-				darken(accent, 0.5),
-				darken(accent, 0.6)
-			),
+			t.gradientCircleTexture(INNER_GRADIENT_SIZE, `inner:${key}`, darken(accent, 0.5), darken(accent, 0.6)),
 			INNER_GRADIENT_SIZE
 		);
-		this.innerFill = sprite(t.circleTexture(INNER_FILL_SIZE * TEXTURE_SCALE), INNER_FILL_SIZE);
+		this.innerFill = sprite(t.circleTexture(INNER_FILL_SIZE), INNER_FILL_SIZE);
 		this.innerFill.tint = dark;
 
 		this.number = new Text({
@@ -88,13 +85,12 @@ export class ArgonCirclePiece {
 		this.number.anchor.set(0.5);
 		this.number.y = -2;
 
-		// flashpiece: a 64px invisible body whose glow spans 64 + 2*76.8 px;
-		// hard core fraction = 32 / (32 + 76.8) (edge effect radius = radius * 1.2, hit lighting on)
-		this.flash = sprite(t.glowTexture(256, 32 / 108.8), OBJECT_RADIUS + 2 * (OBJECT_RADIUS * 1.2));
+		// hard core fraction = 32 / (32 + 76.8)
+		this.flash = sprite(t.glowTexture(FLASH_SIZE, 32 / 108.8), FLASH_SIZE);
 		this.flash.tint = toNumber(accent);
 		this.flash.blendMode = "add";
 
-		this.border = sprite(t.ringTexture(CIRCLE_SIZE * TEXTURE_SCALE, BORDER_THICKNESS * TEXTURE_SCALE), CIRCLE_SIZE);
+		this.border = sprite(t.ringTexture(CIRCLE_SIZE, BORDER_THICKNESS), CIRCLE_SIZE);
 
 		for (const child of [
 			this.outerFill,
@@ -149,7 +145,7 @@ export class CircleDrawable implements ObjectDrawable {
 		const obj = ctx.scene.renderPlan.objects[objectIndex];
 		const accent = ctx.accents[objectIndex];
 		const result = resolveCircleResult(ctx.derived.judgementsByObject[objectIndex], obj.startTime);
-		this.tracks = circleTracks(obj, result, true);
+		this.tracks = circleTracks(obj, result, true, ctx.getEffects().hitAnimations);
 
 		this.piece = new ArgonCirclePiece(ctx, accent, obj.indexInCombo, true);
 		this.view.addChild(this.piece.view);
@@ -166,7 +162,9 @@ export class CircleDrawable implements ObjectDrawable {
 		this.approach.tint = toNumber(accent);
 		this.view.addChild(this.approach);
 		ctx.layers.approach.attach(this.approach);
-		this.baseApproachScale = (CIRCLE_SIZE / 256) * (128 / 118);
+		// against the texture's *logical* size, not its canvas size: the bake
+		// grows with the density bucket while the sprite must not
+		this.baseApproachScale = (CIRCLE_SIZE / APPROACH_CIRCLE_SIZE) * (128 / 118);
 	}
 
 	update(t: number): void {

@@ -8,11 +8,50 @@ import { withAlpha, type Rgba } from "../../engine/color";
 import { bakeSliderLut } from "../../engine/slider-lut";
 import { pathToProgress } from "../../engine/slider-path";
 import type { RenderSlider } from "../../lib/scene-types";
+import { currentDensityBucket } from "../textures";
 import { buildPathQuads, pathBounds } from "./geometry";
 
-/** osu!px -> distance-texture texels; capped so marathon bodies stay < 2048 */
-const SUPERSAMPLE = 2;
+/** the longest side a distance texture may take, so marathon bodies cannot
+ * exhaust vram however dense the display is */
 const MAX_TEXTURE_DIM = 2048;
+
+/** the distance texture's create() options for a body of these bounds at this
+ * density bucket. osu!px -> texels tracks the same bucket the procedural
+ * textures bake at, held under the dimension cap. split out of the
+ * constructor because a real SliderBodyRenderer needs a gpu (see
+ * body.test.ts), and these values are worth pinning */
+export function distanceTextureOptions(bucket: number, bounds: { width: number; height: number }) {
+	const scale = Math.min(bucket, MAX_TEXTURE_DIM / Math.max(bounds.width, bounds.height, 1));
+	return {
+		width: Math.max(1, Math.ceil(bounds.width * scale)),
+		height: Math.max(1, Math.ceil(bounds.height * scale)),
+		// linear, not nearest: the playfield transform + devicePixelRatio almost
+		// never lands texels 1:1 on device pixels (eg. 2.25 device px/osu!px at
+		// 1920x1080 dpr 1), so nearest replicates the lut's ~2.2-texel aa ramp
+		// into blocky 2-5px steps on diagonals. a distance field interpolates
+		// exactly, which is the whole point of storing distance instead of colour
+		//
+		// format left at the default (~8-bit rgba), not path.cs:318's r32float:
+		// pixi requests ext_color_buffer_float but never ext_float_blend, and
+		// webgl2 makes any blended draw into a 32-bit-float attachment
+		// invalid_operation without it -- and the prepass blends. 8-bit distance
+		// quantisation (~0.2 osu!px steps) is finer than the lut's own 110-texel
+		// resolution, so it's lossless where it matters
+		scaleMode: "linear" as const,
+		// multisamples the prepass. its quads are real geometry, so their edges
+		// -- at joins and end caps, where one segment's quad clips another's
+		// distance ramp -- are the one part of this target the distance field
+		// cannot smooth by itself. pixi backs it with an msaa renderbuffer and
+		// resolves by blit, so it costs a resolve per re-rasterisation, and
+		// silently does nothing on a context without msaa support
+		antialias: true,
+		// deliberately off, unlike the cached procedural textures: setRange()
+		// re-rasterises this target on every frame the snake range changes, and
+		// a mip chain regenerated per frame costs more than the minification it
+		// would save
+		autoGenerateMipmaps: false
+	};
+}
 
 // pixi shaders skip `#version 300 es`, which puts them on pixi's own
 // portable-source path (glprogram.mjs): `in`/`out` get macro-translated to
@@ -149,24 +188,9 @@ export class SliderBodyRenderer {
 		// snaking (snakingsliderbody.cs:150-155)
 		this.bounds = pathBounds(slider.vertices, this.radius);
 
-		const scale = Math.min(SUPERSAMPLE, MAX_TEXTURE_DIM / Math.max(this.bounds.width, this.bounds.height, 1));
-		// linear, not nearest: the playfield transform + devicePixelRatio almost
-		// never lands texels 1:1 on device pixels (eg. 2.25 device px/osu!px at
-		// 1920x1080 dpr 1), so nearest replicates the lut's ~2.2-texel aa ramp
-		// into blocky 2-5px steps on diagonals. a distance field interpolates
-		// exactly, which is the whole point of storing distance instead of colour
-		//
-		// format left at the default (~8-bit rgba), not path.cs:318's r32float:
-		// pixi requests ext_color_buffer_float but never ext_float_blend, and
-		// webgl2 makes any blended draw into a 32-bit-float attachment
-		// invalid_operation without it -- and the prepass blends. 8-bit distance
-		// quantisation (~0.2 osu!px steps) is finer than the lut's own 110-texel
-		// resolution, so it's lossless where it matters
-		this.target = RenderTexture.create({
-			width: Math.max(1, Math.ceil(this.bounds.width * scale)),
-			height: Math.max(1, Math.ceil(this.bounds.height * scale)),
-			scaleMode: "linear"
-		});
+		// the bucket is read once, at construction: a body already on screen
+		// keeps the texture it was built with until the drawable is recreated
+		this.target = RenderTexture.create(distanceTextureOptions(currentDensityBucket(), this.bounds));
 
 		const { width, rgba } = bakeSliderLut(withAlpha(accent, SLIDER_BODY_ALPHA), accent, this.radius);
 		// explicit format: bufferimagesource.mjs defaults a raw Uint8Array to
