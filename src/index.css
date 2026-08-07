@@ -38,6 +38,15 @@
 	--color-card: var(--card);
 	--color-foreground: var(--foreground);
 	--color-background: var(--background);
+	--color-surface-viewport: var(--surface-viewport);
+	--color-surface-rail: var(--surface-rail);
+	--color-surface-bar: var(--surface-bar);
+	--color-surface-panel: var(--surface-panel);
+	--color-surface-strip: var(--surface-strip);
+	--color-surface-card: var(--surface-card);
+	--color-surface-raised: var(--surface-raised);
+	--color-border-strong: var(--border-strong);
+	--ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);
 	--radius-lg: var(--radius);
@@ -80,30 +89,44 @@
 	--sidebar-accent-foreground: oklch(0.205 0 0);
 	--sidebar-border: oklch(0.922 0 0);
 	--sidebar-ring: oklch(0.708 0 0);
+	--surface-viewport: oklch(1 0 0);
+	--surface-rail: oklch(0.985 0 0);
+	--surface-bar: oklch(0.985 0 0);
+	--surface-panel: oklch(0.97 0 0);
+	--surface-strip: oklch(0.97 0 0);
+	--surface-card: oklch(1 0 0);
+	--surface-raised: oklch(0.97 0 0);
+	--border-strong: oklch(0.87 0 0);
 }
 
 .dark {
-	/* viewer chrome is dark-only (no light/dark toggle); values below are the
-       fixed design direction -- zinc page/panels, OsuColour Pink1 accent
-       reserved for primary actions, osu!'s destructive red */
-	--background: #09090b;
+	/* surface ramp from redesign pass; dark-only (no light/dark toggle) */
+	--background: #08080a;
 	--foreground: #e4e4e7;
-	--card: #18181b;
+	--card: #121215;
 	--card-foreground: #e4e4e7;
-	--popover: #18181b;
+	--popover: #121215;
 	--popover-foreground: #e4e4e7;
 	--primary: #ff66ab;
 	--primary-foreground: #1b0c12;
-	--secondary: #27272a;
+	--secondary: #1c1c20;
 	--secondary-foreground: #e4e4e7;
-	--muted: #27272a;
-	--muted-foreground: #a1a1aa;
-	--accent: #27272a;
+	--muted: #1c1c20;
+	--muted-foreground: #8a8a93;
+	--accent: #1c1c20;
 	--accent-foreground: #e4e4e7;
 	--destructive: #ed1121;
-	--border: #27272a;
-	--input: #27272a;
+	--border: #1e1e22;
+	--input: #2a2a30;
 	--ring: #52525b;
+	--surface-viewport: #08080a;
+	--surface-rail: #0a0a0c;
+	--surface-bar: #0c0c0f;
+	--surface-panel: #0e0e11;
+	--surface-strip: #101013;
+	--surface-card: #121215;
+	--surface-raised: #1c1c20;
+	--border-strong: #2a2a30;
 	--chart-1: oklch(0.87 0 0);
 	--chart-2: oklch(0.556 0 0);
 	--chart-3: oklch(0.439 0 0);
@@ -128,5 +151,20 @@
 	}
 	html {
 		@apply font-sans;
+	}
+	::-webkit-scrollbar {
+		width: 8px;
+		height: 8px;
+	}
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	::-webkit-scrollbar-thumb {
+		background: #27272a;
+		border-radius: 4px;
+		border: 2px solid var(--surface-panel);
+	}
+	::-webkit-scrollbar-thumb:hover {
+		background: #3f3f46;
 	}
 }
