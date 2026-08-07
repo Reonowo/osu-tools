@@ -5,20 +5,16 @@
 // mode itself are the only discrete inputs, read once per effect re-run
 
 import { useEffect, useRef } from "react";
-import { K1, K2, M1, M2 } from "@/engine/buttons";
+import { PHYSICAL_BUTTONS } from "@/engine/buttons";
 import { cursorStateAt } from "@/engine/interpolation";
 import { formatAccuracy } from "@/lib/format";
-import { statsAt } from "@/lib/timeline";
+import { countAtOrBefore, statsAt } from "@/lib/timeline";
 import { playbackClock } from "@/playback/instance";
-import { countAtOrBefore } from "@/renderer/overlays/analysis";
 import { useViewerStore } from "@/state/store";
 
-const KEYS = [
-	{ label: "K1", bit: K1, edges: "k1" as const },
-	{ label: "K2", bit: K2, edges: "k2" as const },
-	{ label: "M1", bit: M1, edges: "m1" as const },
-	{ label: "M2", bit: M2, edges: "m2" as const }
-];
+// physical keys, not raw bits -- a keyboard tap must light K1 alone, never
+// K1 and M1 together (buttons.ts's PHYSICAL_BUTTONS)
+const KEYS = PHYSICAL_BUTTONS;
 
 // a fixed tile, rendered once; the rAF loop below only ever rewrites its
 // dataset state (held/zero) and the count text, never creates or destroys a
@@ -83,8 +79,8 @@ export function WatchHud() {
 			KEYS.forEach((key, i) => {
 				const row = rowRefs.current[i];
 				if (row === null) return;
-				const held = cursor !== null && (cursor.buttons & key.bit) !== 0;
-				const count = countAtOrBefore(edges[key.edges], t);
+				const held = cursor !== null && key.is(cursor.buttons);
+				const count = countAtOrBefore(edges[key.edgesKey], t);
 				row.dataset.state = held ? "held" : count === 0 ? "zero" : "";
 				const countEl = row.children[2] as HTMLElement;
 				if (countEl.textContent !== String(count)) countEl.textContent = String(count);

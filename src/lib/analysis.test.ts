@@ -151,7 +151,8 @@ describe("peakTapBpm", () => {
 		const presses = Array.from({ length: 20 }, (_, i) => ({
 			time: i * 62.5,
 			action: "left" as const,
-			frameIndex: i
+			frameIndex: i,
+			key: "M1" as const
 		}));
 		expect(peakTapBpm(presses, 1000)).toBeCloseTo(240, 0);
 	});

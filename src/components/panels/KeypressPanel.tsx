@@ -9,12 +9,13 @@ import { useEffect, useMemo, useRef } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PanelHeader } from "@/components/shell/SidePanel";
-import { isLeft, isRight } from "@/engine/buttons";
-import type { ButtonEdges, Press } from "@/engine/interpolation";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isLeft, isRight, PHYSICAL_BUTTONS, type PhysicalKey } from "@/engine/buttons";
+import type { Press } from "@/engine/interpolation";
 import { formatTime } from "@/lib/format";
 import type { FrameDto } from "@/lib/scene-types";
+import { countAtOrBefore } from "@/lib/timeline";
 import { playbackClock } from "@/playback/instance";
-import { countAtOrBefore } from "@/renderer/overlays/analysis";
 import { useViewerStore } from "@/state/store";
 import { InertNotice } from "./InertNotice";
 import { SectionLabel } from "./SectionLabel";
@@ -22,12 +23,23 @@ import { SectionLabel } from "./SectionLabel";
 const ROW_COUNT = 5;
 const CENTER_ROW = 2;
 
-const KEY_FILTERS: { label: string; edges: keyof ButtonEdges }[] = [
-	{ label: "K1", edges: "k1" },
-	{ label: "K2", edges: "k2" },
-	{ label: "M1", edges: "m1" },
-	{ label: "M2", edges: "m2" }
-];
+// physical keys, not raw bits -- a keyboard tap must count as K1 alone,
+// never K1 and M1 together (buttons.ts's PHYSICAL_BUTTONS)
+const KEY_FILTERS = PHYSICAL_BUTTONS;
+
+/** what each tile counts. the K/M distinction is what the counts hinge on:
+ * stable writes the mouse bit alongside the keyboard bit for a keyboard tap,
+ * so the naive reading of the bitfield double-counts one press as K1 *and*
+ * M1 -- these four are physical keys, and the shared clause below says so */
+const KEY_HARDWARE: Record<PhysicalKey, string> = {
+	K1: "the left gameplay button, pressed on the keyboard",
+	K2: "the right gameplay button, pressed on the keyboard",
+	M1: "the left gameplay button, pressed on the mouse",
+	M2: "the right gameplay button, pressed on the mouse"
+};
+const KEYS_ARE_PHYSICAL = "K and M are those same two buttons reached by different hardware, never two presses at once";
+
+const PRESS_EDIT_BLOCKER = "needs the replay-document ipc commands";
 
 /** the frame time the held action first reads false again, i.e. the release
  * that follows this press's rising edge; null when the stream ends before it
@@ -92,7 +104,7 @@ export function KeypressPanel() {
 				el.style.display = "";
 				const up = releases[pressIndex] ?? null;
 				const cells = el.children;
-				(cells[0] as HTMLElement).textContent = press.action === "left" ? "left" : "right";
+				(cells[0] as HTMLElement).textContent = press.key;
 				(cells[1] as HTMLElement).textContent = formatTime(press.time);
 				(cells[2] as HTMLElement).textContent = up === null ? "—" : formatTime(up);
 				(cells[3] as HTMLElement).textContent = up === null ? "—" : `${Math.round(up - press.time)}ms`;
@@ -113,24 +125,34 @@ export function KeypressPanel() {
 				data-native-wheel=""
 				className="flex min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto overflow-x-hidden p-3.5"
 			>
-				<InertNotice>press editing needs the replay-document ipc commands</InertNotice>
+				<InertNotice>press editing {PRESS_EDIT_BLOCKER}</InertNotice>
 
 				<div>
 					<SectionLabel>key filters</SectionLabel>
 					<div className="mt-[7px] grid grid-cols-4 gap-1.5">
+						{/* the tiles are natively disabled, so the tooltip trigger has to
+						be a wrapping span (ToolPalette.tsx's pattern) -- and these are
+						the tiles whose meaning most needs explaining */}
 						{KEY_FILTERS.map((key) => (
-							<Button
-								key={key.label}
-								disabled
-								variant="outline"
-								size="sm"
-								className="h-auto flex-col gap-0.5 py-1.5"
-							>
-								<span className="text-[11px] font-semibold">{key.label}</span>
-								<span className="text-[10px] tabular-nums text-[#8a8a93]">
-									{derived.edges[key.edges].length}
-								</span>
-							</Button>
+							<Tooltip key={key.label}>
+								<TooltipTrigger render={<span />}>
+									<Button
+										disabled
+										variant="outline"
+										size="sm"
+										className="h-auto w-full flex-col gap-0.5 py-1.5"
+									>
+										<span className="text-[11px] font-semibold">{key.label}</span>
+										<span className="text-[10px] tabular-nums text-[#8a8a93]">
+											{derived.edges[key.edgesKey].length}
+										</span>
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="left">
+									{KEY_HARDWARE[key.label]} — {KEYS_ARE_PHYSICAL}. filtering the table by key{" "}
+									{PRESS_EDIT_BLOCKER}.
+								</TooltipContent>
+							</Tooltip>
 						))}
 					</div>
 				</div>
@@ -163,12 +185,38 @@ export function KeypressPanel() {
 						+ add press
 					</Button>
 					<div className="mt-1.5 flex gap-1.5">
-						<Button disabled variant="outline" size="sm" aria-label="nudge earlier" className="flex-1">
-							<ChevronLeft className="size-3.5" aria-hidden />
-						</Button>
-						<Button disabled variant="outline" size="sm" aria-label="nudge later" className="flex-1">
-							<ChevronRight className="size-3.5" aria-hidden />
-						</Button>
+						<Tooltip>
+							<TooltipTrigger render={<span className="flex-1" />}>
+								<Button
+									disabled
+									variant="outline"
+									size="sm"
+									aria-label="nudge earlier"
+									className="w-full"
+								>
+									<ChevronLeft className="size-3.5" aria-hidden />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="left">
+								move the selected press earlier — rewriting a frame's buttons {PRESS_EDIT_BLOCKER}
+							</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger render={<span className="flex-1" />}>
+								<Button
+									disabled
+									variant="outline"
+									size="sm"
+									aria-label="nudge later"
+									className="w-full"
+								>
+									<ChevronRight className="size-3.5" aria-hidden />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="left">
+								move the selected press later — rewriting a frame's buttons {PRESS_EDIT_BLOCKER}
+							</TooltipContent>
+						</Tooltip>
 					</div>
 				</div>
 			</div>

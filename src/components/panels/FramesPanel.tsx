@@ -1,18 +1,19 @@
 // the frames tab: an inert operations block (frame editing has no ipc
 // surface yet) sitting under a table that genuinely works -- the frames
 // near the playhead are pure display over scene.frames, read every animation
-// frame straight off the clock. header + scrolling body together, so
-// SidePanel can mount this as a single self-contained panel
+// frame straight off the clock, and each row clicked (or entered, once
+// tabbed to) exact-selects that frame (frameCursor.select). header +
+// scrolling body together, so SidePanel can mount this as a single
+// self-contained panel
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef, type MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { PanelHeader } from "@/components/shell/SidePanel";
-import { formatTime } from "@/lib/format";
+import { formatButtons, formatTime } from "@/lib/format";
 import { formatLatticeStep, isOnLattice } from "@/lib/lattice";
-import { playbackClock } from "@/playback/instance";
-import { countAtOrBefore } from "@/renderer/overlays/analysis";
+import { frameCursor } from "@/playback/frame-cursor";
 import { useViewerStore } from "@/state/store";
 import { InertNotice } from "./InertNotice";
 import { SectionLabel } from "./SectionLabel";
@@ -20,13 +21,45 @@ import { SectionLabel } from "./SectionLabel";
 const ROW_COUNT = 9;
 const CENTER_ROW = 4;
 
+/** the frame index the top row shows with `centerIndex` selected: centred
+ * where the replay has room on both sides, flush against whichever end it
+ * does not. exported because row activation needs the same answer the rAF
+ * loop below computes -- it is what says which row the frame it just selected
+ * has moved to */
+export function frameWindowStart(centerIndex: number, frameCount: number): number {
+	return Math.max(0, Math.min(centerIndex - CENTER_ROW, frameCount - ROW_COUNT));
+}
+
+// enter activates a row; space stays the app's play/pause wherever focus sits,
+// which is the whole point of the passthrough opt-out below. the shortcut
+// hook's own preventDefault covers only the first keydown (it drops repeats),
+// and a held space re-arms the button's native activation on every repeat it
+// is allowed to default-handle -- so without this a hold would both toggle
+// playback and select a frame on release
+export function suppressSpaceActivation(e: { key: string; preventDefault(): void }) {
+	if (e.key === " ") e.preventDefault();
+}
+
 // a fixed nine rows, rendered once; the rAF loop below only ever rewrites
 // their cell text and dataset flags, never creates or destroys a row
-function FrameRow({ setRef }: { setRef: (el: HTMLDivElement | null) => void }) {
+export function FrameRow({
+	setRef,
+	onActivate
+}: {
+	setRef: (el: HTMLButtonElement | null) => void;
+	onActivate: (e: MouseEvent<HTMLButtonElement>) => void;
+}) {
 	return (
-		<div
+		<button
+			type="button"
 			ref={setRef}
-			className="grid grid-cols-[40px_1fr_52px_52px_30px] items-center gap-1.5 px-[9px] py-[3px] font-mono text-[10px] text-[#e4e4e7] data-[state=center]:bg-primary/[.07] data-[state=offlattice]:bg-[#ffcc22]/[.05]"
+			onClick={onActivate}
+			onKeyDown={suppressSpaceActivation}
+			// a row is a button to be clickable and tab-reachable, not because it
+			// wants the keyboard: withinInteractiveControl would otherwise kill
+			// `,` `.` space arrows home for as long as a clicked row keeps focus
+			data-shortcut-passthrough=""
+			className="grid w-full grid-cols-[40px_1fr_52px_52px_30px] items-center gap-1.5 px-[9px] py-[3px] text-left font-mono text-[10px] text-[#e4e4e7] data-[state=center]:bg-primary/[.07] data-[state=offlattice]:bg-[#ffcc22]/[.05]"
 		>
 			{/* fixed child order -- the rAF loop below indexes into el.children
 			rather than re-querying by attribute every frame */}
@@ -35,18 +68,35 @@ function FrameRow({ setRef }: { setRef: (el: HTMLDivElement | null) => void }) {
 			<span className="text-right tabular-nums data-[off=true]:text-[#ffcc22]" />
 			<span className="text-right tabular-nums data-[off=true]:text-[#ffcc22]" />
 			<span className="text-right text-[#8a8a93]" />
-		</div>
+		</button>
 	);
 }
 
 export function FramesPanel() {
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
-	const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+	const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
+	const frameCount = scene === null ? 0 : scene.frames.length;
 
-	// recomputed only when a new scene installs, not every animation frame --
-	// the loop below just binary-searches this array each tick
-	const frameTimes = useMemo(() => scene?.frames.map((f) => f.time) ?? [], [scene]);
+	// activation reads the frame index the rAF loop most recently wrote to this
+	// row's own dataset, so it always seeks the row's live index even if a click
+	// lands between two ticks -- and never touches play/pause, since select()
+	// only ever calls the clock's seekTo(). the rows are positional, though:
+	// selecting re-centres the window under the same nine nodes, so the row that
+	// was activated goes on to name a different frame. focus therefore follows
+	// the selection to whichever row it lands on, which keeps the focus ring on
+	// the frame it selected and makes a second activation a no-op instead of
+	// another step in the same direction
+	const activateRow = useCallback(
+		(e: MouseEvent<HTMLButtonElement>) => {
+			const raw = e.currentTarget.dataset.frameIndex;
+			if (raw === undefined) return;
+			const index = Number(raw);
+			frameCursor.select(index);
+			rowRefs.current[index - frameWindowStart(index, frameCount)]?.focus();
+		},
+		[frameCount]
+	);
 
 	useEffect(() => {
 		if (scene === null || derived === null) return;
@@ -54,9 +104,8 @@ export function FramesPanel() {
 		const lattice = derived.lattice;
 		let raf = 0;
 		const loop = () => {
-			const t = playbackClock.currentTime();
-			const centerIndex = frames.length > 0 ? Math.max(0, countAtOrBefore(frameTimes, t) - 1) : -1;
-			const start = Math.max(0, Math.min(centerIndex - CENTER_ROW, frames.length - ROW_COUNT));
+			const centerIndex = frames.length > 0 ? frameCursor.currentIndex() : -1;
+			const start = frameWindowStart(centerIndex, frames.length);
 			for (let row = 0; row < ROW_COUNT; row++) {
 				const el = rowRefs.current[row];
 				if (el === null) continue;
@@ -64,9 +113,12 @@ export function FramesPanel() {
 				const frame = frames[frameIndex];
 				if (frame === undefined) {
 					el.style.display = "none";
+					el.disabled = true;
 					continue;
 				}
 				el.style.display = "";
+				el.disabled = false;
+				el.dataset.frameIndex = String(frameIndex);
 				const cells = el.children;
 				(cells[0] as HTMLElement).textContent = String(frameIndex);
 				(cells[1] as HTMLElement).textContent = formatTime(frame.time);
@@ -78,14 +130,17 @@ export function FramesPanel() {
 				xCell.dataset.off = String(xOff);
 				yCell.textContent = frame.y.toFixed(1);
 				yCell.dataset.off = String(yOff);
-				(cells[4] as HTMLElement).textContent = String(frame.buttons);
+				(cells[4] as HTMLElement).textContent = formatButtons(frame.buttons);
+				// the decoded label loses the raw bitfield -- keep it reachable on
+				// hover, since it's what a future keypress-edit op would rewrite
+				el.title = `raw buttons: ${frame.buttons}`;
 				el.dataset.state = xOff || yOff ? "offlattice" : frameIndex === centerIndex ? "center" : "";
 			}
 			raf = requestAnimationFrame(loop);
 		};
 		raf = requestAnimationFrame(loop);
 		return () => cancelAnimationFrame(raf);
-	}, [scene, derived, frameTimes]);
+	}, [scene, derived]);
 
 	if (scene === null || derived === null) return null;
 	const { lattice } = derived;
@@ -119,6 +174,7 @@ export function FramesPanel() {
 									setRef={(el) => {
 										rowRefs.current[i] = el;
 									}}
+									onActivate={activateRow}
 								/>
 							))}
 						</div>

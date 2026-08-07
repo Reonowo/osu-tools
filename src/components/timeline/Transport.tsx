@@ -4,25 +4,26 @@
 // restyled into the docked shell -- its play/pause/restart/rate/volume
 // wiring and the rAF-driven time readout carry over verbatim, just re-themed
 // to the row's own geometry. the time and frame readouts are continuous
-// consumers (decision 6): one rAF loop reads playbackClock, binary-searches
-// scene.frames for the frame index (via the same countAtOrBefore
-// ToolPalette's CoordinateReadout already uses), and writes straight to dom
-// refs, never through react state. play/pause/rate/volume stay discrete
+// consumers (decision 6): one rAF loop reads playbackClock, reads the frame
+// index off the shared frameCursor (the same one ToolPalette's
+// CoordinateReadout and FramesPanel's row selection read/write), and writes
+// straight to dom refs, never through react state. play/pause/rate/volume stay discrete
 // toggles through the store; restart and frame-stepping seek playbackClock
 // directly, exactly as Controls.tsx did. keyboard shortcuts and wheel
 // frame-stepping live in AppShell's single usePlaybackShortcuts() call --
 // this file never adds a second one
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Pause, Play, SkipBack, StepBack, StepForward, Volume1, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatTime } from "@/lib/format";
+import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { stepFrame } from "@/playback/use-playback-shortcuts";
-import { countAtOrBefore } from "@/renderer/overlays/analysis";
 import { useViewerStore } from "@/state/store";
 
 // restart and the two frame-step buttons share one flanking style; only
@@ -49,6 +50,36 @@ function VolumeIcon({ volume }: { volume: number }) {
 	return <Icon className="size-4 shrink-0 text-[#71717a]" aria-hidden />;
 }
 
+/** an icon-only ghost button and its tooltip. the aria-label names the
+ * control for screen readers; the tooltip says what it does, which for the
+ * frame steppers is the part a glyph cannot carry */
+function IconAction({
+	label,
+	tooltip,
+	className,
+	onClick,
+	children
+}: {
+	label: string;
+	tooltip: string;
+	className: string;
+	onClick: () => void;
+	children: ReactNode;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger
+				render={
+					<Button size="icon" variant="ghost" aria-label={label} className={className} onClick={onClick}>
+						{children}
+					</Button>
+				}
+			/>
+			<TooltipContent>{tooltip}</TooltipContent>
+		</Tooltip>
+	);
+}
+
 export function Transport() {
 	const scene = useViewerStore((s) => s.scene);
 	const playing = useViewerStore((s) => s.playing);
@@ -61,11 +92,6 @@ export function Transport() {
 	const currentTimeRef = useRef<HTMLSpanElement>(null);
 	const totalTimeRef = useRef<HTMLSpanElement>(null);
 	const frameIndexRef = useRef<HTMLSpanElement>(null);
-
-	// per-scene source list for the frame readout's binary search -- recomputed
-	// only when a new scene installs, the same split CoordinateReadout uses for
-	// its own frame counter
-	const frameTimes = useMemo(() => scene?.frames.map((f) => f.time) ?? [], [scene]);
 
 	// the transport's only continuous consumers -- current time, total time,
 	// and the frame index -- all read the same clock tick, so one loop drives
@@ -80,56 +106,58 @@ export function Transport() {
 			// max extends once the audio's metadata loads (see OverviewStrip), and
 			// this readout must pick that up exactly as Controls.tsx did
 			if (totalTimeRef.current !== null) totalTimeRef.current.textContent = formatTime(playbackClock.maxTime);
-			if (frameIndexRef.current !== null) {
-				// 0-indexed, matching ToolPalette's coordinate readout and the
-				// frames/keys panels -- countAtOrBefore returns a count, so the
-				// current frame's index is one less
-				frameIndexRef.current.textContent = String(Math.max(0, countAtOrBefore(frameTimes, t) - 1));
-			}
+			// 0-indexed, matching ToolPalette's coordinate readout and the
+			// frames/keys panels -- frameCursor resolves any exact row selection,
+			// falling back to the last frame at-or-before t
+			if (frameIndexRef.current !== null) frameIndexRef.current.textContent = String(frameCursor.currentIndex());
 			raf = requestAnimationFrame(loop);
 		};
 		raf = requestAnimationFrame(loop);
 		return () => cancelAnimationFrame(raf);
-	}, [scene, frameTimes]);
+	}, [scene]);
 
 	if (scene === null) return null;
 	return (
 		<div className="flex items-center gap-[7px] px-2.5 py-1.5">
-			<Button
-				size="icon"
-				variant="ghost"
-				aria-label="restart"
+			<IconAction
+				label="restart"
+				tooltip="jump back to the start of the replay (home)"
 				className={FLANKING_BUTTON_CLASS}
 				onClick={() => playbackClock.seekTo(playbackClock.minTime)}
 			>
 				<SkipBack />
-			</Button>
-			<Button
-				size="icon"
-				aria-label={playing ? "pause" : "play"}
-				className="size-8 rounded-[9px] bg-primary text-primary-foreground hover:bg-[#ff87bc] hover:-translate-y-px"
-				onClick={() => setPlaying(!playing)}
-			>
-				{playing ? <Pause /> : <Play />}
-			</Button>
-			<Button
-				size="icon"
-				variant="ghost"
-				aria-label="previous frame"
+			</IconAction>
+			<Tooltip>
+				<TooltipTrigger
+					render={
+						<Button
+							size="icon"
+							aria-label={playing ? "pause" : "play"}
+							className="size-8 rounded-[9px] bg-primary text-primary-foreground hover:bg-[#ff87bc] hover:-translate-y-px"
+							onClick={() => setPlaying(!playing)}
+						>
+							{playing ? <Pause /> : <Play />}
+						</Button>
+					}
+				/>
+				<TooltipContent>{playing ? "pause" : "play"} (space)</TooltipContent>
+			</Tooltip>
+			<IconAction
+				label="previous frame"
+				tooltip="step back exactly one replay frame, not a fixed interval (,)"
 				className={FLANKING_BUTTON_CLASS}
 				onClick={() => stepFrame(-1)}
 			>
 				<StepBack />
-			</Button>
-			<Button
-				size="icon"
-				variant="ghost"
-				aria-label="next frame"
+			</IconAction>
+			<IconAction
+				label="next frame"
+				tooltip="step forward exactly one replay frame, not a fixed interval (.)"
 				className={FLANKING_BUTTON_CLASS}
 				onClick={() => stepFrame(1)}
 			>
 				<StepForward />
-			</Button>
+			</IconAction>
 
 			<div className="flex items-baseline gap-0.5 font-mono">
 				<span ref={currentTimeRef} className="text-[13px] text-[#f4f4f5] tabular-nums" />

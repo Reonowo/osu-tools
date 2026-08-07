@@ -5,7 +5,8 @@
 
 import type { ReactNode } from "react";
 import { PanelHeader } from "@/components/shell/SidePanel";
-import { ERROR_WINDOW_MS, type HistogramBin, type VelocitySample } from "@/lib/analysis";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ERROR_WINDOW_MS, HISTOGRAM_BINS, type HistogramBin, type VelocitySample } from "@/lib/analysis";
 import { useViewerStore } from "@/state/store";
 import { SectionLabel } from "./SectionLabel";
 
@@ -62,7 +63,17 @@ function Histogram({
 	return (
 		<div>
 			<SectionLabel>hit error distribution</SectionLabel>
-			<div className="mt-[7px] flex h-[74px] items-end gap-[1.5px]">
+			{/* a grid, not flex: `flex-1` shares out the leftover space, so with a
+			fractional 1.5px gap each bar's own width lands on a different
+			subpixel and the row rasterises as an irregular comb. equal grid
+			tracks and a whole-pixel gap make every bar and gap identical. the
+			column count comes from HISTOGRAM_BINS rather than a literal, so the
+			two cannot drift apart -- tailwind cannot generate a class from a
+			runtime value, hence the inline gridTemplateColumns */}
+			<div
+				className="mt-[7px] grid h-[74px] items-end gap-[2px]"
+				style={{ gridTemplateColumns: `repeat(${HISTOGRAM_BINS}, minmax(0, 1fr))` }}
+			>
 				{histogram.map((bin) => {
 					// an all-zero histogram must not divide by a zero max into NaN heights
 					const share = maxCount === 0 ? 0 : bin.count / maxCount;
@@ -70,7 +81,7 @@ function Histogram({
 					return (
 						<div
 							key={bin.centre}
-							className="flex-1 rounded-t-[1.5px]"
+							className="rounded-t-[1.5px]"
 							style={{
 								height: `${Math.max(2, share * 72)}px`,
 								backgroundColor: insideGreat ? "#66ccff" : "#88b300"
@@ -180,17 +191,38 @@ export function AnalysisPanel() {
 				{hasTimedHits ? (
 					<>
 						<div className="grid grid-cols-2 gap-2">
-							<StatCard label="unstable rate">
-								<div className="text-[22px] font-bold tabular-nums text-[#f4f4f5]">
-									{analysis.unstableRate.toFixed(2)}
-								</div>
-							</StatCard>
-							<StatCard label="mean error">
-								<div className="text-[22px] font-bold tabular-nums" style={{ color: "#66ccff" }}>
-									{signedMs(analysis.meanError)}
-									<span className="text-[12px] text-[#8a8a93]">ms</span>
-								</div>
-							</StatCard>
+							{/* the card spells the metric out, but "unstable rate" still
+							doesn't say what the number measures. a div wrapper rather
+							than a span: StatCard is a block and this is the grid item */}
+							<Tooltip>
+								<TooltipTrigger render={<div />}>
+									<StatCard label="unstable rate">
+										<div className="text-[22px] font-bold tabular-nums text-[#f4f4f5]">
+											{analysis.unstableRate.toFixed(2)}
+										</div>
+									</StatCard>
+								</TooltipTrigger>
+								<TooltipContent>
+									UR — ten times the standard deviation of this play's hit errors. lower is steadier;
+									it says nothing about whether the taps were early or late.
+								</TooltipContent>
+							</Tooltip>
+							<Tooltip>
+								<TooltipTrigger render={<div />}>
+									<StatCard label="mean error">
+										<div
+											className="text-[22px] font-bold tabular-nums"
+											style={{ color: "#66ccff" }}
+										>
+											{signedMs(analysis.meanError)}
+											<span className="text-[12px] text-[#8a8a93]">ms</span>
+										</div>
+									</StatCard>
+								</TooltipTrigger>
+								<TooltipContent>
+									the average signed hit error: negative is early, positive is late
+								</TooltipContent>
+							</Tooltip>
 						</div>
 						<Histogram
 							histogram={analysis.histogram}
