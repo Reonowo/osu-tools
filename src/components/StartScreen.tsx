@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Identity } from "@/components/shell/TopBar";
 import { PanelHeader } from "@/components/shell/SidePanel";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatAccuracy, formatRelativeTime } from "@/lib/format";
 import { pickReplay } from "@/lib/openers";
 import type { RecentReplay } from "@/lib/scene-types";
@@ -16,16 +17,16 @@ import { useViewerStore } from "@/state/store";
 function RecentEntry({
 	entry,
 	nowMs,
-	openReplay
+	openRecent
 }: {
 	entry: RecentReplay;
 	nowMs: number;
-	openReplay: (osrPath: string) => Promise<void>;
+	openRecent: (entry: RecentReplay) => Promise<void>;
 }) {
 	return (
 		<button
 			type="button"
-			onClick={() => void openReplay(entry.osrPath)}
+			onClick={() => void openRecent(entry)}
 			className="flex w-full flex-col gap-1 rounded-[9px] border border-transparent px-2.5 py-[9px] text-left hover:bg-[#16161a]"
 		>
 			<div className="truncate text-[12px] font-medium text-[#e4e4e7]">
@@ -42,7 +43,10 @@ function RecentEntry({
 export function StartScreen({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const settings = useViewerStore((s) => s.settings);
 	const loading = useViewerStore((s) => s.loading);
-	const openReplay = useViewerStore((s) => s.openReplay);
+	// not openReplay: a recents card reopens through the beatmap association
+	// stored with its entry, which is what makes a manually paired .osu or
+	// .osz survive a restart
+	const openRecent = useViewerStore((s) => s.openRecent);
 	const clearRecents = useViewerStore((s) => s.clearRecents);
 
 	const recents = settings?.recents ?? [];
@@ -62,15 +66,24 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: () => void }) 
 		<div className="grid h-screen w-screen grid-rows-[48px_minmax(0,1fr)_26px] overflow-hidden bg-surface-viewport font-sans text-[#e4e4e7]">
 			<header className="flex min-w-0 items-center border-b border-border bg-surface-bar px-2 pl-2.5">
 				<Identity />
-				<Button
-					size="icon-sm"
-					variant="ghost"
-					aria-label="settings"
-					className="ml-auto"
-					onClick={onOpenSettings}
-				>
-					<Settings2 />
-				</Button>
+				<Tooltip>
+					<TooltipTrigger
+						render={
+							<Button
+								size="icon-sm"
+								variant="ghost"
+								aria-label="settings"
+								className="ml-auto"
+								onClick={onOpenSettings}
+							>
+								<Settings2 />
+							</Button>
+						}
+					/>
+					<TooltipContent>
+						stable install path, analysis overlays, effects and editing preferences
+					</TooltipContent>
+				</Tooltip>
 			</header>
 
 			<div className="grid min-h-0 grid-cols-[minmax(0,1fr)_400px]">
@@ -112,7 +125,7 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: () => void }) 
 							<p className="px-2.5 py-3 text-center text-[11px] text-[#71717a]">no replays opened yet</p>
 						) : (
 							recents.map((entry) => (
-								<RecentEntry key={entry.osrPath} entry={entry} nowMs={nowMs} openReplay={openReplay} />
+								<RecentEntry key={entry.osrPath} entry={entry} nowMs={nowMs} openRecent={openRecent} />
 							))
 						)}
 
