@@ -26,7 +26,7 @@ Engine and app crate (from `src-tauri/`):
 ```bash
 cargo test -p engine           # engine tests, debug profile
 cargo test -p engine --release # ALSO run this when touching the engine -- catches what a debug_assert! would hide
-cargo test                     # full workspace, including the app crate's command tests (tauri mock runtime)
+cargo test --workspace         # every crate: the app crate's command tests (tauri mock runtime) plus engine
 cargo doc -p engine --open     # the engine crate's own docs: parity bar, no-panic guarantee, module-to-lazer source map
 ```
 
@@ -45,9 +45,9 @@ Three layers with a strict dependency direction: engine → Tauri app crate → 
 
 **`src-tauri/crates/engine`** — pure Rust, zero Tauri dependencies. `.osu`/`.osr` codecs (`formats`), beatmap post-processing (`beatmap`), slider geometry ports (`path`), replay frame conversion + document/undo (`replay`), judgement simulation (`simulation`), the mod pipeline seam (`mods`, NoMod only so far), and `render_plan`, which assembles the package the frontend consumes. The doc comment in its `lib.rs` is the authoritative module-to-lazer-source map; every ported module cites the lazer file it ports, and deliberate divergences are documented at the code site and in `TODO.md`. No-panic guarantee: every public entry point taking untrusted input returns `Result<_, EngineError>` in every build profile; `limits.rs` holds the resource caps, each with its own boundary test.
 
-**`src-tauri/src`** — the Tauri app crate: IPC commands (`commands.rs`), the load pipeline (`load.rs`), osu! stable install detection and `osu!.db` beatmap lookup (`stable.rs`), the `.osz` extraction cache with orphan GC (`osz.rs`, `cache.rs`), asset-protocol media scoping (`media.rs`), persisted settings (`settings.rs`), and the `LoadedScene` wire type (`scene.rs`). Five commands: `load_replay`, `load_replay_with_beatmap`, `get_settings`, `set_osu_stable_path`, `set_viewer_prefs`.
+**`src-tauri/src`** — the Tauri app crate: IPC commands (`commands.rs`), the load pipeline (`load.rs`), osu! stable install detection and `osu!.db` beatmap lookup (`stable.rs`), the `.osz` extraction cache with orphan GC (`osz.rs`, `cache.rs`), asset-protocol media scoping (`media.rs`), persisted settings (`settings.rs`), and the `LoadedScene` wire type (`scene.rs`). Six commands: `load_replay`, `load_replay_with_beatmap`, `get_settings`, `set_osu_stable_path`, `set_viewer_prefs`, `clear_recents`.
 
-**`src/`** — React + Pixi frontend. `lib/scene-types.ts` is the only frontend declaration of the `LoadedScene` JSON contract; its field names are frozen by the Rust serialization tests. Flow: `lib/ipc.ts` invokes a load command → the zustand store (`state/store.ts`) installs the scene and computes derived data (`lib/derive.ts`) → `playback/clock.ts`'s `PlaybackClock` owns continuous time (rAF-driven, drift-corrected against the audio element) while the store holds discrete state only → `renderer/GameplayRenderer.ts` drives Pixi drawables (`renderer/drawables/`, Argon skin style) whose per-object animation timelines are precomputed by pure `*-tracks.ts` modules.
+**`src/`** — React + Pixi frontend. `lib/scene-types.ts` is the only frontend declaration of the `LoadedScene` JSON contract; its field names are frozen by the Rust serialization tests. Flow: `lib/ipc.ts` invokes a load command → the zustand store (`state/store.ts`) installs the scene and computes derived data (`lib/derive.ts`) → `playback/clock.ts`'s `PlaybackClock` owns continuous time (rAF-driven, drift-corrected against the audio element) while the store holds discrete state only → `renderer/GameplayRenderer.ts` drives Pixi drawables (`renderer/drawables/`, Argon skin style) whose per-object animation timelines are precomputed by pure `*-tracks.ts` modules. The chrome is a docked four-row shell (`components/shell/`): top bar, viewport + side panel + tab rail, the two-tier timeline (`components/timeline/`), and the status bar. Panels live in `components/panels/`; the editing panels render their real geometry with every control disabled until the replay-document IPC commands exist.
 
 ## Parity and testing conventions
 

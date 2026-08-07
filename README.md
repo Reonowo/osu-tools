@@ -74,7 +74,8 @@ See `fixtures/README.md` for the full fixture format, tolerance policy, and the 
 The frontend is a Tauri + React + Pixi app that renders a loaded replay against its
 beatmap: playback clock, zustand store, the Pixi `GameplayRenderer` and its Argon
 drawables (hit circles, slider bodies, cursor/trail, judgements, analysis overlays),
-and the timeline/controls chrome.
+and a docked application shell -- top bar, viewport with its side panel and tab rail,
+a two-tier timeline, and a status bar.
 
 ### Prerequisites
 
