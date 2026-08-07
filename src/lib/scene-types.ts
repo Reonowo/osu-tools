@@ -174,10 +174,32 @@ export interface OverlaySettings {
 	displayLength: number;
 }
 
+/** mirrors settings.rs RecentReplay */
+export interface RecentReplay {
+	osrPath: string;
+	title: string;
+	version: string;
+	playerName: string | null;
+	/** 0-1 */
+	accuracy: number;
+	maxCombo: number;
+	/** unix milliseconds */
+	openedAtMs: number;
+}
+
+/** mirrors settings.rs EditingPrefs. governs the (future) replay-editing
+ * surface -- kept separate from OverlaySettings, which these are not */
+export interface EditingSettings {
+	snapToLattice: boolean;
+	warnOnOverwrite: boolean;
+}
+
 /** mirrors settings.rs Settings */
 export interface Settings {
 	osuStablePath: string | null;
 	/** linear amplitude percent, 0-100 */
 	volume: number;
 	overlays: OverlaySettings;
+	recents: RecentReplay[];
+	editing: EditingSettings;
 }
