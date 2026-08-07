@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { NumberField } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { open } from "@tauri-apps/plugin-dialog";
+import { SectionLabel } from "@/components/panels/SectionLabel";
 import { DISPLAY_LENGTH_MAX, DISPLAY_LENGTH_MIN } from "@/state/defaults";
-import { useViewerStore, type OverlaySettings } from "@/state/store";
+import { useViewerStore, type EditingSettings, type OverlaySettings } from "@/state/store";
 
 const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string }[] = [
 	{ key: "clickMarkers", label: "show click markers" },
@@ -15,10 +16,17 @@ const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string }[] = [
 	{ key: "keyOverlay", label: "show key overlay" }
 ];
 
+const EDITING_TOGGLES: { key: keyof EditingSettings; label: string }[] = [
+	{ key: "snapToLattice", label: "snap frame edits to input lattice" },
+	{ key: "warnOnOverwrite", label: "warn before overwriting a replay" }
+];
+
 export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
 	const settings = useViewerStore((s) => s.settings);
 	const overlays = useViewerStore((s) => s.overlays);
 	const setOverlay = useViewerStore((s) => s.setOverlay);
+	const editing = useViewerStore((s) => s.editing);
+	const setEditing = useViewerStore((s) => s.setEditing);
 	const loadSettings = useViewerStore((s) => s.loadSettings);
 	const saveStablePath = useViewerStore((s) => s.saveStablePath);
 	const [saving, setSaving] = useState(false);
@@ -50,13 +58,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
 
 	return (
 		<Dialog open={isOpen} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-md">
+			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
 					<DialogTitle>settings</DialogTitle>
 				</DialogHeader>
 
 				<section className="space-y-2">
-					<h3 className="text-xs font-medium tracking-wide text-zinc-500 uppercase">osu! stable install</h3>
+					<SectionLabel>osu! stable install</SectionLabel>
 					<div className="flex items-center gap-2 text-sm">
 						<code className="min-w-0 flex-1 truncate rounded bg-zinc-800 px-2 py-1 text-xs">
 							{settings?.osuStablePath ?? "auto-detect"}
@@ -76,7 +84,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
 				</section>
 
 				<section className="space-y-2">
-					<h3 className="text-xs font-medium tracking-wide text-zinc-500 uppercase">analysis overlays</h3>
+					<SectionLabel>analysis overlays</SectionLabel>
 					{OVERLAY_TOGGLES.map(({ key, label }) => (
 						<label key={key} className="flex items-center justify-between text-sm">
 							{label}
@@ -101,6 +109,20 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
 							<span className="text-zinc-400">ms</span>
 						</span>
 					</label>
+				</section>
+
+				<section className="space-y-2">
+					<SectionLabel>editing</SectionLabel>
+					{EDITING_TOGGLES.map(({ key, label }) => (
+						<label key={key} className="flex items-center justify-between text-sm">
+							{label}
+							<Switch checked={editing[key]} onCheckedChange={(v) => setEditing(key, v)} />
+						</label>
+					))}
+					<p className="text-xs text-zinc-500">
+						the lattice is inferred per replay from its own untouched frames. turning snapping off produces
+						coordinates no real client would emit.
+					</p>
 				</section>
 			</DialogContent>
 		</Dialog>
