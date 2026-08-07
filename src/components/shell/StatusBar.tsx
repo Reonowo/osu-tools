@@ -5,6 +5,7 @@
 import { Fragment, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatMods } from "@/lib/format";
 import { formatLatticeStep } from "@/lib/lattice";
 import { audioExtendedBounds } from "@/lib/timeline";
@@ -81,7 +82,15 @@ export function StatusBar() {
 		<span>{formatMods(scene?.replay.mods ?? 0).toLowerCase()}</span>,
 		<span>{scene?.frames.length ?? 0} frames</span>,
 		<span>{scene?.renderPlan.objects.length ?? 0} objects</span>,
-		<span>{latticeLabel}</span>
+		// the one segment nothing else in the app explains: a bare "1/512" says
+		// neither what a lattice is nor where the number came from
+		<Tooltip>
+			<TooltipTrigger render={<span />}>{latticeLabel}</TooltipTrigger>
+			<TooltipContent side="top">
+				the coordinate grid this replay's own untouched frames land on, inferred from them at load. edits snap
+				to it so they stay indistinguishable from what the client would have written.
+			</TooltipContent>
+		</Tooltip>
 	];
 
 	if (warnings.length > 0) {

@@ -3,6 +3,7 @@
 // SidePanel can mount this as a single self-contained panel
 
 import { PanelHeader } from "@/components/shell/SidePanel";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ticksToUnixMs } from "@/lib/format";
 import { useViewerStore } from "@/state/store";
 
@@ -42,11 +43,13 @@ function truncateMd5(md5: string): string {
 	return md5.length > 8 ? `${md5.slice(0, 4)}…${md5.slice(-4)}` : md5;
 }
 
+// the four-letter tiles are the app's most compressed readout; each carries
+// what the letters stand for and what raising the number actually does
 const DIFFICULTY_TILES = [
-	["cs", "circleSize"],
-	["ar", "approachRate"],
-	["od", "overallDifficulty"],
-	["hp", "hpDrainRate"]
+	["cs", "circleSize", "circle size — larger values make every hit object smaller"],
+	["ar", "approachRate", "approach rate — larger values give you less time to see an object before it must be hit"],
+	["od", "overallDifficulty", "overall difficulty — larger values narrow the timing windows for a 300/100/50"],
+	["hp", "hpDrainRate", "hp drain rate — larger values drain the life bar faster and punish misses harder"]
 ] as const;
 
 export function ReplayPanel() {
@@ -162,18 +165,22 @@ export function ReplayPanel() {
 				{/* beatmap stats -- bpm and combo elements are not in LoadedScene,
 				see TODO.md's kiai-flash item for what surfacing them needs */}
 				<div className="grid grid-cols-4 gap-1.5">
-					{DIFFICULTY_TILES.map(([label, key]) => (
-						<div
-							key={label}
-							className="rounded-[7px] border border-border bg-surface-card px-1.5 py-[7px] text-center"
-						>
-							<div className="text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
-								{label}
-							</div>
-							<div className="text-[13px] font-semibold text-[#f4f4f5] tabular-nums">
-								{beatmap[key].toFixed(1)}
-							</div>
-						</div>
+					{DIFFICULTY_TILES.map(([label, key, description]) => (
+						<Tooltip key={label}>
+							{/* a div, not a span: the tile itself is a block, and the
+							wrapper is what the grid lays out */}
+							<TooltipTrigger render={<div />}>
+								<div className="rounded-[7px] border border-border bg-surface-card px-1.5 py-[7px] text-center">
+									<div className="text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
+										{label}
+									</div>
+									<div className="text-[13px] font-semibold text-[#f4f4f5] tabular-nums">
+										{beatmap[key].toFixed(1)}
+									</div>
+								</div>
+							</TooltipTrigger>
+							<TooltipContent>{description}</TooltipContent>
+						</Tooltip>
 					))}
 				</div>
 				<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[7px] text-[11px]">

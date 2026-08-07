@@ -5,6 +5,7 @@ import { ExportDialog } from "@/components/ExportDialog";
 import { MismatchDialog } from "@/components/MismatchDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { StartScreen } from "@/components/StartScreen";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { invokeSetViewerPrefs } from "@/lib/ipc";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
@@ -57,7 +58,11 @@ export default function App() {
 	}, [lastError]);
 
 	return (
-		<>
+		// one provider for the whole app: every Tooltip below already existed but
+		// had no Provider above it, so they all ran on base-ui's own default
+		// delay. 300ms is long enough not to fire on a cursor passing over an
+		// icon and short enough to feel like an answer to hovering one
+		<TooltipProvider delay={300}>
 			{scene === null ? (
 				<StartScreen onOpenSettings={() => setSettingsOpen(true)} />
 			) : (
@@ -67,6 +72,6 @@ export default function App() {
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
 			<Toaster theme="dark" position="bottom-right" richColors />
-		</>
+		</TooltipProvider>
 	);
 }

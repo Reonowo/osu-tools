@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { LoadedSceneWarning, Settings } from "@/lib/scene-types";
-import { DEFAULT_EDITING, DEFAULT_OVERLAYS } from "@/state/defaults";
+import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "@/state/defaults";
 import { createViewerStore, type ViewerState } from "@/state/store";
 import { testScene } from "@/test/scene";
 import { selectWarnings, warningList, warningText } from "./warnings";
@@ -10,7 +10,8 @@ const settings: Settings = {
 	volume: 100,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
-	editing: DEFAULT_EDITING
+	editing: DEFAULT_EDITING,
+	effects: DEFAULT_EFFECTS
 };
 
 // zustand's useStore drives useSyncExternalStore, which compares each
@@ -22,6 +23,7 @@ describe("selectWarnings identity stability", () => {
 	const deps = {
 		loadReplay: async () => testScene(),
 		loadReplayWithBeatmap: async () => testScene(),
+		loadRecentReplay: async () => testScene(),
 		getSettings: async () => settings,
 		setOsuStablePath: async () => settings,
 		setViewerPrefs: async () => settings,

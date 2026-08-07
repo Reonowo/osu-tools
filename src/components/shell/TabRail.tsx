@@ -9,7 +9,7 @@ import { Activity, ChartSpline, History, Info, Keyboard, PanelRight, Tag, type L
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useViewerStore, type PanelTab } from "@/state/store";
+import { useViewerStore, type PanelTab, type ViewerState } from "@/state/store";
 
 export const PANEL_TABS: { id: PanelTab; label: string; Icon: LucideIcon }[] = [
 	{ id: "replay", label: "replay", Icon: Info },
@@ -59,11 +59,28 @@ const RAIL_CONTROL_ACTIVE = "bg-primary/[.13]! text-primary! border-transparent!
 const RAIL_CONTROL_INACTIVE = "text-[#71717a]!";
 const RAIL_INDICATOR = "pointer-events-none absolute -left-1.5 top-2.5 bottom-2.5 w-0.5 rounded-[1px] bg-primary";
 
+/** what a rail-tab click means. base-ui's Tab guards its own click handling
+ * on !active, so for the selected tab this handler is the only thing that
+ * runs -- and clicking the tab you are already on means "put that panel
+ * away", not "open it again". an inactive tab runs both base-ui's
+ * onValueChange and this, and setPanelTab is idempotent, so they agree.
+ * exported because the click's meaning is the whole of this fix and the
+ * headless suite has no dom to click through */
+export function railTabClick(
+	active: boolean,
+	id: PanelTab,
+	actions: Pick<ViewerState, "setPanelTab" | "togglePanel">
+): void {
+	if (active) actions.togglePanel();
+	else actions.setPanelTab(id);
+}
+
 function RailTrigger({ id, label, Icon }: (typeof PANEL_TABS)[number]) {
 	// selecting a boolean per trigger keeps a panelTab change from
 	// re-rendering all six -- only the one whose active flag actually flips
 	const active = useViewerStore((s) => s.panelTab === id);
 	const setPanelTab = useViewerStore((s) => s.setPanelTab);
+	const togglePanel = useViewerStore((s) => s.togglePanel);
 	return (
 		<Tooltip>
 			<TooltipTrigger
@@ -71,12 +88,7 @@ function RailTrigger({ id, label, Icon }: (typeof PANEL_TABS)[number]) {
 					<TabsTrigger
 						value={id}
 						aria-label={label}
-						// base-ui's Tab guards its own click handling on !active and
-						// never re-commits the current value, so a click on the
-						// already-selected tab would otherwise skip onValueChange
-						// entirely -- with the panel closed that click still means
-						// "show the panel", which is exactly what setPanelTab does
-						onClick={() => setPanelTab(id)}
+						onClick={() => railTabClick(active, id, { setPanelTab, togglePanel })}
 						className={cn(RAIL_CONTROL_BASE, active ? RAIL_CONTROL_ACTIVE : RAIL_CONTROL_INACTIVE)}
 					>
 						<Icon className="size-4" />

@@ -14,6 +14,9 @@ import { useViewerStore, type ViewerMode } from "@/state/store";
 const LOGO_SKEW = "skew-x-[-11.3deg]";
 const LOGO_COUNTER_SKEW = "skew-x-[11.3deg]";
 
+// why the history controls are dead, not what they would be called
+const EDIT_BLOCKER = "the replay document has no mutation surface until the replay-document ipc commands land";
+
 // the "R" tile + wordmark, shared verbatim with StartScreen's header so the
 // skew constants above stay defined in exactly one place
 export function Identity() {
@@ -101,13 +104,27 @@ export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () =>
 
 				<Separator orientation="vertical" className="h-6" />
 
+				{/* undo/redo are icon-only *and* disabled, so the span wrapper is
+				load-bearing here for the reason the export button's no longer is:
+				a natively disabled button suppresses mouse events outright, and
+				the tooltip is the only thing that can say why they are dead */}
 				<div className="flex items-center gap-1">
-					<Button size="icon-sm" variant="ghost" aria-label="undo" disabled>
-						<Undo2 />
-					</Button>
-					<Button size="icon-sm" variant="ghost" aria-label="redo" disabled>
-						<Redo2 />
-					</Button>
+					<Tooltip>
+						<TooltipTrigger render={<span />}>
+							<Button size="icon-sm" variant="ghost" aria-label="undo" disabled>
+								<Undo2 />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>nothing to undo: {EDIT_BLOCKER}</TooltipContent>
+					</Tooltip>
+					<Tooltip>
+						<TooltipTrigger render={<span />}>
+							<Button size="icon-sm" variant="ghost" aria-label="redo" disabled>
+								<Redo2 />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>nothing to redo: {EDIT_BLOCKER}</TooltipContent>
+					</Tooltip>
 				</div>
 
 				{/* no dirty chip: replay editing has no ipc yet, so a document can
@@ -135,9 +152,18 @@ export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () =>
 					<TooltipContent>export needs the derived-field regeneration in TODO.md</TooltipContent>
 				</Tooltip>
 
-				<Button size="icon-sm" variant="ghost" aria-label="settings" onClick={onOpenSettings}>
-					<Settings2 />
-				</Button>
+				<Tooltip>
+					<TooltipTrigger
+						render={
+							<Button size="icon-sm" variant="ghost" aria-label="settings" onClick={onOpenSettings}>
+								<Settings2 />
+							</Button>
+						}
+					/>
+					<TooltipContent>
+						stable install path, analysis overlays, effects and editing preferences
+					</TooltipContent>
+				</Tooltip>
 			</div>
 		</header>
 	);
