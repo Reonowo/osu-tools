@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { audioExtendedBounds } from "@/lib/timeline";
 import { htmlAudioAdapter } from "@/playback/clock";
 import { playbackClock } from "@/playback/instance";
 import { GameplayRenderer } from "@/renderer/GameplayRenderer";
@@ -72,7 +73,8 @@ export function PlayerView() {
 			const durationMs = audio.duration * 1000;
 			// streaming sources report Infinity; that must not reach the bounds
 			if (!Number.isFinite(durationMs)) return;
-			playbackClock.setBounds(derived.bounds.minTime, Math.max(derived.bounds.maxTime, durationMs));
+			const extended = audioExtendedBounds(derived.bounds, durationMs);
+			playbackClock.setBounds(extended.minTime, extended.maxTime);
 			// publish so the timeline maps against the same audio-extended bounds
 			viewerStore.getState().setAudioDuration(durationMs);
 		};

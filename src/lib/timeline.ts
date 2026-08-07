@@ -7,6 +7,19 @@ export interface TimeBounds {
 	maxTime: number;
 }
 
+/** extends bounds.maxTime to cover the audio when it outlives the last
+ * object -- a replay's frames can end before its audio does, and every
+ * timeline tier must map against the same effective range or the playhead
+ * runs off the end (or the trailing audio is pegged at 100% and unseekable).
+ * audioDurationMs is null before the audio element's metadata has loaded, in
+ * which case the frame-derived bounds stand alone */
+export function audioExtendedBounds(bounds: TimeBounds, audioDurationMs: number | null): TimeBounds {
+	return {
+		minTime: bounds.minTime,
+		maxTime: audioDurationMs === null ? bounds.maxTime : Math.max(bounds.maxTime, audioDurationMs)
+	};
+}
+
 export function fractionFor(bounds: TimeBounds, t: number): number {
 	const span = bounds.maxTime - bounds.minTime;
 	if (span <= 0) return 0;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { adjacentFrameTime, fractionFor, statsAt, timeFor } from "./timeline";
+import { adjacentFrameTime, audioExtendedBounds, fractionFor, statsAt, timeFor } from "./timeline";
 
 const bounds = { minTime: -1500, maxTime: 8500 };
 
@@ -38,6 +38,20 @@ describe("timeline mapping", () => {
 		for (const t of [-1500, -750, 0, 1, 4000, 8499, 8500]) {
 			expect(timeFor(bounds, fractionFor(bounds, t))).toBeCloseTo(t, 6);
 		}
+	});
+});
+
+describe("audioExtendedBounds", () => {
+	test("null audio duration leaves the frame-derived bounds untouched", () => {
+		expect(audioExtendedBounds(bounds, null)).toEqual(bounds);
+	});
+
+	test("a shorter audio track does not shrink the frame-derived bounds", () => {
+		expect(audioExtendedBounds(bounds, 100)).toEqual(bounds);
+	});
+
+	test("a longer audio track extends maxTime, minTime is untouched", () => {
+		expect(audioExtendedBounds(bounds, 20_000)).toEqual({ minTime: -1500, maxTime: 20_000 });
 	});
 });
 
