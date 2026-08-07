@@ -3,7 +3,7 @@
 // mirror settings.rs's OverlayPrefs::default / Settings::default, which is
 // what a fresh (or legacy) settings.json hydrates to
 
-import type { OverlaySettings } from "../lib/scene-types";
+import type { EditingSettings, OverlaySettings } from "../lib/scene-types";
 
 /** osurulesetconfigmanager.cs:27-31 */
 export const DEFAULT_OVERLAYS: OverlaySettings = {
@@ -13,6 +13,12 @@ export const DEFAULT_OVERLAYS: OverlaySettings = {
 	hideCursor: false,
 	keyOverlay: true,
 	displayLength: 800
+};
+
+/** mirrors settings.rs EditingPrefs::default() */
+export const DEFAULT_EDITING: EditingSettings = {
+	snapToLattice: true,
+	warnOnOverwrite: true
 };
 
 /** linear amplitude percent */
@@ -30,4 +36,15 @@ export function clampVolume(volume: number): number {
 
 export function clampDisplayLength(ms: number): number {
 	return Math.round(Math.min(Math.max(ms, DISPLAY_LENGTH_MIN), DISPLAY_LENGTH_MAX));
+}
+
+/** the detail tier's visible span, ms. the floor matches timeline-view's
+ * MIN_SPAN_MS; the ceiling is a comfortable "whole phrase" view */
+export const DETAIL_SPAN_MIN = 250;
+export const DETAIL_SPAN_MAX = 120_000;
+export const DEFAULT_DETAIL_SPAN = 20_000;
+
+export function clampDetailSpan(spanMs: number): number {
+	if (!Number.isFinite(spanMs)) return DETAIL_SPAN_MAX;
+	return Math.min(Math.max(spanMs, DETAIL_SPAN_MIN), DETAIL_SPAN_MAX);
 }

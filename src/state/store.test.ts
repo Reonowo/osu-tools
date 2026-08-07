@@ -1,10 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import type { IpcError, LoadedScene, Settings } from "../lib/scene-types";
+import type { IpcError, LoadedScene, RecentReplay, Settings } from "../lib/scene-types";
 import { testScene } from "../test/scene";
-import { DEFAULT_OVERLAYS } from "./defaults";
+import { DEFAULT_EDITING, DEFAULT_OVERLAYS, DETAIL_SPAN_MAX, DETAIL_SPAN_MIN } from "./defaults";
 import { createViewerStore, type IpcDeps } from "./store";
 
-const baseSettings: Settings = { osuStablePath: null, volume: 100, overlays: DEFAULT_OVERLAYS };
+const baseSettings: Settings = {
+	osuStablePath: null,
+	volume: 100,
+	overlays: DEFAULT_OVERLAYS,
+	recents: [],
+	editing: DEFAULT_EDITING
+};
+
+const sampleRecent: RecentReplay = {
+	osrPath: "a.osr",
+	title: "Reply",
+	version: "Moonlit Applied",
+	playerName: "adminuser",
+	accuracy: 0.9651,
+	maxCombo: 300,
+	openedAtMs: 1_770_000_000_000
+};
 
 function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 	return {
@@ -12,7 +28,8 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 		loadReplayWithBeatmap: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays) => ({ ...baseSettings, volume, overlays }),
+		setViewerPrefs: async (volume, overlays, editing) => ({ ...baseSettings, volume, overlays, editing }),
+		clearRecents: async () => ({ ...baseSettings, recents: [] }),
 		...overrides
 	};
 }
@@ -31,6 +48,35 @@ describe("load flow", () => {
 		expect(s.sceneId).toBe(1);
 		expect(s.loading).toBe(false);
 		expect(s.lastError).toBeNull();
+	});
+
+	test("a successful load records the replay's path", async () => {
+		const store = createViewerStore(deps());
+		await store.getState().openReplay("C:/replays/a.osr");
+		expect(store.getState().osrPath).toBe("C:/replays/a.osr");
+	});
+
+	test("a failing load leaves osrPath pointing at the still-displayed scene, exactly like scene itself", async () => {
+		// mirrors "a stale success followed by a failing newest load leaves the
+		// stale scene displayed" below: a failed load never clears `scene`, so
+		// osrPath (which HistoryPanel reads to name that same displayed scene's
+		// .osr) must not diverge from it either
+		let shouldFail = false;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => {
+					if (shouldFail) throw { kind: "replayParse", message: "bad" } satisfies IpcError;
+					return testScene();
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		expect(store.getState().osrPath).toBe("C:\\r.osr");
+
+		shouldFail = true;
+		await store.getState().openReplay("C:\\bad.osr");
+		expect(store.getState().scene).not.toBeNull(); // the previous scene is still displayed
+		expect(store.getState().osrPath).toBe("C:\\r.osr"); // and osrPath still names it, not the failed attempt
 	});
 
 	test("beatmapNotFound surfaces with the pickBeatmap recovery", async () => {
@@ -267,7 +313,9 @@ describe("viewer preferences", () => {
 		const stored = {
 			osuStablePath: "D:\\osu!",
 			volume: 42,
-			overlays: { ...DEFAULT_OVERLAYS, cursorPath: true, keyOverlay: false, displayLength: 1400 }
+			overlays: { ...DEFAULT_OVERLAYS, cursorPath: true, keyOverlay: false, displayLength: 1400 },
+			recents: [],
+			editing: { ...DEFAULT_EDITING, snapToLattice: false }
 		};
 		const store = createViewerStore(deps({ getSettings: async () => stored }));
 
@@ -276,6 +324,7 @@ describe("viewer preferences", () => {
 
 		expect(store.getState().volume).toBe(42);
 		expect(store.getState().overlays).toEqual(stored.overlays);
+		expect(store.getState().editing).toEqual(stored.editing);
 		expect(store.getState().settings).toEqual(stored);
 	});
 
@@ -289,6 +338,7 @@ describe("viewer preferences", () => {
 		);
 		await store.getState().hydrateSettings();
 		expect(store.getState().overlays).toEqual({ ...DEFAULT_OVERLAYS, cursorPath: true });
+		expect(store.getState().editing).toEqual(DEFAULT_EDITING); // a file missing editing entirely still hydrates
 
 		// startup must not break when the settings read itself fails
 		const failing = createViewerStore(
@@ -301,6 +351,7 @@ describe("viewer preferences", () => {
 		await failing.getState().hydrateSettings();
 		expect(failing.getState().volume).toBe(100);
 		expect(failing.getState().overlays).toEqual(DEFAULT_OVERLAYS);
+		expect(failing.getState().editing).toEqual(DEFAULT_EDITING);
 	});
 
 	test("a volume edit made while hydration is in flight wins over the loaded value", async () => {
@@ -323,7 +374,9 @@ describe("viewer preferences", () => {
 
 		expect(store.getState().volume).toBe(37); // the user's edit survives
 		expect(store.getState().overlays).toEqual(DEFAULT_OVERLAYS); // untouched fields still hydrate
-		expect(store.getState().settings?.volume).toBe(80);
+		// the preserved edit is written through, so settings mirrors the new
+		// persisted state rather than the value the file held before it
+		expect(store.getState().settings?.volume).toBe(37);
 	});
 
 	test("a volume edit that returns to the starting value still wins over the loaded value", async () => {
@@ -370,6 +423,112 @@ describe("viewer preferences", () => {
 
 		expect(store.getState().overlays.frameMarkers).toBe(true); // the edit survives
 		expect(store.getState().volume).toBe(60); // untouched fields still hydrate
+	});
+
+	test("hydration does not stomp an editing pref changed while it was in flight", async () => {
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					})
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setEditing("snapToLattice", false);
+		resolveSettings({ ...baseSettings, editing: { snapToLattice: true, warnOnOverwrite: true } });
+		await hydrating;
+
+		expect(store.getState().editing.snapToLattice).toBe(false); // the edit survives
+	});
+
+	test("an edit made while hydration is in flight is written through once it resolves", async () => {
+		// the edit predates the persistence subscription (App installs it only
+		// after hydration resolves) and the hydration guards re-emit nothing for
+		// it, so hydrateSettings itself must save what it preserved -- otherwise
+		// the pref silently reverts on the next launch
+		const saved: { volume: number; editing: Settings["editing"] }[] = [];
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					}),
+				setViewerPrefs: async (volume, overlays, editing) => {
+					saved.push({ volume, editing });
+					return { ...baseSettings, volume, overlays, editing };
+				}
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setEditing("snapToLattice", false);
+		resolveSettings({ ...baseSettings, volume: 80 });
+		await hydrating;
+
+		expect(saved).toHaveLength(1);
+		expect(saved[0].editing.snapToLattice).toBe(false); // the preserved edit is persisted
+		expect(saved[0].volume).toBe(80); // hydrated fields ride along unchanged
+		expect(store.getState().settings?.editing.snapToLattice).toBe(false);
+	});
+
+	test("an edit made while the write-through save is in flight is saved as well", async () => {
+		// the write-through has the same shape of gap as the settings read: its
+		// own await. an edit landing inside it is absent from the in-flight
+		// save and still predates the persistence subscription, so the store
+		// must notice and save again with the fresh values
+		const saved: Settings["editing"][] = [];
+		const resolvers: (() => void)[] = [];
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					}),
+				setViewerPrefs: (volume, overlays, editing) => {
+					saved.push(editing);
+					return new Promise<Settings>((resolve) => {
+						resolvers.push(() => resolve({ ...baseSettings, volume, overlays, editing }));
+					});
+				}
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setEditing("snapToLattice", false);
+		resolveSettings(baseSettings);
+		for (let i = 0; i < 20 && saved.length === 0; i++) await Promise.resolve();
+		expect(saved).toHaveLength(1); // the first write-through is in flight
+
+		store.getState().setEditing("warnOnOverwrite", false); // lands mid-save
+		resolvers[0]();
+		for (let i = 0; i < 20 && resolvers.length < 2; i++) await Promise.resolve();
+		expect(saved).toHaveLength(2); // the mid-save edit forces a second save
+		resolvers[1]();
+		await hydrating;
+
+		expect(saved[1]).toEqual({ snapToLattice: false, warnOnOverwrite: false });
+		expect(store.getState().settings?.editing).toEqual({ snapToLattice: false, warnOnOverwrite: false });
+	});
+
+	test("hydration without in-flight edits writes nothing back", async () => {
+		// the loaded values round-tripping straight back into settings.json is
+		// exactly what installing persistence after hydration exists to prevent
+		let saves = 0;
+		const store = createViewerStore(
+			deps({
+				setViewerPrefs: async (volume, overlays, editing) => {
+					saves += 1;
+					return { ...baseSettings, volume, overlays, editing };
+				}
+			})
+		);
+		await store.getState().hydrateSettings();
+		expect(saves).toBe(0);
 	});
 
 	test("loadSettings leaves volume and overlays alone", async () => {
@@ -552,5 +711,175 @@ describe("pendingRecovery (openers.ts routes a dropped beatmap through this, not
 		await store.getState().openWithBeatmap("C:\\r.osr", "C:\\m.osu");
 		expect(store.getState().pendingMismatch).not.toBeNull();
 		expect(store.getState().pendingRecovery).toBeNull();
+	});
+});
+
+describe("recents", () => {
+	test("a successful load refreshes settings so the new recent is visible", async () => {
+		let settingsCalls = 0;
+		const store = createViewerStore(
+			deps({
+				getSettings: async () => {
+					settingsCalls += 1;
+					return { ...baseSettings, recents: settingsCalls > 1 ? [sampleRecent] : [] };
+				}
+			})
+		);
+		await store.getState().hydrateSettings();
+		expect(store.getState().settings?.recents).toEqual([]);
+
+		await store.getState().openReplay("a.osr");
+		expect(store.getState().settings?.recents).toEqual([sampleRecent]);
+	});
+
+	test("a failed settings refresh leaves the loaded scene alone", async () => {
+		const store = createViewerStore(
+			deps({
+				getSettings: async () => {
+					throw new Error("unreadable");
+				}
+			})
+		);
+		await store.getState().openReplay("a.osr");
+		expect(store.getState().scene).not.toBeNull();
+		expect(store.getState().lastError).toBeNull();
+	});
+
+	test("a stale refresh cannot clobber a newer one when the two getSettings calls resolve out of order", async () => {
+		// each load's post-install refresh issues its own independent
+		// getSettings call -- unlike the loads themselves, those calls have no
+		// queue ordering them, so ordinary ipc jitter can let an older load's
+		// refresh resolve after a newer load's. resolving them out of order
+		// here (newer first, older last) proves a sequence guard decides the
+		// winner rather than whichever ipc call happens to land last
+		let resolveOlder!: (settings: Settings) => void;
+		let resolveNewer!: (settings: Settings) => void;
+		let call = 0;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						call += 1;
+						if (call === 1) resolveOlder = resolve;
+						else resolveNewer = resolve;
+					})
+			})
+		);
+
+		await store.getState().openReplay("a.osr");
+		await store.getState().openReplay("b.osr");
+
+		resolveNewer({ ...baseSettings, osuStablePath: "newer" });
+		await Promise.resolve();
+		await Promise.resolve();
+		resolveOlder({ ...baseSettings, osuStablePath: "older" });
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(store.getState().settings?.osuStablePath).toBe("newer");
+	});
+
+	test("a pending refresh cannot clobber a settings write that lands before it resolves", async () => {
+		// the post-install refresh has no ordering relationship to
+		// saveStablePath either: a getSettings issued by the load can resolve
+		// after the save's response and would otherwise publish its stale
+		// snapshot over the path the user just saved
+		let resolveRefresh!: (settings: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveRefresh = resolve;
+					})
+			})
+		);
+
+		await store.getState().openReplay("a.osr");
+		await store.getState().saveStablePath("D:\\osu!");
+		expect(store.getState().settings?.osuStablePath).toBe("D:\\osu!");
+
+		resolveRefresh(baseSettings); // the pre-save snapshot arrives late
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(store.getState().settings?.osuStablePath).toBe("D:\\osu!");
+	});
+
+	test("a slow hydration read cannot cancel or clobber a newer post-load refresh", async () => {
+		// hydration claims its publication slot at initiation: when a replay
+		// load's refresh starts after it, a late-resolving hydration read must
+		// neither publish its older settings snapshot nor invalidate the newer
+		// refresh -- while still applying the frontend-owned volume it loaded
+		let resolveHydration!: (settings: Settings) => void;
+		let resolveRefresh!: (settings: Settings) => void;
+		let call = 0;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						call += 1;
+						if (call === 1) resolveHydration = resolve;
+						else resolveRefresh = resolve;
+					})
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		await store.getState().openReplay("a.osr"); // the refresh claims the newer slot
+		resolveHydration({ ...baseSettings, volume: 55 });
+		await hydrating;
+		resolveRefresh({ ...baseSettings, recents: [sampleRecent] });
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(store.getState().volume).toBe(55); // frontend-owned prefs still hydrate
+		expect(store.getState().settings?.recents).toEqual([sampleRecent]); // the newer refresh survives
+	});
+
+	test("clearRecents publishes the returned settings", async () => {
+		const store = createViewerStore(
+			deps({
+				clearRecents: async () => ({ ...baseSettings, recents: [] })
+			})
+		);
+		await store.getState().clearRecents();
+		expect(store.getState().settings?.recents).toEqual([]);
+	});
+});
+
+describe("shell state", () => {
+	test("watch mode collapses the panel, edit mode opens it", () => {
+		const store = createViewerStore(deps());
+		expect(store.getState().mode).toBe("watch");
+		store.getState().setMode("edit");
+		expect(store.getState().panelOpen).toBe(true);
+		store.getState().setMode("watch");
+		expect(store.getState().panelOpen).toBe(false);
+	});
+
+	test("the rail toggle overrides the mode default in either direction", () => {
+		const store = createViewerStore(deps());
+		store.getState().setMode("watch");
+		store.getState().togglePanel();
+		expect(store.getState().panelOpen).toBe(true);
+		expect(store.getState().mode).toBe("watch");
+	});
+
+	test("selecting a tab opens the panel -- a tab click with a closed panel does nothing otherwise", () => {
+		const store = createViewerStore(deps());
+		store.getState().setMode("watch");
+		store.getState().setPanelTab("analysis");
+		expect(store.getState().panelTab).toBe("analysis");
+		expect(store.getState().panelOpen).toBe(true);
+	});
+
+	test("the detail span is clamped to the allowed range", () => {
+		const store = createViewerStore(deps());
+		store.getState().setDetailSpan(10);
+		expect(store.getState().detailSpanMs).toBe(DETAIL_SPAN_MIN);
+		store.getState().setDetailSpan(1e9);
+		expect(store.getState().detailSpanMs).toBe(DETAIL_SPAN_MAX);
+		store.getState().setDetailSpan(Number.NaN);
+		expect(store.getState().detailSpanMs).toBe(DETAIL_SPAN_MAX);
 	});
 });
