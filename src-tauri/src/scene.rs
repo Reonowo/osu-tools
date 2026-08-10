@@ -15,13 +15,16 @@ use engine::render_plan::RenderPlan;
 use engine::replay::frames::ReplayFrame;
 use engine::simulation::score::JudgementKind;
 use engine::simulation::{JudgementEvent, JudgementTimeline};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Warning;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadedScene {
+    /// session identity, stamped by install_scene; a plain json number
+    /// (install counter, nowhere near 2^53)
+    pub epoch: u64,
     pub beatmap: BeatmapMeta,
     pub replay: ReplayMeta,
     pub frames: Vec<FrameDto>,
@@ -77,7 +80,7 @@ pub struct ReplayMeta {
     pub beatmap_md5: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameDto {
     pub time: f64,
@@ -87,11 +90,27 @@ pub struct FrameDto {
     pub buttons: u32,
 }
 
+impl FrameDto {
+    pub fn from_frame(f: &ReplayFrame) -> FrameDto {
+        FrameDto {
+            time: f.time,
+            x: f.pos.x,
+            y: f.pos.y,
+            buttons: f.buttons.raw,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SimulationDto {
-    Authoritative { events: Vec<JudgementEventDto>, totals: TotalsDto },
-    NotSimulated { reason: NotSimulatedReason },
+    Authoritative {
+        events: Vec<JudgementEventDto>,
+        totals: TotalsDto,
+    },
+    NotSimulated {
+        reason: NotSimulatedReason,
+    },
 }
 
 impl SimulationDto {
@@ -211,6 +230,7 @@ pub fn assemble_scene(
     warnings: Vec<Warning>,
 ) -> LoadedScene {
     LoadedScene {
+        epoch: 0,
         beatmap: BeatmapMeta {
             title: map.title.clone(),
             artist: map.artist.clone(),
@@ -243,10 +263,7 @@ pub fn assemble_scene(
             online_score_id: header.online_score_id.to_string(),
             beatmap_md5: header.beatmap_md5.clone(),
         },
-        frames: frames
-            .iter()
-            .map(|f| FrameDto { time: f.time, x: f.pos.x, y: f.pos.y, buttons: f.buttons.raw })
-            .collect(),
+        frames: frames.iter().map(FrameDto::from_frame).collect(),
         render_plan,
         simulation,
         audio_path: audio_path.map(|p| p.to_string_lossy().into_owned()),
@@ -266,10 +283,16 @@ mod tests {
     #[test]
     fn judgement_kinds_serialize_type_tagged() {
         let kind = JudgementKindDto::from(&JudgementKind::Circle(HitGrade::Great));
-        assert_eq!(serde_json::to_value(&kind).unwrap(), json!({ "type": "circle", "grade": "great" }));
+        assert_eq!(
+            serde_json::to_value(&kind).unwrap(),
+            json!({ "type": "circle", "grade": "great" })
+        );
 
         let kind = JudgementKindDto::from(&JudgementKind::SliderHead { hit: false });
-        assert_eq!(serde_json::to_value(&kind).unwrap(), json!({ "type": "sliderHead", "hit": false }));
+        assert_eq!(
+            serde_json::to_value(&kind).unwrap(),
+            json!({ "type": "sliderHead", "hit": false })
+        );
 
         let kind = JudgementKindDto::from(&JudgementKind::SliderAggregate(HitGrade::Ok));
         assert_eq!(
@@ -278,7 +301,10 @@ mod tests {
         );
 
         let kind = JudgementKindDto::from(&JudgementKind::SpinnerBonus);
-        assert_eq!(serde_json::to_value(&kind).unwrap(), json!({ "type": "spinnerBonus" }));
+        assert_eq!(
+            serde_json::to_value(&kind).unwrap(),
+            json!({ "type": "spinnerBonus" })
+        );
     }
 
     #[test]
@@ -291,11 +317,20 @@ mod tests {
                 combo_after: 1,
                 accuracy_after: 50.0 / 300.0,
             }],
-            totals: HitTotals { count_300: 0, count_100: 0, count_50: 1, count_miss: 0, max_combo: 1 },
+            totals: HitTotals {
+                count_300: 0,
+                count_100: 0,
+                count_50: 1,
+                count_miss: 0,
+                max_combo: 1,
+            },
         };
         let v = serde_json::to_value(SimulationDto::authoritative(&timeline)).unwrap();
         assert_eq!(v["status"], "authoritative");
-        assert_eq!(v["totals"], json!({ "count300": 0, "count100": 0, "count50": 1, "countMiss": 0, "maxCombo": 1 }));
+        assert_eq!(
+            v["totals"],
+            json!({ "count300": 0, "count100": 0, "count50": 1, "countMiss": 0, "maxCombo": 1 })
+        );
         assert_eq!(v["events"][0]["objectIndex"], 0);
         assert_eq!(v["events"][0]["comboAfter"], 1);
         assert_eq!(v["events"][0]["kind"]["grade"], "meh");
@@ -304,14 +339,21 @@ mod tests {
             reason: NotSimulatedReason::UnsupportedMods,
         })
         .unwrap();
-        assert_eq!(v, json!({ "status": "notSimulated", "reason": "unsupportedMods" }));
+        assert_eq!(
+            v,
+            json!({ "status": "notSimulated", "reason": "unsupportedMods" })
+        );
     }
 
     #[test]
     fn assembled_scenes_carry_the_full_camel_case_contract() {
         let map = engine::formats::beatmap::decode_beatmap_bytes(
-            &std::fs::read(crate::testutil::fixtures_dir().join("beatmaps").join("stacking-v14.osu"))
-                .unwrap(),
+            &std::fs::read(
+                crate::testutil::fixtures_dir()
+                    .join("beatmaps")
+                    .join("stacking-v14.osu"),
+            )
+            .unwrap(),
         )
         .unwrap();
         let processed = engine::beatmap::process_beatmap(&map).unwrap();
@@ -332,13 +374,16 @@ mod tests {
             &header,
             &frames,
             render_plan,
-            SimulationDto::NotSimulated { reason: NotSimulatedReason::BeatmapMismatch },
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::BeatmapMismatch,
+            },
             Some(std::path::PathBuf::from(r"C:\somewhere\audio.mp3")),
             None,
             vec![crate::error::Warning::AudioMissing],
         );
         let v = serde_json::to_value(&scene).unwrap();
 
+        assert_eq!(v["epoch"], 0);
         assert_eq!(v["beatmap"]["title"], "Stacking Fixture");
         assert_eq!(v["beatmap"]["md5"], "abc123");
         assert_eq!(v["beatmap"]["audioLeadIn"], map.audio_lead_in);
@@ -346,7 +391,10 @@ mod tests {
         assert_eq!(v["replay"]["playerName"], "test");
         assert_eq!(v["replay"]["timestampTicks"], "638712000000000001");
         assert_eq!(v["replay"]["onlineScoreId"], "18446744073709551615");
-        assert_eq!(v["frames"][0], json!({ "time": 16.0, "x": 100.0, "y": 200.0, "buttons": 1 }));
+        assert_eq!(
+            v["frames"][0],
+            json!({ "time": 16.0, "x": 100.0, "y": 200.0, "buttons": 1 })
+        );
         assert_eq!(v["renderPlan"]["playfield"]["width"], 512.0);
         assert_eq!(v["simulation"]["status"], "notSimulated");
         assert_eq!(v["audioPath"], r"C:\somewhere\audio.mp3");

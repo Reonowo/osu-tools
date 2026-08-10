@@ -19,7 +19,9 @@ pub fn write_osz(path: &Path, entries: &[(&str, &[u8])]) {
 }
 
 pub fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("fixtures")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("fixtures")
 }
 
 pub fn test_header(beatmap_md5: &str, mods: u32) -> engine::formats::osr::OsrHeader {
@@ -47,24 +49,62 @@ pub fn test_header(beatmap_md5: &str, mods: u32) -> engine::formats::osr::OsrHea
 
 /// encodes a minimal valid .osr via the engine's own encoder; actions default
 /// to a tiny cursor trace when None
-pub fn osr_bytes(beatmap_md5: &str, mods: u32, actions: Option<Vec<engine::formats::osr::ReplayAction>>) -> Vec<u8> {
+pub fn osr_bytes(
+    beatmap_md5: &str,
+    mods: u32,
+    actions: Option<Vec<engine::formats::osr::ReplayAction>>,
+) -> Vec<u8> {
+    osr_bytes_versioned(beatmap_md5, mods, actions, 20151228)
+}
+
+/// osr_bytes with an explicit header version -- the lazer-native gating
+/// tests need version >= formats::osr::FIRST_LAZER_VERSION
+pub fn osr_bytes_versioned(
+    beatmap_md5: &str,
+    mods: u32,
+    actions: Option<Vec<engine::formats::osr::ReplayAction>>,
+    version: u32,
+) -> Vec<u8> {
     use engine::formats::osr::{encode_osr, EncodeOptions, OsrFile, PayloadSource, ReplayAction};
     let actions = actions.unwrap_or_else(|| {
         vec![
-            ReplayAction { delta: 0, x: 256.0, y: 192.0, z: 0 },
-            ReplayAction { delta: 1000, x: 256.0, y: 192.0, z: 1 },
-            ReplayAction { delta: 16, x: 256.0, y: 192.0, z: 0 },
+            ReplayAction {
+                delta: 0,
+                x: 256.0,
+                y: 192.0,
+                z: 0,
+            },
+            ReplayAction {
+                delta: 1000,
+                x: 256.0,
+                y: 192.0,
+                z: 1,
+            },
+            ReplayAction {
+                delta: 16,
+                x: 256.0,
+                y: 192.0,
+                z: 0,
+            },
         ]
     });
+    let mut header = test_header(beatmap_md5, mods);
+    header.version = version;
     let file = OsrFile {
-        header: test_header(beatmap_md5, mods),
+        header,
         actions,
         compressed_payload: Vec::new(),
         decompressed_payload: Vec::new(),
         trailer: Vec::new(),
     };
-    encode_osr(&file, &EncodeOptions { payload: PayloadSource::Reserialize, include_trailer: false })
-        .unwrap()
+    encode_osr(
+        &file,
+        &EncodeOptions {
+            payload: PayloadSource::Reserialize,
+            include_trailer: false,
+        },
+    )
+    .unwrap()
 }
 
 pub fn db_entry(hash: &str, folder: &str, file: &str) -> DbBeatmap {

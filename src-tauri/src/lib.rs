@@ -2,6 +2,7 @@ use tauri::Manager;
 
 pub mod cache;
 pub mod commands;
+pub mod edit;
 pub mod error;
 pub mod limits;
 pub mod load;
@@ -45,7 +46,12 @@ pub fn run() {
             commands::get_settings,
             commands::set_osu_stable_path,
             commands::set_viewer_prefs,
-            commands::clear_recents
+            commands::clear_recents,
+            commands::apply_edit,
+            commands::undo,
+            commands::redo,
+            commands::revert_all,
+            commands::resync
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

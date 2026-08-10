@@ -3,6 +3,7 @@
 //! layer only clones inputs, spawns, and installs the outcome
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use engine::beatmap::{process_beatmap, ProcessedBeatmap};
 use engine::formats::beatmap::{decode_beatmap_bytes, Beatmap};
@@ -23,9 +24,22 @@ use crate::stable::{detect_install, find_beatmap_by_md5, ListingCache};
 pub struct SessionState {
     /// the mutable replay document, retained for the future editor commands
     pub document: ReplayDocument,
-    pub processed: ProcessedBeatmap,
+    pub processed: Arc<ProcessedBeatmap>,
     /// present only for .osz scenes; dropping it deletes the cache dir
     pub lease: Option<CacheLease>,
+    /// session identity, stamped by install_scene; 0 until then
+    pub epoch: u64,
+    /// bumped by every applied edit, so the frontend can detect a document
+    /// that changed under it without diffing the whole document
+    pub revision: u64,
+    /// whether the cached `simulation` is authoritative -- the editing gate:
+    /// edits that would invalidate the timeline are refused while this is false
+    pub simulatable: bool,
+    pub undo_labels: Vec<String>,
+    pub redo_labels: Vec<String>,
+    /// the cached last simulation, kept alongside the document so an editor
+    /// command can answer with it without re-simulating
+    pub simulation: SimulationDto,
 }
 
 // the tests format `Result<LoadOutcome, IpcError>` in panic messages;
@@ -38,6 +52,9 @@ impl std::fmt::Debug for SessionState {
             .field("document", &self.document)
             .field("processed", &self.processed)
             .field("has_lease", &self.lease.is_some())
+            .field("epoch", &self.epoch)
+            .field("revision", &self.revision)
+            .field("simulatable", &self.simulatable)
             .finish()
     }
 }
@@ -100,7 +117,9 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     let document = ReplayDocument::new(osr, source.map.format_version);
     let header = document.header().clone();
     if document.frames().is_empty() {
-        return Err(IpcError::ReplayParse { message: "replay contains no gameplay frames".into() });
+        return Err(IpcError::ReplayParse {
+            message: "replay contains no gameplay frames".into(),
+        });
     }
 
     let mods = LegacyMods { raw: header.mods };
@@ -119,14 +138,24 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     // nomod timeline would be fiction. unsupported mods still render with
     // nomod geometry -- the spec's persistent-banner path
     let (processed, simulation) = if source.mismatch {
-        (process_beatmap(&source.map)?, SimulationDto::NotSimulated { reason: NotSimulatedReason::BeatmapMismatch })
+        (
+            process_beatmap(&source.map)?,
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::BeatmapMismatch,
+            },
+        )
     } else if let Some(pipeline) = pipeline_for(mods) {
         let processed = process_with_mods(&source.map, &*pipeline)?;
         let timeline = simulate(&processed, document.frames())?;
         let simulation = SimulationDto::authoritative(&timeline);
         (processed, simulation)
     } else {
-        (process_beatmap(&source.map)?, SimulationDto::NotSimulated { reason: NotSimulatedReason::UnsupportedMods })
+        (
+            process_beatmap(&source.map)?,
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::UnsupportedMods,
+            },
+        )
     };
 
     let render_plan = build_render_plan(&source.map, &processed);
@@ -136,6 +165,13 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         warnings.push(Warning::AudioMissing);
     }
     let background_path = resolve_media_path(&source.dir, &source.map.background_file);
+
+    // computed before assemble_scene consumes simulation, and cloned rather
+    // than derived from the scene afterwards -- the scene's copy is a dto,
+    // and the session keeps the same shape so a later editor command can
+    // hand it back without re-simulating
+    let simulatable = matches!(simulation, SimulationDto::Authoritative { .. });
+    let cached_simulation = simulation.clone();
 
     let scene = assemble_scene(
         &source.map,
@@ -150,9 +186,23 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     );
     Ok(LoadOutcome {
         scene,
-        session: SessionState { document, processed, lease: source.lease },
+        session: SessionState {
+            document,
+            processed: Arc::new(processed),
+            lease: source.lease,
+            epoch: 0,
+            revision: 0,
+            simulatable,
+            undo_labels: Vec::new(),
+            redo_labels: Vec::new(),
+            simulation: cached_simulation,
+        },
         origin: BeatmapOrigin {
-            dir: source.origin_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+            dir: source
+                .origin_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf(),
             path: source.origin_path,
             md5: source.md5,
             mismatch: source.mismatch,
@@ -197,8 +247,7 @@ fn osz_source(
     let media: Vec<&str> = media_owned.iter().map(String::as_str).collect();
     // md5 is 32 hex chars; the first 8 keep cache dir names readable
     let label = matched.md5[..8].to_string();
-    let extracted =
-        archive.extract_scene(matched.index, &matched.bytes, &media, cache_root, &label)?;
+    let extracted = archive.extract_scene(matched.index, &matched.bytes, &media, cache_root, &label)?;
 
     Ok(BeatmapSource {
         map,
@@ -223,7 +272,10 @@ pub fn load_with_osu_file(
     let actual = format!("{:x}", md5::compute(&bytes));
     let mismatch = !actual.eq_ignore_ascii_case(&expected);
     if mismatch && !allow_mismatch {
-        return Err(IpcError::BeatmapMismatch { expected_md5: expected, actual_md5: actual });
+        return Err(IpcError::BeatmapMismatch {
+            expected_md5: expected,
+            actual_md5: actual,
+        });
     }
     build_outcome(osr, osu_file_source(osu_path, &bytes, actual, mismatch)?)
 }
@@ -279,7 +331,10 @@ fn load_with_osz(
         }
     };
 
-    build_outcome(osr, osz_source(&mut archive, osz_path, matched, mismatch, cache_root)?)
+    build_outcome(
+        osr,
+        osz_source(&mut archive, osz_path, matched, mismatch, cache_root)?,
+    )
 }
 
 /// the primary flow: parse header -> md5 -> osu!.db lookup -> scene (spec,
@@ -300,7 +355,10 @@ pub fn load_replay_auto(
             })
         }
     };
-    build_outcome(osr, stable_source(&md5, override_path, candidates, listing_cache)?)
+    build_outcome(
+        osr,
+        stable_source(&md5, override_path, candidates, listing_cache)?,
+    )
 }
 
 /// the osu!.db lookup on its own: parse the listing, verify the file on disk
@@ -339,7 +397,10 @@ fn accepted_hashes(saved: &SavedBeatmap, header_md5: &str) -> Vec<AcceptedMd5> {
         }
     }
     if !header_md5.is_empty() && !accepted.iter().any(|a| a.md5 == header_md5) {
-        accepted.push(AcceptedMd5 { md5: header_md5.to_string(), mismatch: false });
+        accepted.push(AcceptedMd5 {
+            md5: header_md5.to_string(),
+            mismatch: false,
+        });
     }
     accepted
 }
@@ -367,17 +428,26 @@ fn open_saved_source(
     accepted: &[AcceptedMd5],
     cache_root: &Path,
 ) -> Result<Option<BeatmapSource>, IpcError> {
-    let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
     match extension.as_deref() {
         Some("osu") => {
             let read = read_file_capped(path, engine::limits::MAX_OSU_FILE_BYTES, "MAX_OSU_FILE_BYTES");
-            let Some(bytes) = miss_unless_capped(read)? else { return Ok(None) };
+            let Some(bytes) = miss_unless_capped(read)? else {
+                return Ok(None);
+            };
             let md5 = format!("{:x}", md5::compute(&bytes));
-            let Some(accept) = accepted.iter().find(|a| a.md5 == md5) else { return Ok(None) };
+            let Some(accept) = accepted.iter().find(|a| a.md5 == md5) else {
+                return Ok(None);
+            };
             Ok(Some(osu_file_source(path, &bytes, md5, accept.mismatch)?))
         }
         Some("osz") => {
-            let Some(mut archive) = miss_unless_capped(open_osz(path))? else { return Ok(None) };
+            let Some(mut archive) = miss_unless_capped(open_osz(path))? else {
+                return Ok(None);
+            };
             // one ranked scan for the whole accepted set, never one call per
             // hash: find_osu_by_any_md5 builds a fresh MAX_OSZ_SCAN_BYTES
             // budget per call, so a hash-per-call loop would let a single
@@ -385,7 +455,9 @@ fn open_saved_source(
             // would swallow the very refusal that fired
             let hashes: Vec<&str> = accepted.iter().map(|a| a.md5.as_str()).collect();
             let found = miss_unless_capped(archive.find_osu_by_any_md5(&hashes))?.flatten();
-            let Some((rank, matched)) = found else { return Ok(None) };
+            let Some((rank, matched)) = found else {
+                return Ok(None);
+            };
             let source = osz_source(&mut archive, path, matched, accepted[rank].mismatch, cache_root)?;
             Ok(Some(source))
         }
@@ -412,7 +484,9 @@ fn scan_dir_for_beatmap(
     accepted: &[AcceptedMd5],
     max_files: usize,
 ) -> Result<Option<BeatmapSource>, IpcError> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(None) };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(None);
+    };
     let mut best: Option<ScanHit> = None;
     let mut examined = 0usize;
     for entry in entries.flatten() {
@@ -429,17 +503,23 @@ fn scan_dir_for_beatmap(
         // open_saved_source treats the file the entry actually points at.
         // this mirrors osz's per-candidate skip (limits.rs): a .osu past the
         // cap could never decode, so it cannot be the map being looked for
-        let Ok(bytes) =
-            read_file_capped(&path, engine::limits::MAX_OSU_FILE_BYTES, "MAX_OSU_FILE_BYTES")
+        let Ok(bytes) = read_file_capped(&path, engine::limits::MAX_OSU_FILE_BYTES, "MAX_OSU_FILE_BYTES")
         else {
             continue;
         };
         let md5 = format!("{:x}", md5::compute(&bytes));
-        let Some(rank) = accepted.iter().position(|a| a.md5 == md5) else { continue };
+        let Some(rank) = accepted.iter().position(|a| a.md5 == md5) else {
+            continue;
+        };
         if rank == 0 {
             return Ok(Some(osu_file_source(&path, &bytes, md5, accepted[0].mismatch)?));
         }
-        let hit = ScanHit { rank, path, bytes, md5 };
+        let hit = ScanHit {
+            rank,
+            path,
+            bytes,
+            md5,
+        };
         if best.as_ref().is_none_or(|b| hit.rank < b.rank) {
             best = Some(hit);
         }
@@ -521,17 +601,45 @@ mod tests {
     use crate::scene::{NotSimulatedReason, SimulationDto};
     use crate::testutil::{fixtures_dir, osr_bytes};
 
+    /// copies the committed fixture map next to a fresh .osr in `dir`, returns
+    /// (osr_path, osu_path)
+    fn fixture_setup_in(dir: &std::path::Path, mods: u32) -> (std::path::PathBuf, std::path::PathBuf) {
+        let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("stacking-v14.osu")).unwrap();
+        let md5 = format!("{:x}", md5::compute(&osu_bytes));
+        let osu_path = dir.join("map.osu");
+        std::fs::write(&osu_path, &osu_bytes).unwrap();
+        let osr_path = dir.join("replay.osr");
+        std::fs::write(&osr_path, osr_bytes(&md5, mods, None)).unwrap();
+        (osr_path, osu_path)
+    }
+
     /// copies the committed fixture map next to a fresh temp .osr and returns
     /// (dir, osr_path, osu_path, map_md5)
     fn fixture_setup(mods: u32) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf, String) {
         let dir = tempfile::tempdir().unwrap();
-        let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("stacking-v14.osu")).unwrap();
-        let md5 = format!("{:x}", md5::compute(&osu_bytes));
-        let osu_path = dir.path().join("map.osu");
-        std::fs::write(&osu_path, &osu_bytes).unwrap();
-        let osr_path = dir.path().join("replay.osr");
-        std::fs::write(&osr_path, osr_bytes(&md5, mods, None)).unwrap();
+        let (osr_path, osu_path) = fixture_setup_in(dir.path(), mods);
+        let md5 = format!("{:x}", md5::compute(std::fs::read(&osu_path).unwrap()));
         (dir, osr_path, osu_path, md5)
+    }
+
+    #[test]
+    fn outcomes_carry_editor_session_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (osr_path, osu_path) = fixture_setup_in(dir.path(), 0);
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert_eq!(
+            outcome.session.epoch, 0,
+            "the pure pipeline leaves stamping to install_scene"
+        );
+        assert!(outcome.session.simulatable);
+        assert!(matches!(
+            outcome.session.simulation,
+            crate::scene::SimulationDto::Authoritative { .. }
+        ));
+
+        let (osr_path, osu_path) = fixture_setup_in(dir.path(), 16); // hard rock
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert!(!outcome.session.simulatable);
     }
 
     #[test]
@@ -542,14 +650,23 @@ mod tests {
         assert_eq!(outcome.scene.beatmap.md5, md5);
         assert_eq!(outcome.scene.beatmap.title, "Stacking Fixture");
         assert_eq!(outcome.scene.frames.len(), 3);
-        assert!(matches!(outcome.scene.simulation, SimulationDto::Authoritative { .. }));
+        assert!(matches!(
+            outcome.scene.simulation,
+            SimulationDto::Authoritative { .. }
+        ));
         // the fixture map references audio.mp3, which does not exist next to
         // the copied .osu
         assert_eq!(outcome.scene.warnings, vec![Warning::AudioMissing]);
         assert_eq!(outcome.scene.audio_path, None);
-        assert_eq!(outcome.scene.background_path, None, "fixture declares no background");
+        assert_eq!(
+            outcome.scene.background_path, None,
+            "fixture declares no background"
+        );
         assert!(!outcome.scene.render_plan.objects.is_empty());
-        assert!(outcome.session.lease.is_none(), "a picked .osu has no cache lease");
+        assert!(
+            outcome.session.lease.is_none(),
+            "a picked .osu has no cache lease"
+        );
         assert_eq!(outcome.session.document.frames().len(), 3);
     }
 
@@ -571,7 +688,10 @@ mod tests {
         let other_md5 = format!("{:x}", md5::compute(&std::fs::read(&other).unwrap()));
 
         match load_with_osu_file(&osr_path, &other, false) {
-            Err(IpcError::BeatmapMismatch { expected_md5, actual_md5 }) => {
+            Err(IpcError::BeatmapMismatch {
+                expected_md5,
+                actual_md5,
+            }) => {
                 assert_eq!(actual_md5, other_md5);
                 assert_ne!(expected_md5, actual_md5);
             }
@@ -584,8 +704,7 @@ mod tests {
         // override onto a *valid but different* map: reuse a second committed
         // fixture so decode succeeds while the hash differs
         let (_dir, osr_path, _osu_path, expected) = fixture_setup(0);
-        let other_bytes =
-            std::fs::read(fixtures_dir().join("beatmaps").join("slider-zoo-v14.osu")).unwrap();
+        let other_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("slider-zoo-v14.osu")).unwrap();
         let dir2 = tempfile::tempdir().unwrap();
         let other = dir2.path().join("other.osu");
         std::fs::write(&other, &other_bytes).unwrap();
@@ -594,11 +713,16 @@ mod tests {
         let outcome = load_with_osu_file(&osr_path, &other, true).unwrap();
         assert!(matches!(
             &outcome.scene.simulation,
-            SimulationDto::NotSimulated { reason: NotSimulatedReason::BeatmapMismatch }
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::BeatmapMismatch
+            }
         ));
         assert_eq!(
             outcome.scene.warnings[0],
-            Warning::BeatmapMismatch { expected_md5: expected, actual_md5: other_md5 }
+            Warning::BeatmapMismatch {
+                expected_md5: expected,
+                actual_md5: other_md5
+            }
         );
         // mismatch first, then audio -- the deterministic warning order
         assert_eq!(outcome.scene.warnings[1], Warning::AudioMissing);
@@ -610,11 +734,16 @@ mod tests {
         let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
         assert!(matches!(
             &outcome.scene.simulation,
-            SimulationDto::NotSimulated { reason: NotSimulatedReason::UnsupportedMods }
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::UnsupportedMods
+            }
         ));
         assert_eq!(outcome.scene.warnings[0], Warning::ModsNotSimulated { mods: 8 });
         assert_eq!(outcome.scene.replay.mods, 8);
-        assert!(!outcome.scene.render_plan.objects.is_empty(), "geometry still renders");
+        assert!(
+            !outcome.scene.render_plan.objects.is_empty(),
+            "geometry still renders"
+        );
     }
 
     #[test]
@@ -666,7 +795,10 @@ mod tests {
         let cache_root = dir.path().join("cache");
 
         let outcome = load_with_beatmap(&osr_path, &osz_path, false, &cache_root).unwrap();
-        assert!(matches!(outcome.scene.simulation, SimulationDto::Authoritative { .. }));
+        assert!(matches!(
+            outcome.scene.simulation,
+            SimulationDto::Authoritative { .. }
+        ));
         // the fixture references audio.mp3, present in the archive
         assert!(outcome.scene.warnings.is_empty());
         let audio = outcome.scene.audio_path.clone().unwrap();
@@ -674,8 +806,7 @@ mod tests {
         // canonicalize both sides: the scene path went through dunce while
         // the lease path is the raw temp join, and windows short/long name
         // or case differences would fail a naive starts_with
-        assert!(std::path::Path::new(&audio)
-            .starts_with(dunce::canonicalize(&lease_dir).unwrap()));
+        assert!(std::path::Path::new(&audio).starts_with(dunce::canonicalize(&lease_dir).unwrap()));
 
         drop(outcome);
         assert!(!lease_dir.exists(), "dropping the session deletes the cache dir");
@@ -690,7 +821,10 @@ mod tests {
         let cache_root = dir.path().join("cache");
 
         match load_with_beatmap(&osr_path, &osz_path, false, &cache_root) {
-            Err(IpcError::BeatmapMismatch { expected_md5, actual_md5 }) => {
+            Err(IpcError::BeatmapMismatch {
+                expected_md5,
+                actual_md5,
+            }) => {
                 assert_eq!(expected_md5, "00000000000000000000000000000000");
                 assert!(!actual_md5.is_empty());
             }
@@ -711,12 +845,20 @@ mod tests {
         let cache_root = dir.path().join("cache");
 
         let outcome = load_with_beatmap(&osr_path, &osz_path, true, &cache_root).unwrap();
-        assert_eq!(outcome.scene.beatmap.md5, md5, "the sole member is the override target");
+        assert_eq!(
+            outcome.scene.beatmap.md5, md5,
+            "the sole member is the override target"
+        );
         assert!(matches!(
             &outcome.scene.simulation,
-            SimulationDto::NotSimulated { reason: NotSimulatedReason::BeatmapMismatch }
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::BeatmapMismatch
+            }
         ));
-        assert!(matches!(outcome.scene.warnings[0], Warning::BeatmapMismatch { .. }));
+        assert!(matches!(
+            outcome.scene.warnings[0],
+            Warning::BeatmapMismatch { .. }
+        ));
     }
 
     #[test]
@@ -758,7 +900,10 @@ mod tests {
         let cache = crate::stable::ListingCache::default();
         let outcome = load_replay_auto(&osr_path, Some(root.path()), &[], &cache).unwrap();
         assert_eq!(outcome.scene.beatmap.md5, md5);
-        assert!(matches!(outcome.scene.simulation, SimulationDto::Authoritative { .. }));
+        assert!(matches!(
+            outcome.scene.simulation,
+            SimulationDto::Authoritative { .. }
+        ));
         assert!(outcome.session.lease.is_none());
     }
 
@@ -835,7 +980,10 @@ mod tests {
 
         let outcome = reopen(&osr_path, &saved, &dir.path().join("cache")).unwrap();
         assert_eq!(outcome.scene.beatmap.md5, md5);
-        assert!(matches!(outcome.scene.simulation, SimulationDto::Authoritative { .. }));
+        assert!(matches!(
+            outcome.scene.simulation,
+            SimulationDto::Authoritative { .. }
+        ));
         assert_eq!(outcome.origin.path, osu_path);
         assert_eq!(outcome.origin.dir, dir.path());
         assert!(!outcome.origin.mismatch);
@@ -858,7 +1006,10 @@ mod tests {
         let lease_dir = outcome.session.lease.as_ref().unwrap().dir().to_path_buf();
         assert_eq!(outcome.origin.path, osz_path);
         assert_eq!(outcome.origin.dir, dir.path());
-        assert_ne!(outcome.origin.dir, lease_dir, "the lease dir must never be the remembered folder");
+        assert_ne!(
+            outcome.origin.dir, lease_dir,
+            "the lease dir must never be the remembered folder"
+        );
 
         // which is the whole point: the lease dies with the session, so an
         // entry that remembered it would resolve to nothing next time
@@ -893,8 +1044,14 @@ mod tests {
         let outcome = reopen(&osr_path, &saved, &dir.path().join("cache")).unwrap();
         assert_eq!(outcome.scene.beatmap.md5, md5);
         assert_eq!(outcome.origin.path, osz_path);
-        assert!(!outcome.origin.mismatch, "the replay's own map is a match, not an override");
-        assert!(matches!(outcome.scene.simulation, SimulationDto::Authoritative { .. }));
+        assert!(
+            !outcome.origin.mismatch,
+            "the replay's own map is a match, not an override"
+        );
+        assert!(matches!(
+            outcome.scene.simulation,
+            SimulationDto::Authoritative { .. }
+        ));
     }
 
     #[test]
@@ -912,7 +1069,10 @@ mod tests {
 
         let outcome = reopen(&osr_path, &saved, &dir.path().join("cache")).unwrap();
         assert_eq!(outcome.scene.beatmap.md5, md5);
-        assert_eq!(outcome.origin.path, renamed, "the reopen resolves the file it actually found");
+        assert_eq!(
+            outcome.origin.path, renamed,
+            "the reopen resolves the file it actually found"
+        );
     }
 
     #[test]
@@ -930,7 +1090,10 @@ mod tests {
         };
 
         let outcome = reopen(&osr_path, &saved, &cache_root).unwrap();
-        assert_eq!(outcome.scene.beatmap.md5, other_md5, "the remembered hash is the one to reproduce");
+        assert_eq!(
+            outcome.scene.beatmap.md5, other_md5,
+            "the remembered hash is the one to reproduce"
+        );
         assert!(outcome.origin.mismatch);
 
         // with the remembered map gone, the replay's own hash answers instead
@@ -968,7 +1131,10 @@ mod tests {
         .unwrap();
         assert_eq!(outcome.scene.beatmap.md5, md5);
         let songs_map = root.path().join("Songs").join("1 fixture").join("map.osu");
-        assert_eq!(outcome.origin.path, songs_map, "the refreshed origin is where it was found");
+        assert_eq!(
+            outcome.origin.path, songs_map,
+            "the refreshed origin is where it was found"
+        );
         assert_eq!(outcome.origin.dir, songs_map.parent().unwrap());
     }
 
@@ -1038,7 +1204,11 @@ mod tests {
         // association, so it must not be dressed up as a lookup miss
         let dir = tempfile::tempdir().unwrap();
         let cache_root = dir.path().join("cache");
-        match reopen(&dir.path().join("gone.osr"), &SavedBeatmap::default(), &cache_root) {
+        match reopen(
+            &dir.path().join("gone.osr"),
+            &SavedBeatmap::default(),
+            &cache_root,
+        ) {
             Err(IpcError::Io { .. }) => {}
             other => panic!("expected Io, got {other:?}"),
         }
@@ -1066,7 +1236,9 @@ mod tests {
         assert!(outcome.origin.mismatch);
         assert!(matches!(
             &outcome.scene.simulation,
-            SimulationDto::NotSimulated { reason: NotSimulatedReason::BeatmapMismatch }
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::BeatmapMismatch
+            }
         ));
         assert_eq!(
             outcome.scene.warnings[0],
@@ -1078,7 +1250,10 @@ mod tests {
 
         // no recorded consent: the same association resolves nothing rather
         // than overriding on the user's behalf
-        let withheld = SavedBeatmap { allow_mismatch: false, ..saved.clone() };
+        let withheld = SavedBeatmap {
+            allow_mismatch: false,
+            ..saved.clone()
+        };
         match reopen(&osr_path, &withheld, &cache_root) {
             Err(IpcError::BeatmapNotFound { md5: m }) => assert_eq!(m, header_md5),
             other => panic!("expected BeatmapNotFound, got {other:?}"),
@@ -1101,11 +1276,19 @@ mod tests {
         // user has to see. reporting it as "beatmap not found" would name the
         // wrong problem, and (for the .osz scan budget) inviting the next
         // step to try the same archive again would spend the cap twice
-        let capped: Result<(), IpcError> =
-            Err(IpcError::ResourceLimit { cap: "MAX_OSZ_SCAN_BYTES".into(), limit: 1, actual: 2 });
-        assert!(matches!(miss_unless_capped(capped), Err(IpcError::ResourceLimit { .. })));
+        let capped: Result<(), IpcError> = Err(IpcError::ResourceLimit {
+            cap: "MAX_OSZ_SCAN_BYTES".into(),
+            limit: 1,
+            actual: 2,
+        });
+        assert!(matches!(
+            miss_unless_capped(capped),
+            Err(IpcError::ResourceLimit { .. })
+        ));
 
-        let corrupt: Result<(), IpcError> = Err(IpcError::BeatmapParse { message: "osz".into() });
+        let corrupt: Result<(), IpcError> = Err(IpcError::BeatmapParse {
+            message: "osz".into(),
+        });
         assert_eq!(miss_unless_capped(corrupt).unwrap(), None);
         assert_eq!(miss_unless_capped(Ok(7)).unwrap(), Some(7));
     }
@@ -1117,8 +1300,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("stacking-v14.osu")).unwrap();
         std::fs::write(dir.path().join("map.osu"), &osu_bytes).unwrap();
-        let accepted =
-            vec![AcceptedMd5 { md5: format!("{:x}", md5::compute(&osu_bytes)), mismatch: false }];
+        let accepted = vec![AcceptedMd5 {
+            md5: format!("{:x}", md5::compute(&osu_bytes)),
+            mismatch: false,
+        }];
 
         assert!(scan_dir_for_beatmap(dir.path(), &accepted, 1).unwrap().is_some());
         assert!(scan_dir_for_beatmap(dir.path(), &accepted, 0).unwrap().is_none());
