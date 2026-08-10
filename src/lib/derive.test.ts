@@ -51,7 +51,7 @@ describe("deriveScene", () => {
 	});
 });
 
-describe("deriveScene analysis and lattice", () => {
+describe("deriveScene analysis", () => {
 	test("carries the per-scene analysis alongside the existing derived data", () => {
 		const scene = testScene({
 			frames: [
@@ -63,10 +63,5 @@ describe("deriveScene analysis and lattice", () => {
 		const derived = deriveScene(scene);
 		expect(derived.analysis.frameCount).toBe(3);
 		expect(derived.analysis.velocity.length).toBeGreaterThan(0);
-	});
-
-	test("reports a null lattice when the frames do not support one", () => {
-		const scene = testScene({ frames: [{ time: 0, x: 0.1234567, y: 0.7654321, buttons: 0 }] });
-		expect(deriveScene(scene).lattice).toBeNull();
 	});
 });

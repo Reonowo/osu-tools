@@ -48,6 +48,7 @@ export function StatusBar() {
 	// nullable fields
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
+	const lattice = useViewerStore((s) => s.editor?.lattice ?? null);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const snapToLattice = useViewerStore((s) => s.editing.snapToLattice);
@@ -72,7 +73,7 @@ export function StatusBar() {
 	// readout must not claim a sub-1x zoom the timeline is not doing
 	const zoom = zoomFactor(clampSpan(bounds, detailSpanMs), bounds);
 
-	const latticeLabel = derived?.lattice ? `lattice ${formatLatticeStep(derived.lattice)}` : "lattice unknown";
+	const latticeLabel = lattice ? `lattice ${formatLatticeStep(lattice)}` : "lattice unknown";
 
 	const leftRun: ReactNode[] = [
 		<span className="inline-flex items-center gap-1.5">

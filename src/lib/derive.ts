@@ -4,7 +4,6 @@
 import { HIT_FADE_OUT_TIME } from "../engine/argon";
 import { buttonEdges, pressEdges, type ButtonEdges, type Press } from "../engine/interpolation";
 import { analyseScene, type ReplayAnalysis } from "./analysis";
-import { inferLattice, type Lattice } from "./lattice";
 import type { JudgementEventDto, LoadedScene } from "./scene-types";
 
 export interface DerivedScene {
@@ -16,9 +15,6 @@ export interface DerivedScene {
 	timelineMarkers: { time: number; grade: "ok" | "meh" | "miss" }[];
 	/** hit-timing and cursor statistics for the analysis panel */
 	analysis: ReplayAnalysis;
-	/** the inferred input quantisation, or null when the frames do not
-	 * support one (windowed play, or an already-synthesised stream) */
-	lattice: Lattice | null;
 }
 
 export function deriveScene(scene: LoadedScene): DerivedScene {
@@ -57,7 +53,6 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		},
 		judgementsByObject,
 		timelineMarkers,
-		analysis: analyseScene(scene, presses),
-		lattice: inferLattice(scene.frames)
+		analysis: analyseScene(scene, presses)
 	};
 }
