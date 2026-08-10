@@ -16,7 +16,7 @@ import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore, type ToolId } from "@/state/store";
 
-const IPC_BLOCKER = "needs the replay-document ipc commands";
+const TOOL_BLOCKER = "not wired yet — the cursor-path tools are the next milestone";
 
 const TOOLS: { id: ToolId; icon: LucideIcon; label: string }[] = [
 	{ id: "select", icon: MousePointer2, label: "select" },
@@ -33,6 +33,15 @@ const TOOL_IDS: readonly string[] = TOOLS.map((tool) => tool.id);
 // renders 32px wide with an off-centre icon instead of a 28px square
 const ITEM_CLASS =
 	"size-7 min-w-0 justify-center rounded-lg p-0 text-[#71717a] aria-pressed:border aria-pressed:border-primary/40 aria-pressed:bg-primary/[.16] aria-pressed:text-primary";
+
+// the same 28px-square geometry as ITEM_CLASS, minus its aria-pressed:*
+// selected-tool styling -- the snap tile's aria-pressed genuinely tracks
+// snapToLattice (unlike the disabled tool tiles above, where aria-pressed
+// never fires), so reusing ITEM_CLASS here would have aria-pressed:text-primary
+// (two classes' worth of specificity) beat the plain text-[#66ccff] tint
+// below (one class) and paint the tile the tool-selected pink instead of the
+// preference cyan
+const PREFERENCE_TILE_CLASS = "size-7 min-w-0 justify-center rounded-lg p-0 text-[#71717a]";
 
 function PaletteButton({
 	id,
@@ -64,49 +73,58 @@ export function ToolPalette() {
 	const tool = useViewerStore((s) => s.tool);
 	const setTool = useViewerStore((s) => s.setTool);
 	const snapToLattice = useViewerStore((s) => s.editing.snapToLattice);
+	const setEditing = useViewerStore((s) => s.setEditing);
 
 	return (
-		<ToggleGroup
-			orientation="vertical"
-			value={[tool]}
-			onValueChange={(next) => {
-				// base-ui's toggle-group value is array-valued even in single-select
-				// mode; every item here is disabled so this never actually fires,
-				// but setTool stays wired for when the tools do
-				const chosen = next[0];
-				if (chosen !== undefined && TOOL_IDS.includes(chosen)) setTool(chosen as ToolId);
-			}}
-			className="absolute top-3 left-3 gap-1 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]"
-		>
-			{TOOLS.slice(0, 2).map(({ id, icon, label }) => (
-				<PaletteButton key={id} id={id} icon={icon} label={label} tooltip={`${label} ${IPC_BLOCKER}`} />
-			))}
+		<div className="absolute top-3 left-3 flex flex-col gap-1 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]">
+			<ToggleGroup
+				orientation="vertical"
+				value={[tool]}
+				onValueChange={(next) => {
+					// base-ui's toggle-group value is array-valued even in single-select
+					// mode; every item here is disabled so this never actually fires,
+					// but setTool stays wired for when the tools do
+					const chosen = next[0];
+					if (chosen !== undefined && TOOL_IDS.includes(chosen)) setTool(chosen as ToolId);
+				}}
+				className="gap-1"
+			>
+				{TOOLS.slice(0, 2).map(({ id, icon, label }) => (
+					<PaletteButton key={id} id={id} icon={icon} label={label} tooltip={`${label} ${TOOL_BLOCKER}`} />
+				))}
+				<Separator className="my-0.5" />
+				{TOOLS.slice(2).map(({ id, icon, label }) => (
+					<PaletteButton key={id} id={id} icon={icon} label={label} tooltip={`${label} ${TOOL_BLOCKER}`} />
+				))}
+			</ToggleGroup>
 			<Separator className="my-0.5" />
-			{TOOLS.slice(2).map(({ id, icon, label }) => (
-				<PaletteButton key={id} id={id} icon={icon} label={label} tooltip={`${label} ${IPC_BLOCKER}`} />
-			))}
-			<Separator className="my-0.5" />
+			{/* a live preference toggle, not a tool selection -- it sits outside the
+			ToggleGroup entirely so pressing it can never fight the group's
+			single-select value (ToolId excludes "snap" for the same reason) */}
 			<Tooltip>
-				<TooltipTrigger render={<span />}>
-					{/* the indicator is live (driven by the real snapToLattice setting),
-					but snapping itself still needs the replay-document ipc, so the
-					item stays disabled -- it is not a tool selection, which is why
-					ToolId excludes "snap" and the group's onValueChange never routes
-					this value to setTool */}
-					<ToggleGroupItem
-						value="snap"
-						disabled
-						aria-label="snap to lattice"
-						className={cn(ITEM_CLASS, snapToLattice && "text-[#66ccff]")}
-					>
-						<Magnet aria-hidden />
-					</ToggleGroupItem>
-				</TooltipTrigger>
+				<TooltipTrigger
+					render={
+						<button
+							type="button"
+							aria-label="snap to lattice"
+							aria-pressed={snapToLattice}
+							onClick={() => setEditing("snapToLattice", !snapToLattice)}
+							className={cn(
+								PREFERENCE_TILE_CLASS,
+								"flex items-center",
+								snapToLattice && "text-[#66ccff]"
+							)}
+						>
+							<Magnet aria-hidden className="size-4" />
+						</button>
+					}
+				/>
 				<TooltipContent side="right">
-					snap to lattice {snapToLattice ? "on" : "off"} — needs the replay-document ipc to actually snap
+					snap to lattice {snapToLattice ? "on" : "off"} — applies to nudge and drag commits; synthesized
+					frames always snap when a lattice exists
 				</TooltipContent>
 			</Tooltip>
-		</ToggleGroup>
+		</div>
 	);
 }
 
@@ -117,6 +135,7 @@ const LATTICE_OFF = "#ffcc22";
 export function CoordinateReadout() {
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
+	const lattice = useViewerStore((s) => s.editor?.lattice ?? null);
 	const xRef = useRef<HTMLSpanElement>(null);
 	const yRef = useRef<HTMLSpanElement>(null);
 	const frameRef = useRef<HTMLSpanElement>(null);
@@ -125,7 +144,6 @@ export function CoordinateReadout() {
 	useEffect(() => {
 		if (scene === null || derived === null) return;
 		const frames = scene.frames;
-		const lattice = derived.lattice;
 		let raf = 0;
 		const loop = () => {
 			const t = playbackClock.currentTime();
@@ -157,7 +175,7 @@ export function CoordinateReadout() {
 		};
 		raf = requestAnimationFrame(loop);
 		return () => cancelAnimationFrame(raf);
-	}, [scene, derived]);
+	}, [scene, derived, lattice]);
 
 	if (scene === null || derived === null) return null;
 
