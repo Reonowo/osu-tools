@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { EditingSettings, EffectSettings, IpcError, OverlaySettings, Settings } from "../lib/scene-types";
+import type {
+	EditDelta,
+	EditingSettings,
+	EffectSettings,
+	IpcError,
+	OverlaySettings,
+	Settings
+} from "../lib/scene-types";
 import { testScene } from "../test/scene";
 import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "./defaults";
 import { installPrefsPersistence, type Scheduler } from "./persist";
@@ -12,6 +19,18 @@ const baseSettings: Settings = {
 	recents: [],
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS
+};
+
+const identityDelta: EditDelta = {
+	revision: 0,
+	frames: null,
+	playerName: "p",
+	timestampTicks: "0",
+	dirty: false,
+	canUndo: false,
+	canRedo: false,
+	history: { labels: [], cursor: 0 },
+	simulation: null
 };
 
 function deps(): IpcDeps {
@@ -28,7 +47,12 @@ function deps(): IpcDeps {
 			editing,
 			effects
 		}),
-		clearRecents: async () => ({ ...baseSettings, recents: [] })
+		clearRecents: async () => ({ ...baseSettings, recents: [] }),
+		applyEdit: async () => identityDelta,
+		undo: async () => identityDelta,
+		redo: async () => identityDelta,
+		revertAll: async () => identityDelta,
+		resync: async () => identityDelta
 	};
 }
 

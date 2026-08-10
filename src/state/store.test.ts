@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { IpcError, LoadedScene, RecentReplay, Settings } from "../lib/scene-types";
+import type { EditDelta, EditOp, FrameDto, IpcError, LoadedScene, RecentReplay, Settings } from "../lib/scene-types";
 import { testScene } from "../test/scene";
 import { VIEWPORT_ZOOM_MAX, VIEWPORT_ZOOM_MIN } from "../renderer/playfield";
 import {
@@ -50,6 +50,11 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 			effects
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
+		applyEdit: async () => identityDelta,
+		undo: async () => identityDelta,
+		redo: async () => identityDelta,
+		revertAll: async () => identityDelta,
+		resync: async () => identityDelta,
 		...overrides
 	};
 }
@@ -57,6 +62,43 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 const reject = (e: IpcError) => async (): Promise<LoadedScene> => {
 	throw e;
 };
+
+const identityDelta: EditDelta = {
+	revision: 0,
+	frames: null,
+	playerName: "p",
+	timestampTicks: "0",
+	dirty: false,
+	canUndo: false,
+	canRedo: false,
+	history: { labels: [], cursor: 0 },
+	simulation: null
+};
+
+/** 40 frames on the scale-2 lattice (step 0.5), 16ms apart */
+function latticeScene(): LoadedScene {
+	const frames = Array.from({ length: 40 }, (_, i) => ({
+		time: i * 16,
+		x: i * 0.5,
+		y: (i % 7) * 0.5,
+		buttons: 0
+	}));
+	return testScene({ frames });
+}
+
+function moveDelta(revision: number, index: number, frame: FrameDto, label: string): EditDelta {
+	return {
+		revision,
+		frames: { updated: [{ index, frame }], inserted: [], removed: [] },
+		playerName: "p",
+		timestampTicks: "0",
+		dirty: true,
+		canUndo: true,
+		canRedo: false,
+		history: { labels: [label], cursor: 1 },
+		simulation: null
+	};
+}
 
 describe("load flow", () => {
 	test("openReplay success installs scene + derived and bumps sceneId", async () => {
@@ -1081,5 +1123,346 @@ describe("viewport framing", () => {
 		await store.getState().openReplay("C:\\r.osr");
 		expect(store.getState().viewportZoom).toBe(1);
 		expect(store.getState().viewportPan).toEqual({ x: 0, y: 0 });
+	});
+});
+
+describe("editor slice and edit queue", () => {
+	test("install seeds the editor slice and freezes the lattice", async () => {
+		const store = createViewerStore(deps({ loadReplay: async () => latticeScene() }));
+		await store.getState().openReplay("C:\\r.osr");
+		const editor = store.getState().editor!;
+		expect(editor.epoch).toBe(1);
+		expect(editor.revision).toBe(0);
+		expect(editor.lattice?.scale).toBe(2);
+		expect(store.getState().editRevision).toBe(0);
+	});
+
+	test("a commit dispatches against the current revision and splices the delta", async () => {
+		const calls: { baseRevision: number; ops: EditOp[]; label: string }[] = [];
+		const moved = { time: 16, x: 9.5, y: 0.5, buttons: 0 };
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, baseRevision, ops, label) => {
+					calls.push({ baseRevision, ops, label });
+					return moveDelta(1, 1, moved, label);
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		expect(calls).toEqual([
+			{ baseRevision: 0, ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }], label: "move" }
+		]);
+		const state = store.getState();
+		expect(state.scene!.frames[1]).toEqual(moved);
+		expect(state.editor!.revision).toBe(1);
+		expect(state.editor!.dirty).toBe(true);
+		expect(state.editRevision).toBe(1);
+		expect(state.lastSplice).not.toBeNull();
+	});
+
+	test("commits serialize behind the in-flight command", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		const calls: number[] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, baseRevision) => {
+					calls.push(baseRevision);
+					if (calls.length === 1)
+						return new Promise<EditDelta>((resolve) => {
+							resolveFirst = resolve;
+						});
+					return moveDelta(2, 2, { time: 32, x: 1, y: 1, buttons: 0 }, "b");
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const first = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		const second = store.getState().commitEdit({
+			label: "b",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 2, x: 1, y: 1 }] }] }
+		});
+		await Promise.resolve();
+		expect(calls).toEqual([0]);
+		resolveFirst(moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "a"));
+		await Promise.all([first, second]);
+		expect(calls).toEqual([0, 1]);
+		expect(store.getState().editor!.revision).toBe(2);
+	});
+
+	test("an intent expands at dispatch against the landed frames", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		const seen: number[] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, baseRevision) => {
+					if (baseRevision === 0)
+						return new Promise<EditDelta>((resolve) => {
+							resolveFirst = resolve;
+						});
+					return moveDelta(2, 3, { time: 48, x: 7, y: 7, buttons: 0 }, "b");
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const first = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 77, y: 0.5 }] }] }
+		});
+		const second = store.getState().commitEdit({
+			label: "b",
+			payload: {
+				kind: "intent",
+				expand: (frames) => {
+					seen.push(frames[1].x);
+					return [{ kind: "moveFrames", moves: [{ index: 3, x: 7, y: 7 }] }];
+				}
+			}
+		});
+		await Promise.resolve();
+		resolveFirst(moveDelta(1, 1, { time: 16, x: 77, y: 0.5, buttons: 0 }, "a"));
+		await Promise.all([first, second]);
+		// the intent saw the first commit's landed value, never the stale 0.5
+		expect(seen).toEqual([77]);
+	});
+
+	test("queued computed payloads remap through a landing delta", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		const dispatched: EditOp[][] = [];
+		const removalDelta: EditDelta = {
+			...moveDelta(1, 0, { time: 0, x: 0, y: 0, buttons: 0 }, "a"),
+			frames: { updated: [], inserted: [], removed: [0] }
+		};
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, baseRevision, ops) => {
+					dispatched.push(ops);
+					if (baseRevision === 0)
+						return new Promise<EditDelta>((resolve) => {
+							resolveFirst = resolve;
+						});
+					return moveDelta(2, 1, { time: 32, x: 5, y: 5, buttons: 0 }, "b");
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const first = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "deleteFrames", indices: [0] }] }
+		});
+		const second = store.getState().commitEdit({
+			label: "b",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 2, x: 5, y: 5 }] }] }
+		});
+		await Promise.resolve();
+		resolveFirst(removalDelta);
+		await Promise.all([first, second]);
+		// index 2 shifted down through the removal of index 0
+		expect(dispatched[1]).toEqual([{ kind: "moveFrames", moves: [{ index: 1, x: 5, y: 5 }] }]);
+	});
+
+	test("a fullFrames delta cancels the queue and clears the selection", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		let applyCalls = 0;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => {
+					applyCalls += 1;
+					return new Promise<EditDelta>((resolve) => {
+						resolveFirst = resolve;
+					});
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setFrameSelection([1, 2, 3]);
+		const first = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "deleteFrames", indices: [0] }] }
+		});
+		const second = store.getState().commitEdit({
+			label: "b",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 2, x: 5, y: 5 }] }] }
+		});
+		await Promise.resolve();
+		resolveFirst({
+			...moveDelta(1, 0, { time: 0, x: 0, y: 0, buttons: 0 }, "a"),
+			frames: { fullFrames: latticeScene().frames.slice(1) }
+		});
+		await Promise.all([first, second]);
+		// the queued commit was cancelled: only the first ever dispatched
+		expect(applyCalls).toBe(1);
+		expect(store.getState().editor!.frameSelection).toEqual([]);
+		expect(store.getState().scene!.frames).toHaveLength(39);
+	});
+
+	test("a response tagged with a replaced epoch is dropped", async () => {
+		let resolveEdit!: (d: EditDelta) => void;
+		let epoch = 0;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => {
+					epoch += 1;
+					return { ...latticeScene(), epoch };
+				},
+				applyEdit: async () =>
+					new Promise<EditDelta>((resolve) => {
+						resolveEdit = resolve;
+					})
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const commit = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		await Promise.resolve();
+		await store.getState().openReplay("C:\\r2.osr");
+		resolveEdit(moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "a"));
+		await commit;
+		// the second install's editor is untouched by the first session's delta
+		expect(store.getState().editor!.epoch).toBe(2);
+		expect(store.getState().editor!.revision).toBe(0);
+		expect(store.getState().editor!.dirty).toBe(false);
+	});
+
+	test("staleSession recovers through resync, never a disk reload", async () => {
+		let resynced = 0;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => {
+					throw { kind: "staleSession" } satisfies IpcError;
+				},
+				resync: async () => {
+					resynced += 1;
+					return {
+						...identityDelta,
+						revision: 5,
+						frames: { fullFrames: latticeScene().frames },
+						simulation: latticeScene().simulation
+					};
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		expect(resynced).toBe(1);
+		expect(store.getState().editor!.revision).toBe(5);
+		expect(store.getState().lastError?.error.kind).toBe("staleSession");
+	});
+
+	test("metadata deltas update the replay meta without an editRevision bump", async () => {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => ({
+					...identityDelta,
+					revision: 1,
+					dirty: true,
+					canUndo: true,
+					playerName: "renamed",
+					timestampTicks: "42",
+					history: { labels: ["player name"], cursor: 1 }
+				})
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().commitEdit({
+			label: "player name",
+			payload: { kind: "ops", ops: [{ kind: "setPlayerName", name: "renamed" }] }
+		});
+		const state = store.getState();
+		expect(state.scene!.replay.playerName).toBe("renamed");
+		expect(state.scene!.replay.timestampTicks).toBe("42");
+		expect(state.editRevision).toBe(0);
+		expect(state.editor!.dirty).toBe(true);
+	});
+
+	test("the lattice never re-derives across deltas", async () => {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => moveDelta(1, 1, { time: 16, x: 0.1234567, y: 0.7654321, buttons: 0 }, "off-grid")
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const before = store.getState().editor!.lattice;
+		await store.getState().commitEdit({
+			label: "off-grid",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 0.1234567, y: 0.7654321 }] }] }
+		});
+		expect(store.getState().editor!.lattice).toBe(before);
+	});
+
+	test("undoEdit gates on canUndo and dispatches through the queue", async () => {
+		let undos = 0;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move"),
+				undo: async () => {
+					undos += 1;
+					return { ...identityDelta, revision: 2, canRedo: true, history: { labels: ["move"], cursor: 0 } };
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().undoEdit();
+		// gated: nothing to undo yet
+		expect(undos).toBe(0);
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		await store.getState().undoEdit();
+		expect(undos).toBe(1);
+		expect(store.getState().editor!.canRedo).toBe(true);
+	});
+
+	test("a second undo queued behind the first drops when the step count runs out", async () => {
+		let resolveUndo!: (d: EditDelta) => void;
+		let undos = 0;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move"),
+				undo: async () => {
+					undos += 1;
+					return new Promise<EditDelta>((resolve) => {
+						resolveUndo = resolve;
+					});
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		// the first undo is in flight, so canUndo still reads true and the
+		// enqueue gate passes for a rapid second click
+		const first = store.getState().undoEdit();
+		const second = store.getState().undoEdit();
+		await Promise.resolve();
+		resolveUndo({ ...identityDelta, revision: 2, canRedo: true, history: { labels: ["move"], cursor: 0 } });
+		await Promise.all([first, second]);
+		// the dequeued second undo re-checked canUndo and dropped silently
+		expect(undos).toBe(1);
+		expect(store.getState().lastError).toBeNull();
 	});
 });

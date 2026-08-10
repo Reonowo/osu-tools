@@ -2,19 +2,30 @@
 // ipc goes through an injected deps object so bun tests script it
 
 import { createStore, useStore, type StoreApi } from "zustand";
+import { applyFrameChanges, isFullFrames, remapQueuedOps, remapSelection } from "../editor/splice";
 import {
+	invokeApplyEdit,
 	invokeClearRecents,
 	invokeGetSettings,
 	invokeLoadRecentReplay,
 	invokeLoadReplay,
 	invokeLoadReplayWithBeatmap,
+	invokeRedo,
+	invokeResync,
+	invokeRevertAll,
 	invokeSetOsuStablePath,
 	invokeSetViewerPrefs,
+	invokeUndo,
 	isIpcError
 } from "../lib/ipc";
+import { inferLattice, type Lattice } from "../lib/lattice";
 import type {
+	EditDelta,
 	EditingSettings,
+	EditOp,
 	EffectSettings,
+	FrameChanges,
+	FrameDto,
 	IpcError,
 	LoadedScene,
 	OverlaySettings,
@@ -58,6 +69,31 @@ export interface IpcDeps {
 		effects: EffectSettings
 	): Promise<Settings>;
 	clearRecents(): Promise<Settings>;
+	applyEdit(epoch: number, baseRevision: number, ops: EditOp[], label: string): Promise<EditDelta>;
+	undo(epoch: number): Promise<EditDelta>;
+	redo(epoch: number): Promise<EditDelta>;
+	revertAll(epoch: number): Promise<EditDelta>;
+	resync(epoch: number): Promise<EditDelta>;
+}
+
+export interface EditorState {
+	epoch: number;
+	revision: number;
+	dirty: boolean;
+	canUndo: boolean;
+	canRedo: boolean;
+	history: { labels: string[]; cursor: number };
+	/** inferred once at install and frozen for the session's life */
+	lattice: Lattice | null;
+	/** sorted frame indices; the selection tools (plan 2) populate it */
+	frameSelection: number[];
+}
+
+export interface EditCommit {
+	label: string;
+	payload:
+		| { kind: "ops"; ops: EditOp[] }
+		| { kind: "intent"; expand: (frames: readonly FrameDto[], editor: EditorState) => EditOp[] | null };
 }
 
 export interface ViewerState {
@@ -112,6 +148,14 @@ export interface ViewerState {
 	 * scene install puts it back to 100% centred */
 	viewportZoom: number;
 	viewportPan: ViewportPan;
+	/** per-scene editing state; null exactly when scene is null */
+	editor: EditorState | null;
+	/** bumped when a delta changes the frame stream -- NOT sceneId, so
+	 * viewport, playback position, and audio never reset on an edit */
+	editRevision: number;
+	/** the frame changes of the last landed delta, for PlayerView's
+	 * frame-cursor remap; fullFrames means "no splice to remap through" */
+	lastSplice: FrameChanges | null;
 
 	openReplay(osrPath: string): Promise<void>;
 	/** reopens a recents entry. the whole entry is the argument to keep this
@@ -154,6 +198,12 @@ export interface ViewerState {
 	loadSettings(): Promise<void>;
 	saveStablePath(path: string | null): Promise<void>;
 	clearRecents(): Promise<void>;
+
+	commitEdit(commit: EditCommit): Promise<void>;
+	undoEdit(): Promise<void>;
+	redoEdit(): Promise<void>;
+	revertAll(): Promise<void>;
+	setFrameSelection(indices: number[]): void;
 }
 
 export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
@@ -169,6 +219,137 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 		// and a superseded load that hasn't started skips its ipc call entirely
 		let loadSeq = 0;
 		let loadQueue: Promise<void> = Promise.resolve();
+
+		// the edit queue: one editor command in flight, later commits queued
+		// behind it. queued commits are never skipped by newer ones -- edits
+		// compose -- but a fullFrames delta cancels everything queued (the
+		// state they were computed against is gone) and a scene install
+		// clears the queue outright. responses are tagged with the epoch they
+		// were issued under; a tag that no longer matches is dropped
+		type PendingEdit =
+			| { kind: "commit"; commit: EditCommit }
+			| { kind: "undo" }
+			| { kind: "redo" }
+			| { kind: "revertAll" };
+		let editQueue: PendingEdit[] = [];
+		let editPumping = false;
+
+		function installDelta(delta: EditDelta, epochTag: number): void {
+			const { scene, editor } = get();
+			if (scene === null || editor === null || editor.epoch !== epochTag) return;
+			// serialized commands cannot reorder, so an older revision can only
+			// be a duplicate or a bug -- drop it; equal revisions are identity
+			// deltas and carry no frame changes
+			if (delta.revision < editor.revision) return;
+
+			let frames = scene.frames;
+			let editRevision = get().editRevision;
+			let lastSplice = get().lastSplice;
+			let frameSelection = editor.frameSelection;
+			if (delta.frames !== null) {
+				frames = applyFrameChanges(scene.frames, delta.frames);
+				editRevision += 1;
+				lastSplice = delta.frames;
+				if (isFullFrames(delta.frames)) {
+					// the queued ops' base state no longer exists in any mappable
+					// sense; selections' referents likewise
+					editQueue = [];
+					frameSelection = [];
+				} else {
+					frameSelection = remapSelection(frameSelection, delta.frames);
+					remapQueuedPayloads(delta.frames);
+				}
+			}
+			const nextScene: LoadedScene = {
+				...scene,
+				frames,
+				simulation: delta.simulation ?? scene.simulation,
+				replay: { ...scene.replay, playerName: delta.playerName, timestampTicks: delta.timestampTicks }
+			};
+			set({
+				scene: nextScene,
+				...(delta.frames !== null || delta.simulation !== null ? { derived: deriveScene(nextScene) } : {}),
+				editRevision,
+				lastSplice,
+				editor: {
+					...editor,
+					revision: delta.revision,
+					dirty: delta.dirty,
+					canUndo: delta.canUndo,
+					canRedo: delta.canRedo,
+					history: delta.history,
+					frameSelection
+				}
+			});
+		}
+
+		function remapQueuedPayloads(changes: FrameChanges): void {
+			editQueue = editQueue.flatMap((pending) => {
+				if (pending.kind !== "commit" || pending.commit.payload.kind !== "ops") return [pending];
+				const ops = remapQueuedOps(pending.commit.payload.ops, changes);
+				if (ops === null) return [];
+				return [
+					{ kind: "commit" as const, commit: { ...pending.commit, payload: { kind: "ops" as const, ops } } }
+				];
+			});
+		}
+
+		async function resyncNow(epochTag: number): Promise<void> {
+			try {
+				installDelta(await deps.resync(epochTag), epochTag);
+			} catch {
+				// a resync that itself fails leaves the next command to retry;
+				// the store keeps showing the last authoritative state
+			}
+		}
+
+		async function pumpEdits(): Promise<void> {
+			if (editPumping) return;
+			editPumping = true;
+			try {
+				for (;;) {
+					const pending = editQueue.shift();
+					if (pending === undefined) return;
+					const { scene, editor } = get();
+					if (scene === null || editor === null) {
+						editQueue = [];
+						return;
+					}
+					const epochTag = editor.epoch;
+					// re-check history steps against the authoritative state at
+					// dispatch: the enqueue-time gate can pass while the step that
+					// will consume the last entry is still in flight
+					if (pending.kind === "undo" && !editor.canUndo) continue;
+					if (pending.kind === "redo" && !editor.canRedo) continue;
+					try {
+						let delta: EditDelta;
+						if (pending.kind === "undo") delta = await deps.undo(epochTag);
+						else if (pending.kind === "redo") delta = await deps.redo(epochTag);
+						else if (pending.kind === "revertAll") delta = await deps.revertAll(epochTag);
+						else {
+							// dispatch-time expansion: intents read the then-current
+							// frames, and base_revision is assigned here -- after any
+							// remap or expansion -- which is what makes a same-epoch
+							// mismatch unreachable short of a bug
+							const payload = pending.commit.payload;
+							const ops = payload.kind === "ops" ? payload.ops : payload.expand(scene.frames, editor);
+							if (ops === null || ops.length === 0) continue;
+							delta = await deps.applyEdit(epochTag, editor.revision, ops, pending.commit.label);
+						}
+						installDelta(delta, epochTag);
+					} catch (e) {
+						// a response for a replaced session is dropped outright: the
+						// install already reset the slice and cleared the queue
+						if (get().editor?.epoch !== epochTag) continue;
+						const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+						set({ lastError: { error, osrPath: "" } });
+						if (error.kind === "staleSession") await resyncNow(epochTag);
+					}
+				}
+			} finally {
+				editPumping = false;
+			}
+		}
 
 		// orders every settings publication: reads (install()'s post-load
 		// refresh, hydrateSettings, loadSettings) claim a slot by bumping at
@@ -201,6 +382,10 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 		// or a failing newest load would leave it pointing at deleted assets.
 		// only the current load owns the loading flag and error/pending state
 		function install(scene: LoadedScene, current: boolean, osrPath: string) {
+			// a fresh session invalidates every command queued against the
+			// previous one -- the epoch check in installDelta would drop their
+			// responses anyway, but there is no reason to let them dispatch
+			editQueue = [];
 			set({
 				scene,
 				derived: deriveScene(scene),
@@ -212,6 +397,20 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 				// the last one would be pointing at nothing in particular
 				viewportZoom: DEFAULT_VIEWPORT_ZOOM,
 				viewportPan: NO_VIEWPORT_PAN,
+				editor: {
+					epoch: scene.epoch,
+					revision: 0,
+					dirty: false,
+					canUndo: false,
+					canRedo: false,
+					history: { labels: [], cursor: 0 },
+					// inferred once here and frozen: the lattice comes from the
+					// source's own untouched frames, and edits must never shift it
+					lattice: inferLattice(scene.frames),
+					frameSelection: []
+				},
+				editRevision: 0,
+				lastSplice: null,
 				...(current ? { loading: false, lastError: null, pendingRecovery: null, pendingMismatch: null } : {})
 			});
 			// the load command records the recent backend-side, so the
@@ -306,6 +505,9 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 			detailSpanMs: DEFAULT_DETAIL_SPAN,
 			viewportZoom: DEFAULT_VIEWPORT_ZOOM,
 			viewportPan: NO_VIEWPORT_PAN,
+			editor: null,
+			editRevision: 0,
+			lastSplice: null,
 
 			openReplay: (osrPath) => run(osrPath, () => deps.loadReplay(osrPath)),
 			openRecent: (entry) => run(entry.osrPath, () => deps.loadRecentReplay(entry.osrPath)),
@@ -463,6 +665,31 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
 					set({ lastError: { error, osrPath: "" } });
 				}
+			},
+			commitEdit: async (commit) => {
+				if (get().editor === null) return;
+				editQueue.push({ kind: "commit", commit });
+				await pumpEdits();
+			},
+			undoEdit: async () => {
+				if (get().editor?.canUndo !== true) return;
+				editQueue.push({ kind: "undo" });
+				await pumpEdits();
+			},
+			redoEdit: async () => {
+				if (get().editor?.canRedo !== true) return;
+				editQueue.push({ kind: "redo" });
+				await pumpEdits();
+			},
+			revertAll: async () => {
+				if (get().editor === null) return;
+				editQueue.push({ kind: "revertAll" });
+				await pumpEdits();
+			},
+			setFrameSelection: (indices) => {
+				const editor = get().editor;
+				if (editor === null) return;
+				set({ editor: { ...editor, frameSelection: indices } });
 			}
 		};
 	});
@@ -475,7 +702,12 @@ export const viewerStore = createViewerStore({
 	getSettings: invokeGetSettings,
 	setOsuStablePath: invokeSetOsuStablePath,
 	setViewerPrefs: invokeSetViewerPrefs,
-	clearRecents: invokeClearRecents
+	clearRecents: invokeClearRecents,
+	applyEdit: invokeApplyEdit,
+	undo: invokeUndo,
+	redo: invokeRedo,
+	revertAll: invokeRevertAll,
+	resync: invokeResync
 });
 
 export function useViewerStore<T>(selector: (state: ViewerState) => T): T {
