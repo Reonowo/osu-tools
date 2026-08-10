@@ -39,7 +39,7 @@ const KEY_HARDWARE: Record<PhysicalKey, string> = {
 };
 const KEYS_ARE_PHYSICAL = "K and M are those same two buttons reached by different hardware, never two presses at once";
 
-const PRESS_EDIT_BLOCKER = "needs the replay-document ipc commands";
+const PRESS_EDIT_BLOCKER = "lands with the keypress editing milestone";
 
 /** the frame time the held action first reads false again, i.e. the release
  * that follows this press's rising edge; null when the stream ends before it

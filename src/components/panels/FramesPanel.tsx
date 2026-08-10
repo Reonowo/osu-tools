@@ -6,20 +6,30 @@
 // scrolling body together, so SidePanel can mount this as a single
 // self-contained panel
 
-import { useCallback, useEffect, useRef, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PanelHeader } from "@/components/shell/SidePanel";
+import { frameEditGate } from "@/editor/gate";
+import { insertOps, nudgeOps, snapOps } from "@/editor/ops";
 import { formatButtons, formatTime } from "@/lib/format";
 import { formatLatticeStep, isOnLattice } from "@/lib/lattice";
 import { frameCursor } from "@/playback/frame-cursor";
-import { useViewerStore } from "@/state/store";
-import { InertNotice } from "./InertNotice";
+import { playbackClock } from "@/playback/instance";
+import { useViewerStore, type EditorState } from "@/state/store";
 import { SectionLabel } from "./SectionLabel";
 
 const ROW_COUNT = 9;
 const CENTER_ROW = 4;
+
+/** panel ops apply to the selection, or the frame-cursor frame when nothing
+ * is selected -- evaluated inside the intent so a queued op reads the
+ * selection as of dispatch */
+function opTargets(editor: EditorState): number[] {
+	return editor.frameSelection.length > 0 ? editor.frameSelection : [frameCursor.currentIndex()];
+}
 
 /** the frame index the top row shows with `centerIndex` selected: centred
  * where the replay has room on both sides, flush against whichever end it
@@ -75,8 +85,31 @@ export function FrameRow({
 export function FramesPanel() {
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
+	const editor = useViewerStore((s) => s.editor);
+	const commitEdit = useViewerStore((s) => s.commitEdit);
+	const snapPref = useViewerStore((s) => s.editing.snapToLattice);
+	const gate = scene !== null ? frameEditGate(scene) : null;
+	const canFrameEdit = gate?.editable === true;
+	const lattice = editor?.lattice ?? null;
 	const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const frameCount = scene === null ? 0 : scene.frames.length;
+	const [dxDraft, setDxDraft] = useState("0");
+	const [dyDraft, setDyDraft] = useState("0");
+
+	function commitNudge() {
+		const dx = Number(dxDraft);
+		const dy = Number(dyDraft);
+		if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return;
+		void commitEdit({
+			label: "nudge",
+			payload: {
+				kind: "intent",
+				expand: (frames, editor) => nudgeOps(frames, opTargets(editor), dx, dy, editor.lattice, snapPref)
+			}
+		});
+		setDxDraft("0");
+		setDyDraft("0");
+	}
 
 	// activation reads the frame index the rAF loop most recently wrote to this
 	// row's own dataset, so it always seeks the row's live index even if a click
@@ -101,7 +134,6 @@ export function FramesPanel() {
 	useEffect(() => {
 		if (scene === null || derived === null) return;
 		const frames = scene.frames;
-		const lattice = derived.lattice;
 		let raf = 0;
 		const loop = () => {
 			const centerIndex = frames.length > 0 ? frameCursor.currentIndex() : -1;
@@ -140,10 +172,39 @@ export function FramesPanel() {
 		};
 		raf = requestAnimationFrame(loop);
 		return () => cancelAnimationFrame(raf);
-	}, [scene, derived]);
+	}, [scene, derived, lattice]);
 
 	if (scene === null || derived === null) return null;
-	const { lattice } = derived;
+
+	// shared with both branches below -- only the wrapper differs, gated by
+	// whether the row needs a tooltip explaining why it's disabled
+	const nudgeInsertButtons = (
+		<>
+			<Button variant="outline" size="sm" className="flex-1" disabled={!canFrameEdit} onClick={commitNudge}>
+				nudge
+			</Button>
+			<Button
+				variant="outline"
+				size="sm"
+				className="flex-1"
+				disabled={!canFrameEdit}
+				onClick={() => {
+					// the playhead the user clicked at, not wherever playback has
+					// drifted to by the time a queued intent expands
+					const playheadTime = playbackClock.currentTime();
+					void commitEdit({
+						label: "insert frame",
+						payload: {
+							kind: "intent",
+							expand: (frames, editor) => insertOps(frames, playheadTime, editor.lattice)
+						}
+					});
+				}}
+			>
+				insert at playhead
+			</Button>
+		</>
+	);
 
 	return (
 		<>
@@ -152,11 +213,6 @@ export function FramesPanel() {
 				data-native-wheel=""
 				className="flex min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto overflow-x-hidden p-3.5"
 			>
-				<InertNotice>
-					frame editing needs the replay-document ipc commands; the engine's ReplayDocument is ready, the
-					tauri layer is not
-				</InertNotice>
-
 				<div>
 					<SectionLabel>frames near playhead</SectionLabel>
 					<div className="mt-[7px] overflow-hidden rounded-[9px] border border-border">
@@ -194,12 +250,43 @@ export function FramesPanel() {
 				<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
 					<SectionLabel>operations</SectionLabel>
 					<div className="mt-2 flex gap-1.5">
-						<Button disabled variant="outline" size="sm" className="flex-1">
-							snap to lattice
-						</Button>
-						<Button disabled variant="outline" size="sm" className="flex-1">
-							smooth
-						</Button>
+						<Tooltip>
+							<TooltipTrigger render={<span className="flex-1" />}>
+								<Button
+									variant="outline"
+									size="sm"
+									className="w-full"
+									disabled={!canFrameEdit || lattice === null}
+									onClick={() =>
+										void commitEdit({
+											label: "snap to lattice",
+											payload: {
+												kind: "intent",
+												expand: (frames, editor) =>
+													snapOps(frames, opTargets(editor), editor.lattice)
+											}
+										})
+									}
+								>
+									snap to lattice
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="left">
+								{gate !== null && !gate.editable
+									? gate.reason
+									: lattice === null
+										? "no input lattice could be inferred from these frames"
+										: "move the selection (or the current frame) onto the inferred lattice"}
+							</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger render={<span className="flex-1" />}>
+								<Button disabled variant="outline" size="sm" className="w-full">
+									smooth
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="left">smoothing lands with the cursor-path tools</TooltipContent>
+						</Tooltip>
 					</div>
 					<label className="mt-2.5 block text-[10px] text-[#8a8a93]">
 						strength
@@ -209,9 +296,13 @@ export function FramesPanel() {
 						<label className="block text-[10px] text-[#8a8a93]">
 							Δx
 							<Input
-								disabled
+								disabled={!canFrameEdit}
 								type="number"
-								placeholder="0"
+								value={dxDraft}
+								onChange={(e) => setDxDraft(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") commitNudge();
+								}}
 								// Input's own base carries a *separate* md:text-sm alongside its
 								// unprefixed text-base -- overriding only the unprefixed class
 								// leaves md:text-sm undefeated (same trap task 10 hit twice), so
@@ -222,9 +313,13 @@ export function FramesPanel() {
 						<label className="block text-[10px] text-[#8a8a93]">
 							Δy
 							<Input
-								disabled
+								disabled={!canFrameEdit}
 								type="number"
-								placeholder="0"
+								value={dyDraft}
+								onChange={(e) => setDyDraft(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") commitNudge();
+								}}
 								// Input's own base carries a *separate* md:text-sm alongside its
 								// unprefixed text-base -- overriding only the unprefixed class
 								// leaves md:text-sm undefeated (same trap task 10 hit twice), so
@@ -233,6 +328,16 @@ export function FramesPanel() {
 							/>
 						</label>
 					</div>
+					{canFrameEdit ? (
+						<div className="mt-1.5 flex gap-1.5">{nudgeInsertButtons}</div>
+					) : (
+						<Tooltip>
+							<TooltipTrigger render={<div className="mt-1.5 flex gap-1.5" />}>
+								{nudgeInsertButtons}
+							</TooltipTrigger>
+							<TooltipContent side="left">{gate?.reason}</TooltipContent>
+						</Tooltip>
+					)}
 				</div>
 			</div>
 		</>

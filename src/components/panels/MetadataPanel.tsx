@@ -1,15 +1,15 @@
-// the meta tab: player name and mods (both real, both inert), then the
-// locked list of header fields export regenerates from the judgement
-// timeline rather than ever writing back. header + scrolling body together,
-// so SidePanel can mount this as a single self-contained panel
+// the meta tab: player name and timestamp (real editors), mods (read-only),
+// then the locked list of header fields export regenerates from the
+// judgement timeline rather than ever writing back. header + scrolling body
+// together, so SidePanel can mount this as a single self-contained panel
 
+import { useEffect, useState } from "react";
 import { Check, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PanelHeader } from "@/components/shell/SidePanel";
-import { formatMods } from "@/lib/format";
+import { formatMods, ticksToUnixMs, unixMsToTicks } from "@/lib/format";
 import { useViewerStore } from "@/state/store";
-import { InertNotice } from "./InertNotice";
 import { SectionLabel } from "./SectionLabel";
 
 function LockedRow({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {
@@ -28,10 +28,60 @@ function LockedRow({ label, value, warning = false }: { label: string; value: st
 	);
 }
 
+/** local wall-clock "YYYY-MM-DDTHH:mm:ss" for a datetime-local input */
+function toLocalInput(unixMs: number): string {
+	const d = new Date(unixMs);
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
+		d.getMinutes()
+	)}:${pad(d.getSeconds())}`;
+}
+
 export function MetadataPanel() {
 	const scene = useViewerStore((s) => s.scene);
+	const commitEdit = useViewerStore((s) => s.commitEdit);
+
+	// the epoch is in both draft-sync deps so a replay swap resets the drafts
+	// even when the new scene renders the identical value
+	const [nameDraft, setNameDraft] = useState(scene?.replay.playerName ?? "");
+	useEffect(() => setNameDraft(scene?.replay.playerName ?? ""), [scene?.epoch, scene?.replay.playerName]);
+
+	// datetime-local speaks local wall-clock time at second granularity; the
+	// draft only commits when it differs from what the current ticks render
+	// to, so an untouched field never rewrites sub-second precision. ticks
+	// that fail to parse (or predate the unix epoch) have no local rendering,
+	// so the field falls back to empty rather than throwing
+	const playedMs = scene === null ? null : ticksToUnixMs(scene.replay.timestampTicks);
+	const playedLocal = playedMs === null ? "" : toLocalInput(playedMs);
+	const [timeDraft, setTimeDraft] = useState(playedLocal);
+	useEffect(() => setTimeDraft(playedLocal), [scene?.epoch, playedLocal]);
+
 	if (scene === null) return null;
 	const { replay } = scene;
+
+	function commitName() {
+		// the ui cannot distinguish null from empty; an emptied field commits
+		// null, the honest "no name"
+		const name = nameDraft.trim() === "" ? null : nameDraft;
+		if (name === replay.playerName) return;
+		void commitEdit({
+			label: "player name",
+			payload: { kind: "ops", ops: [{ kind: "setPlayerName", name }] }
+		});
+	}
+
+	function commitTimestamp() {
+		if (timeDraft === playedLocal) return;
+		const ms = new Date(timeDraft).getTime();
+		if (!Number.isFinite(ms)) {
+			setTimeDraft(playedLocal);
+			return;
+		}
+		void commitEdit({
+			label: "timestamp",
+			payload: { kind: "ops", ops: [{ kind: "setTimestamp", ticks: unixMsToTicks(ms) }] }
+		});
+	}
 
 	// formatMods joins active mod names with a space (or "none"); splitting
 	// back into chips is still real data, just re-shaped for the badge row
@@ -45,11 +95,32 @@ export function MetadataPanel() {
 				data-native-wheel=""
 				className="flex min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto overflow-x-hidden p-3.5"
 			>
-				<InertNotice>metadata editing needs the replay-document ipc commands</InertNotice>
-
 				<label className="block text-[10px] text-[#8a8a93]">
 					player name
-					<Input disabled readOnly value={replay.playerName ?? ""} className="mt-1" />
+					<Input
+						value={nameDraft}
+						onChange={(e) => setNameDraft(e.target.value)}
+						onBlur={commitName}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") commitName();
+						}}
+						className="mt-1"
+					/>
+				</label>
+
+				<label className="block text-[10px] text-[#8a8a93]">
+					played
+					<Input
+						type="datetime-local"
+						step={1}
+						value={timeDraft}
+						onChange={(e) => setTimeDraft(e.target.value)}
+						onBlur={commitTimestamp}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") commitTimestamp();
+						}}
+						className="mt-1"
+					/>
 				</label>
 
 				<div>
@@ -79,8 +150,9 @@ export function MetadataPanel() {
 				</div>
 
 				<p className="text-[10.5px] leading-[1.55] text-[#8a8a93]">
-					these fields are derived from the simulated judgement timeline and cannot be edited directly. an
-					HP-drain port is still missing, so the life bar is written empty rather than carried over.
+					these fields are derived from the simulated judgement timeline and regenerate on export; only the
+					player name and timestamp above are directly editable. an HP-drain port is still missing, so the
+					life bar is written empty rather than carried over.
 				</p>
 			</div>
 		</>
