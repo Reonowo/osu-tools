@@ -93,8 +93,7 @@ fn local_nomod_replays_self_verify() {
 /// both the correctly-named and the only comfortably non-overlapping choice
 #[test]
 fn synthetic_full_combo_on_the_fixture_map() {
-    let map =
-        decode_beatmap_path(&fixture_util::fixtures_dir().join("beatmaps/slider-zoo-v14.osu")).unwrap();
+    let map = decode_beatmap_path(&fixture_util::fixtures_dir().join("beatmaps/slider-zoo-v14.osu")).unwrap();
     let processed = process_beatmap(&map).unwrap();
 
     // build frames that press exactly on every object's stacked position at
@@ -144,7 +143,11 @@ mod engine_test_helpers {
     pub fn full_combo_frames(processed: &ProcessedBeatmap) -> Vec<ReplayFrame> {
         let mut frames = Vec::new();
         for (i, obj) in processed.objects.iter().enumerate() {
-            let button = if i % 2 == 0 { Buttons::LEFT_1 } else { Buttons::RIGHT_1 };
+            let button = if i % 2 == 0 {
+                Buttons::LEFT_1
+            } else {
+                Buttons::RIGHT_1
+            };
             match &obj.kind {
                 ProcessedKind::Circle => {
                     frames.push(idle(obj.start_time - 200.0, obj.stacked_position));
@@ -172,10 +175,18 @@ mod engine_test_helpers {
     }
 
     fn press(time: f64, pos: Vec2, button: u32) -> ReplayFrame {
-        ReplayFrame { time, pos, buttons: Buttons::new(button) }
+        ReplayFrame {
+            time,
+            pos,
+            buttons: Buttons::new(button),
+        }
     }
 
     fn idle(time: f64, pos: Vec2) -> ReplayFrame {
-        ReplayFrame { time, pos, buttons: Buttons::new(0) }
+        ReplayFrame {
+            time,
+            pos,
+            buttons: Buttons::new(0),
+        }
     }
 }

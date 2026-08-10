@@ -4,7 +4,7 @@
 //! tail leniency reaches the osu! ruleset through TAIL_LENIENCY, which the
 //! simulator's tail judgement consumes directly (sliderinputmanager.cs:154)
 
-use crate::error::{resource_limit, Result, EngineError};
+use crate::error::{resource_limit, EngineError, Result};
 use crate::limits;
 
 /// slidereventgenerator.cs:24
@@ -44,8 +44,7 @@ pub fn generate_slider_events(
     }
     if span_count < 1 {
         return Err(EngineError::InvalidArgument(
-            "span_count must be at least 1; lazer's converter always clamps repeat count >= 1"
-                .to_string(),
+            "span_count must be at least 1; lazer's converter always clamps repeat count >= 1".to_string(),
         ));
     }
 
@@ -68,13 +67,16 @@ pub fn generate_slider_events(
         Ok(())
     };
 
-    push(&mut events, SliderEvent {
-        kind: SliderEventKind::Head,
-        span_index: 0,
-        span_start_time: start_time,
-        time: start_time,
-        path_progress: 0.0,
-    })?;
+    push(
+        &mut events,
+        SliderEvent {
+            kind: SliderEventKind::Head,
+            span_index: 0,
+            span_start_time: start_time,
+            time: start_time,
+            path_progress: 0.0,
+        },
+    )?;
 
     for span in 0..span_count {
         let span_start_time = start_time + span as f64 * span_duration;
@@ -88,14 +90,21 @@ pub fn generate_slider_events(
                     break;
                 }
                 let path_progress = d / length;
-                let time_progress = if reversed { 1.0 - path_progress } else { path_progress };
-                push(&mut events, SliderEvent {
-                    kind: SliderEventKind::Tick,
-                    span_index: span,
-                    span_start_time,
-                    time: span_start_time + time_progress * span_duration,
-                    path_progress,
-                })?;
+                let time_progress = if reversed {
+                    1.0 - path_progress
+                } else {
+                    path_progress
+                };
+                push(
+                    &mut events,
+                    SliderEvent {
+                        kind: SliderEventKind::Tick,
+                        span_index: span,
+                        span_start_time,
+                        time: span_start_time + time_progress * span_duration,
+                        path_progress,
+                    },
+                )?;
                 d += tick_distance;
             }
             // slidereventgenerator.cs:58-62 -- reversed spans yield ticks in
@@ -106,24 +115,30 @@ pub fn generate_slider_events(
         }
 
         if span < span_count - 1 {
-            push(&mut events, SliderEvent {
-                kind: SliderEventKind::Repeat,
-                span_index: span,
-                span_start_time,
-                time: span_start_time + span_duration,
-                path_progress: ((span + 1) % 2) as f64,
-            })?;
+            push(
+                &mut events,
+                SliderEvent {
+                    kind: SliderEventKind::Repeat,
+                    span_index: span,
+                    span_start_time,
+                    time: span_start_time + span_duration,
+                    path_progress: ((span + 1) % 2) as f64,
+                },
+            )?;
         }
     }
 
     let total_duration = span_count as f64 * span_duration;
-    push(&mut events, SliderEvent {
-        kind: SliderEventKind::Tail,
-        span_index: span_count - 1,
-        span_start_time: start_time + (span_count - 1) as f64 * span_duration,
-        time: start_time + total_duration,
-        path_progress: (span_count % 2) as f64,
-    })?;
+    push(
+        &mut events,
+        SliderEvent {
+            kind: SliderEventKind::Tail,
+            span_index: span_count - 1,
+            span_start_time: start_time + (span_count - 1) as f64 * span_duration,
+            time: start_time + total_duration,
+            path_progress: (span_count % 2) as f64,
+        },
+    )?;
 
     Ok(events)
 }
@@ -168,7 +183,10 @@ mod tests {
         // the tick at 60 survives (60 < 100 - 50 is false -> break), so only
         // the tick at 30 remains (slidereventgenerator.cs:145)
         let events = generate_slider_events(0.0, 20.0, 5.0, 30.0, 100.0, 1).unwrap();
-        let ticks: Vec<_> = events.iter().filter(|e| e.kind == SliderEventKind::Tick).collect();
+        let ticks: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == SliderEventKind::Tick)
+            .collect();
         assert_eq!(ticks.len(), 1);
         assert_eq!(ticks[0].path_progress, 0.3);
     }
@@ -226,7 +244,10 @@ mod tests {
         // slidereventgenerator.cs:31-33 -- ticks generate over at most 100000
         // distance units even for longer paths
         let events = generate_slider_events(0.0, 1000.0, 0.02, 60_000.0, 150_000.0, 1).unwrap();
-        let ticks: Vec<_> = events.iter().filter(|e| e.kind == SliderEventKind::Tick).collect();
+        let ticks: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == SliderEventKind::Tick)
+            .collect();
         assert_eq!(ticks.len(), 1);
         assert_eq!(ticks[0].path_progress, 0.6); // 60000 / 100000
     }
@@ -244,7 +265,10 @@ mod tests {
 
         let tick_distance = 100.0 / (at_limit_ticks as f64 + 2.0);
         match generate_slider_events(0.0, 1_000_000.0, 1e-9, tick_distance, 100.0, 1) {
-            Err(EngineError::ResourceLimit { cap: "MAX_SLIDER_NESTED_OBJECTS", .. }) => {}
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_SLIDER_NESTED_OBJECTS",
+                ..
+            }) => {}
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
     }
@@ -254,7 +278,10 @@ mod tests {
         // spans each emit a repeat, so a crafted i32::MAX slide count is
         // bounded by the same cap rather than iterating for minutes
         match generate_slider_events(0.0, 1.0, 0.1, 0.0, 100.0, i32::MAX) {
-            Err(EngineError::ResourceLimit { cap: "MAX_SLIDER_NESTED_OBJECTS", .. }) => {}
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_SLIDER_NESTED_OBJECTS",
+                ..
+            }) => {}
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
     }

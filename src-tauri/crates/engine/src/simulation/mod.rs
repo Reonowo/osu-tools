@@ -44,9 +44,9 @@
 //! frame are two presses, left first (`press_edges`'s replay order)
 
 pub(crate) mod presses;
+pub mod score;
 pub(crate) mod slider;
 pub(crate) mod spinner;
-pub mod score;
 
 use std::cell::Cell;
 
@@ -184,8 +184,7 @@ impl<'a> Ctx<'a> {
     /// other use of alive() is unaffected; closing the gap needs a
     /// per-kind/per-result drawable-lifetime model, not a tweak here
     pub fn alive(&self, index: usize, time: f64) -> bool {
-        !self.fully_judged(index)
-            && time >= self.beatmap.objects[index].start_time - self.beatmap.preempt
+        !self.fully_judged(index) && time >= self.beatmap.objects[index].start_time - self.beatmap.preempt
     }
 
     /// the settled cursor sample at an arbitrary instant, for the
@@ -429,7 +428,10 @@ fn simulate_with_sweep_budget(
         count_miss: ctx.score.count_miss,
         max_combo: ctx.score.max_combo,
     };
-    Ok(JudgementTimeline { events: ctx.events, totals })
+    Ok(JudgementTimeline {
+        events: ctx.events,
+        totals,
+    })
 }
 
 /// shared test-map builders and replay-frame helpers, split out so both
@@ -466,7 +468,10 @@ pub(crate) mod test_support {
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
             combo_colors: Vec::new(),
-            timing_points: vec![TimingPoint { time: 0.0, beat_len: 500.0 }],
+            timing_points: vec![TimingPoint {
+                time: 0.0,
+                beat_len: 500.0,
+            }],
             difficulty_points: Vec::new(),
             hit_objects,
         }
@@ -498,8 +503,14 @@ pub(crate) mod test_support {
             combo_offset: 0,
             kind: HitObjectKind::Slider(SliderData {
                 control_points: vec![
-                    PathControlPoint { pos: Vec2::ZERO, path_type: Some(PathType::Linear) },
-                    PathControlPoint { pos: Vec2::new(length as f32, 0.0), path_type: None },
+                    PathControlPoint {
+                        pos: Vec2::ZERO,
+                        path_type: Some(PathType::Linear),
+                    },
+                    PathControlPoint {
+                        pos: Vec2::new(length as f32, 0.0),
+                        path_type: None,
+                    },
                 ],
                 expected_distance: Some(length),
                 repeat_count,
@@ -522,8 +533,12 @@ pub(crate) mod test_support {
         repeat_count: i32,
         circle_size: f32,
     ) -> ProcessedBeatmap {
-        let mut map =
-            base_map(vec![linear_slider(1000.0, Vec2::new(100.0, 100.0), 100.0, repeat_count)]);
+        let mut map = base_map(vec![linear_slider(
+            1000.0,
+            Vec2::new(100.0, 100.0),
+            100.0,
+            repeat_count,
+        )]);
         map.slider_tick_rate = tick_rate;
         map.circle_size = circle_size;
         process_beatmap(&map).unwrap()
@@ -620,7 +635,11 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn frame(time: f64, x: f32, y: f32, raw: u32) -> ReplayFrame {
-        ReplayFrame { time, pos: Vec2::new(x, y), buttons: Buttons::new(raw) }
+        ReplayFrame {
+            time,
+            pos: Vec2::new(x, y),
+            buttons: Buttons::new(raw),
+        }
     }
 
     /// idle frame well before everything plus a trailing idle frame, so
@@ -656,8 +675,7 @@ mod tests {
         // sliders or spinners, so the tracking, drain, and spinner sweeps
         // iterate nothing; an unconsumed press never reaches the note-lock
         // walks). 25 presses land exactly on a budget of 1000
-        let circles: Vec<(f64, f32, f32)> =
-            (0..40).map(|i| (5000.0, i as f32 * 8.0, 0.0)).collect();
+        let circles: Vec<(f64, f32, f32)> = (0..40).map(|i| (5000.0, i as f32 * 8.0, 0.0)).collect();
         let beatmap = circle_map(&circles);
 
         // born from 4400 (preempt 600); alternating frames every 2ms from
@@ -675,7 +693,10 @@ mod tests {
         assert_eq!(timeline.totals.count_miss, 40); // nothing was ever hit
 
         match simulate_with_sweep_budget(&beatmap, &frames, 999) {
-            Err(EngineError::ResourceLimit { cap: "MAX_SIMULATION_SWEEP_STEPS", .. }) => {}
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_SIMULATION_SWEEP_STEPS",
+                ..
+            }) => {}
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
     }
@@ -732,11 +753,7 @@ mod tests {
         // result_for is none past 400ms -> policy shake, no judgement; the
         // circle still misses on its own later
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(
-            &beatmap,
-            &wrap(vec![frame(400.0, 256.0, 192.0, Buttons::LEFT_1)]),
-        )
-        .unwrap();
+        let timeline = simulate(&beatmap, &wrap(vec![frame(400.0, 256.0, 192.0, Buttons::LEFT_1)])).unwrap();
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
         assert_eq!(timeline.events[0].time, 1149.5);
@@ -790,7 +807,12 @@ mod tests {
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0), (1049.0, 256.0, 192.0)]);
         let timeline = simulate(
             &beatmap,
-            &wrap(vec![frame(1000.0, 256.0, 192.0, Buttons::LEFT_1 | Buttons::RIGHT_1)]),
+            &wrap(vec![frame(
+                1000.0,
+                256.0,
+                192.0,
+                Buttons::LEFT_1 | Buttons::RIGHT_1,
+            )]),
         )
         .unwrap();
         // left press hits circle 0 (great), right press falls through to
@@ -804,11 +826,7 @@ mod tests {
     #[test]
     fn a_press_off_every_circle_hits_nothing() {
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(
-            &beatmap,
-            &wrap(vec![frame(1000.0, 500.0, 50.0, Buttons::LEFT_1)]),
-        )
-        .unwrap();
+        let timeline = simulate(&beatmap, &wrap(vec![frame(1000.0, 500.0, 50.0, Buttons::LEFT_1)])).unwrap();
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
     }
 
@@ -891,9 +909,17 @@ mod tests {
         use crate::beatmap::difficulty::HitGrade::*;
         use JudgementKind::*;
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
-        let spins = kinds.iter().filter(|k| matches!(k, SpinnerSpin | SpinnerBonus)).count();
-        let expected = [Circle(Great), SliderHead { hit: true }, SliderTick { hit: true },
-            SliderTail { hit: true }, SliderAggregate(Great)];
+        let spins = kinds
+            .iter()
+            .filter(|k| matches!(k, SpinnerSpin | SpinnerBonus))
+            .count();
+        let expected = [
+            Circle(Great),
+            SliderHead { hit: true },
+            SliderTick { hit: true },
+            SliderTail { hit: true },
+            SliderAggregate(Great),
+        ];
         // spinner spin/bonus counts vary with sampling; assert around them
         assert_eq!(&kinds[..5], &expected[..5]);
         assert!(spins >= 1);
@@ -930,14 +956,18 @@ mod tests {
             .filter(|e| {
                 matches!(
                     e.kind,
-                    JudgementKind::Circle(_) | JudgementKind::SliderAggregate(_) | JudgementKind::SpinnerFinal(_)
+                    JudgementKind::Circle(_)
+                        | JudgementKind::SliderAggregate(_)
+                        | JudgementKind::SpinnerFinal(_)
                 )
             })
             .count();
         assert_eq!(basics, 4);
         assert_eq!(
-            timeline.totals.count_miss + timeline.totals.count_300
-                + timeline.totals.count_100 + timeline.totals.count_50,
+            timeline.totals.count_miss
+                + timeline.totals.count_300
+                + timeline.totals.count_100
+                + timeline.totals.count_50,
             4
         );
         // every object reached a terminal state

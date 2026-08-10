@@ -76,16 +76,27 @@ mod tests {
     #[test]
     fn nomod_detection_is_exact() {
         assert!(LegacyMods { raw: 0 }.is_nomod());
-        assert!(!LegacyMods { raw: LegacyMods::HIDDEN }.is_nomod());
-        assert!(LegacyMods { raw: LegacyMods::HARD_ROCK | LegacyMods::DOUBLE_TIME }
-            .contains(LegacyMods::HARD_ROCK));
+        assert!(!LegacyMods {
+            raw: LegacyMods::HIDDEN
+        }
+        .is_nomod());
+        assert!(LegacyMods {
+            raw: LegacyMods::HARD_ROCK | LegacyMods::DOUBLE_TIME
+        }
+        .contains(LegacyMods::HARD_ROCK));
     }
 
     #[test]
     fn only_nomod_gets_a_pipeline() {
         assert!(pipeline_for(LegacyMods { raw: 0 }).is_some());
-        assert!(pipeline_for(LegacyMods { raw: LegacyMods::NO_FAIL }).is_none());
-        assert!(pipeline_for(LegacyMods { raw: LegacyMods::SCORE_V2 }).is_none());
+        assert!(pipeline_for(LegacyMods {
+            raw: LegacyMods::NO_FAIL
+        })
+        .is_none());
+        assert!(pipeline_for(LegacyMods {
+            raw: LegacyMods::SCORE_V2
+        })
+        .is_none());
     }
 
     #[test]
@@ -114,7 +125,10 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
             combo_colors: Vec::new(),
-            timing_points: vec![TimingPoint { time: 0.0, beat_len: 500.0 }],
+            timing_points: vec![TimingPoint {
+                time: 0.0,
+                beat_len: 500.0,
+            }],
             difficulty_points: Vec::new(),
             hit_objects: vec![HitObject {
                 start_time: 1000.0,
@@ -127,7 +141,10 @@ mod tests {
         let direct = crate::beatmap::process_beatmap(&map).unwrap();
         let piped = process_with_mods(&map, &NoMod).unwrap();
         assert_eq!(piped.objects.len(), direct.objects.len());
-        assert_eq!(piped.objects[0].stacked_position, direct.objects[0].stacked_position);
+        assert_eq!(
+            piped.objects[0].stacked_position,
+            direct.objects[0].stacked_position
+        );
         assert_eq!(NoMod.rate(), 1.0);
     }
 }

@@ -24,8 +24,7 @@ pub fn apply_stacking(beatmap: &mut ProcessedBeatmap) {
     // osubeatmapprocessor.cs:280-281 -- (int)-truncated preempt times the
     // leniency, kept as f32. every top-level object shares the map preempt, so
     // the per-object c# call collapses to one constant
-    let stack_threshold =
-        dotnet_double_to_i32_unchecked(beatmap.preempt) as f32 * beatmap.stack_leniency;
+    let stack_threshold = dotnet_double_to_i32_unchecked(beatmap.preempt) as f32 * beatmap.stack_leniency;
 
     if beatmap.format_version >= 6 {
         apply_stacking_new(&mut beatmap.objects, stack_threshold);
@@ -92,14 +91,11 @@ fn apply_stacking_new(objects: &mut [ProcessedObject], stack_threshold: f32) {
                     break;
                 }
                 if is_slider(&objects[n])
-                    && Vec2::distance(objects[n].end_position(), objects[object_i].position)
-                        < STACK_DISTANCE
+                    && Vec2::distance(objects[n].end_position(), objects[object_i].position) < STACK_DISTANCE
                 {
                     let offset = objects[object_i].stack_height - objects[n].stack_height + 1;
                     for j in (n + 1)..=i {
-                        if Vec2::distance(objects[n].end_position(), objects[j].position)
-                            < STACK_DISTANCE
-                        {
+                        if Vec2::distance(objects[n].end_position(), objects[j].position) < STACK_DISTANCE {
                             objects[j].stack_height -= offset;
                         }
                     }
@@ -121,9 +117,7 @@ fn apply_stacking_new(objects: &mut [ProcessedObject], stack_threshold: f32) {
                 if objects[object_i].start_time - objects[n].start_time > stack_threshold as f64 {
                     break;
                 }
-                if Vec2::distance(objects[n].end_position(), objects[object_i].position)
-                    < STACK_DISTANCE
-                {
+                if Vec2::distance(objects[n].end_position(), objects[object_i].position) < STACK_DISTANCE {
                     objects[n].stack_height = objects[object_i].stack_height + 1;
                     object_i = n;
                 }
@@ -196,7 +190,10 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
             combo_colors: Vec::new(),
-            timing_points: vec![TimingPoint { time: 0.0, beat_len: 500.0 }],
+            timing_points: vec![TimingPoint {
+                time: 0.0,
+                beat_len: 500.0,
+            }],
             difficulty_points: Vec::new(),
             hit_objects,
         }
@@ -220,8 +217,14 @@ mod tests {
             combo_offset: 0,
             kind: HitObjectKind::Slider(SliderData {
                 control_points: vec![
-                    PathControlPoint { pos: Vec2::ZERO, path_type: Some(PathType::Linear) },
-                    PathControlPoint { pos: Vec2::new(length as f32, 0.0), path_type: None },
+                    PathControlPoint {
+                        pos: Vec2::ZERO,
+                        path_type: Some(PathType::Linear),
+                    },
+                    PathControlPoint {
+                        pos: Vec2::new(length as f32, 0.0),
+                        path_type: None,
+                    },
                 ],
                 expected_distance: Some(length),
                 repeat_count: 0,
@@ -257,7 +260,10 @@ mod tests {
         assert_eq!(p.objects[2].stack_height, 0);
         // osuhitobject.cs:92: offset = height * scale * -6.4 on both axes
         let offset = 2.0f32 * p.scale * -6.4;
-        assert_eq!(p.objects[0].stacked_position, Vec2::new(256.0 + offset, 192.0 + offset));
+        assert_eq!(
+            p.objects[0].stacked_position,
+            Vec2::new(256.0 + offset, 192.0 + offset)
+        );
         assert_eq!(p.objects[2].stacked_position, Vec2::new(256.0, 192.0));
     }
 
@@ -383,7 +389,9 @@ mod tests {
             ],
         ))
         .unwrap();
-        let ProcessedKind::Slider(s) = &p.objects[0].kind else { panic!("expected slider") };
+        let ProcessedKind::Slider(s) = &p.objects[0].kind else {
+            panic!("expected slider")
+        };
         assert_eq!(p.objects[0].stack_height, 1);
         let offset = 1.0f32 * p.scale * -6.4;
         assert_eq!(

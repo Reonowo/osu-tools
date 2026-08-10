@@ -286,7 +286,10 @@ mod tests {
         assert_eq!(settings.overlays.display_length, DISPLAY_LENGTH_DEFAULT);
         assert!(!settings.overlays.cursor_path);
         assert!(settings.editing.snap_to_lattice, "snapping ships enabled");
-        assert!(settings.editing.warn_on_overwrite, "the overwrite warning ships enabled");
+        assert!(
+            settings.editing.warn_on_overwrite,
+            "the overwrite warning ships enabled"
+        );
         assert_eq!(
             settings.effects,
             EffectPrefs {
@@ -405,7 +408,10 @@ mod tests {
         assert_eq!(entry.beatmap_path, None);
         assert_eq!(entry.beatmap_dir, None);
         assert_eq!(entry.beatmap_md5, None);
-        assert!(!entry.allow_mismatch, "no stored consent means no override on reopen");
+        assert!(
+            !entry.allow_mismatch,
+            "no stored consent means no override on reopen"
+        );
     }
 
     #[test]
@@ -495,7 +501,11 @@ mod tests {
         // halves independently
         let dir = tempfile::tempdir().unwrap();
         let settings = Settings {
-            effects: EffectPrefs { enabled: false, cursor_glow: false, ..EffectPrefs::default() },
+            effects: EffectPrefs {
+                enabled: false,
+                cursor_glow: false,
+                ..EffectPrefs::default()
+            },
             ..Settings::default()
         };
         save_settings(dir.path(), &settings).unwrap();
@@ -503,7 +513,10 @@ mod tests {
         assert_eq!(loaded.effects, settings.effects);
         assert!(!loaded.effects.enabled);
         assert!(!loaded.effects.cursor_glow);
-        assert!(loaded.effects.hit_effects, "an effect left on stays on under a disabled master");
+        assert!(
+            loaded.effects.hit_effects,
+            "an effect left on stays on under a disabled master"
+        );
     }
 
     #[test]
@@ -527,7 +540,10 @@ mod tests {
         assert_eq!(loaded.editing, EditingPrefs::default());
         assert_eq!(
             loaded.recents,
-            vec![RecentReplay { osr_path: r"C:\a.osr".into(), ..RecentReplay::default() }]
+            vec![RecentReplay {
+                osr_path: r"C:\a.osr".into(),
+                ..RecentReplay::default()
+            }]
         );
     }
 
@@ -550,13 +566,18 @@ mod tests {
             settings.push_recent(recent(&format!("C:\\{i}.osr"), i as i64));
         }
         assert_eq!(settings.recents.len(), MAX_RECENTS);
-        assert_eq!(settings.recents[0].osr_path, format!("C:\\{}.osr", MAX_RECENTS + 4));
+        assert_eq!(
+            settings.recents[0].osr_path,
+            format!("C:\\{}.osr", MAX_RECENTS + 4)
+        );
     }
 
     #[test]
     fn sanitize_truncates_and_clamps_a_hand_edited_recents_list() {
         let mut settings = Settings {
-            recents: (0..(MAX_RECENTS + 3)).map(|i| recent(&format!("C:\\{i}.osr"), i as i64)).collect(),
+            recents: (0..(MAX_RECENTS + 3))
+                .map(|i| recent(&format!("C:\\{i}.osr"), i as i64))
+                .collect(),
             ..Settings::default()
         };
         settings.recents[0].accuracy = 9.0;
@@ -582,14 +603,23 @@ mod tests {
             br#"{"overlays":{"displayLength":9999}}"#,
         )
         .unwrap();
-        assert_eq!(load_settings(dir.path()).overlays.display_length, DISPLAY_LENGTH_MAX);
+        assert_eq!(
+            load_settings(dir.path()).overlays.display_length,
+            DISPLAY_LENGTH_MAX
+        );
     }
 
     #[test]
     fn a_non_finite_display_length_falls_back_to_the_default() {
         // json has no nan/inf literal, so this can only arrive through the
         // command boundary -- sanitize is what both paths share
-        let mut settings = Settings { overlays: OverlayPrefs { display_length: f64::NAN, ..OverlayPrefs::default() }, ..Settings::default() };
+        let mut settings = Settings {
+            overlays: OverlayPrefs {
+                display_length: f64::NAN,
+                ..OverlayPrefs::default()
+            },
+            ..Settings::default()
+        };
         settings.sanitize();
         assert_eq!(settings.overlays.display_length, DISPLAY_LENGTH_DEFAULT);
 

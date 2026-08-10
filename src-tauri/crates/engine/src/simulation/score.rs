@@ -73,8 +73,7 @@ impl ScoreState {
         if total == 0 {
             return 1.0;
         }
-        f64::from(300 * self.count_300 + 100 * self.count_100 + 50 * self.count_50)
-            / f64::from(300 * total)
+        f64::from(300 * self.count_300 + 100 * self.count_100 + 50 * self.count_50) / f64::from(300 * total)
     }
 
     fn count(&mut self, grade: HitGrade) {

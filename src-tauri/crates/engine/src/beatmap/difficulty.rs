@@ -150,9 +150,8 @@ mod tests {
     fn scale_matches_lazer_float_semantics() {
         // legacyrulesetextensions.cs:56-58 computed by hand with the exact c#
         // widening: (float)(1.0 - (double)0.7f * ((cs - 5) / 5)) / 2 * 1.00041f
-        let expected_cs4 = ((1.0f64 - (0.7f32 as f64) * ((4.0f32 as f64 - 5.0) / 5.0)) as f32)
-            / 2.0
-            * 1.00041f32;
+        let expected_cs4 =
+            ((1.0f64 - (0.7f32 as f64) * ((4.0f32 as f64 - 5.0) / 5.0)) as f32) / 2.0 * 1.00041f32;
         assert_eq!(scale_from_circle_size(4.0), expected_cs4);
         // cs 5 collapses the range term to zero exactly
         assert_eq!(scale_from_circle_size(5.0), 0.5f32 * 1.00041f32);

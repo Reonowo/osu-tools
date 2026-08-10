@@ -42,7 +42,10 @@ pub fn detect_install(
     for root in &roots {
         let db_path = root.join("osu!.db");
         if db_path.is_file() {
-            return Ok(StableInstall { db_path, songs_dir: root.join("Songs") });
+            return Ok(StableInstall {
+                db_path,
+                songs_dir: root.join("Songs"),
+            });
         }
     }
     Err(IpcError::OsuDbNotFound {
@@ -68,8 +71,9 @@ impl ListingCache {
                 return Ok(Arc::clone(listing));
             }
         }
-        let listing = Listing::from_file(db_path)
-            .map_err(|e| IpcError::Internal { message: format!("osu!.db parse: {e}") })?;
+        let listing = Listing::from_file(db_path).map_err(|e| IpcError::Internal {
+            message: format!("osu!.db parse: {e}"),
+        })?;
         let listing = Arc::new(listing);
         *slot = Some((db_path.to_path_buf(), modified, Arc::clone(&listing)));
         Ok(listing)
@@ -91,18 +95,18 @@ pub fn find_beatmap_by_md5(
         .iter()
         .find(|b| b.hash.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(md5)))
         .ok_or_else(not_found)?;
-    let (Some(folder), Some(file)) = (entry.folder_name.as_deref(), entry.file_name.as_deref())
-    else {
+    let (Some(folder), Some(file)) = (entry.folder_name.as_deref(), entry.file_name.as_deref()) else {
         return Err(not_found());
     };
     let path = install.songs_dir.join(folder).join(file);
-    let bytes = read_file_capped(&path, engine::limits::MAX_OSU_FILE_BYTES, "MAX_OSU_FILE_BYTES")
-        .map_err(|e| match e {
+    let bytes = read_file_capped(&path, engine::limits::MAX_OSU_FILE_BYTES, "MAX_OSU_FILE_BYTES").map_err(
+        |e| match e {
             // an oversized file is reported as the cap breach it is;
             // anything else unreadable is a stale listing
             e @ IpcError::ResourceLimit { .. } => e,
             _ => not_found(),
-        })?;
+        },
+    )?;
     let actual = format!("{:x}", md5::compute(&bytes));
     if !actual.eq_ignore_ascii_case(md5) {
         return Err(not_found());
@@ -165,8 +169,11 @@ mod tests {
         // the manual picker, never a silently mismatched scene
         let root = tempfile::tempdir().unwrap();
         let md5 = fake_install(root.path(), "1 fixture", "map.osu", b"original");
-        std::fs::write(root.path().join("Songs").join("1 fixture").join("map.osu"), b"edited since")
-            .unwrap();
+        std::fs::write(
+            root.path().join("Songs").join("1 fixture").join("map.osu"),
+            b"edited since",
+        )
+        .unwrap();
         let install = detect_install(Some(root.path()), &[]).unwrap();
 
         match find_beatmap_by_md5(&install, &ListingCache::default(), &md5) {
@@ -194,6 +201,9 @@ mod tests {
         let cache = ListingCache::default();
         let first = cache.get(&db).unwrap();
         let second = cache.get(&db).unwrap();
-        assert!(std::sync::Arc::ptr_eq(&first, &second), "unchanged db must hit the cache");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "unchanged db must hit the cache"
+        );
     }
 }

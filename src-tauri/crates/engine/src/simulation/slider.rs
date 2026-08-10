@@ -101,7 +101,9 @@ pub(crate) fn attempt_head_hit(
     }
     // classic block: once the head is judged the press still consumes (no
     // further judging), but it always still counts as a hit action
-    state_of(&mut ctx.states, index).head_hit_action.get_or_insert(action);
+    state_of(&mut ctx.states, index)
+        .head_hit_action
+        .get_or_insert(action);
 }
 
 /// advances a slider's next_unjudged past any already-resolved prefix
@@ -539,7 +541,10 @@ mod tests {
         // the passed tick was force-hit at the head-press instant
         assert_eq!(kinds[1], JudgementKind::SliderTick { hit: true });
         assert_eq!(timeline.events[1].time, head_t + 140.0);
-        assert_eq!(*kinds.last().unwrap(), JudgementKind::SliderAggregate(HitGrade::Great));
+        assert_eq!(
+            *kinds.last().unwrap(),
+            JudgementKind::SliderAggregate(HitGrade::Great)
+        );
     }
 
     #[test]
@@ -629,7 +634,7 @@ mod tests {
         let frames = wrap(vec![
             frame(head_t - 500.0, 400.0, 400.0, Buttons::RIGHT_1), // right held from before, off the head
             frame(head_t, 100.0, 100.0, Buttons::LEFT_1 | Buttons::RIGHT_1), // left press hits the head
-            frame(head_deadline, 142.0, 100.0, Buttons::LEFT_1), // right released on the deadline instant
+            frame(head_deadline, 142.0, 100.0, Buttons::LEFT_1),   // right released on the deadline instant
             frame(head_t + 250.0, 170.0, 100.0, Buttons::RIGHT_1), // right repressed at the tick, left gone
             frame(end_t + 50.0, 200.0, 100.0, Buttons::RIGHT_1),
         ]);
@@ -691,9 +696,20 @@ mod tests {
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
         let timeline = simulate(&beatmap, &frames).unwrap();
-        let tick_event = timeline.events.iter().find(|e| matches!(e.kind, JudgementKind::SliderTick { .. })).unwrap();
-        let tail_event = timeline.events.iter().find(|e| matches!(e.kind, JudgementKind::SliderTail { .. })).unwrap();
-        assert!(tail_event.time >= tick_event.time, "tail may not outrun the last tick");
+        let tick_event = timeline
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, JudgementKind::SliderTick { .. }))
+            .unwrap();
+        let tail_event = timeline
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, JudgementKind::SliderTail { .. }))
+            .unwrap();
+        assert!(
+            tail_event.time >= tick_event.time,
+            "tail may not outrun the last tick"
+        );
         assert_eq!(tail_event.kind, JudgementKind::SliderTail { hit: true });
     }
 }

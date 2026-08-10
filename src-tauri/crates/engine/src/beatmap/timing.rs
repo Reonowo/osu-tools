@@ -98,7 +98,11 @@ mod tests {
     }
 
     fn dp(time: f64, sv: f64) -> DifficultyPoint {
-        DifficultyPoint { time, slider_velocity: sv, generate_ticks: true }
+        DifficultyPoint {
+            time,
+            slider_velocity: sv,
+            generate_ticks: true,
+        }
     }
 
     #[test]

@@ -5,13 +5,11 @@
 //! stacking post-process (beatmap::stacking, wired in by process_beatmap)
 
 use crate::beatmap::difficulty::{
-    difficulty_range, fade_in_from_preempt, preempt_from_approach_rate, scale_from_circle_size,
-    OsuHitWindows,
+    difficulty_range, fade_in_from_preempt, preempt_from_approach_rate, scale_from_circle_size, OsuHitWindows,
 };
 use crate::beatmap::slider_events::{generate_slider_events, SliderEvent, SliderEventKind};
 use crate::beatmap::timing::{
-    difficulty_point_at, tick_distance, tick_distance_multiplier, timing_point_at,
-    slider_velocity,
+    difficulty_point_at, slider_velocity, tick_distance, tick_distance_multiplier, timing_point_at,
 };
 use crate::error::{resource_limit, Result};
 use crate::formats::beatmap::{Beatmap, HitObjectKind};
@@ -409,7 +407,11 @@ fn build_spinner(overall_difficulty: f32, duration: f64) -> ProcessedSpinner {
         .wrapping_sub(spins_required)
         .wrapping_sub(BONUS_SPINS_GAP)
         .max(0);
-    ProcessedSpinner { duration, spins_required, max_bonus_spins }
+    ProcessedSpinner {
+        duration,
+        spins_required,
+        max_bonus_spins,
+    }
 }
 
 #[cfg(test)]
@@ -444,14 +446,23 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 2.0,
             combo_colors: Vec::new(),
-            timing_points: vec![TimingPoint { time: 0.0, beat_len: 500.0 }],
+            timing_points: vec![TimingPoint {
+                time: 0.0,
+                beat_len: 500.0,
+            }],
             difficulty_points: Vec::new(),
             hit_objects,
         }
     }
 
     fn circle(start_time: f64, pos: Vec2, new_combo: bool, combo_offset: i32) -> HitObject {
-        HitObject { start_time, pos, new_combo, combo_offset, kind: HitObjectKind::Circle }
+        HitObject {
+            start_time,
+            pos,
+            new_combo,
+            combo_offset,
+            kind: HitObjectKind::Circle,
+        }
     }
 
     fn spinner(start_time: f64, duration: f64) -> HitObject {
@@ -472,8 +483,14 @@ mod tests {
             combo_offset: 0,
             kind: HitObjectKind::Slider(SliderData {
                 control_points: vec![
-                    PathControlPoint { pos: Vec2::ZERO, path_type: Some(PathType::Linear) },
-                    PathControlPoint { pos: Vec2::new(length as f32, 0.0), path_type: None },
+                    PathControlPoint {
+                        pos: Vec2::ZERO,
+                        path_type: Some(PathType::Linear),
+                    },
+                    PathControlPoint {
+                        pos: Vec2::new(length as f32, 0.0),
+                        path_type: None,
+                    },
                 ],
                 expected_distance: Some(length),
                 repeat_count,
@@ -484,8 +501,11 @@ mod tests {
     /// a map whose ticks never generate: tick distance arrives as +infinity,
     /// so each slider's events are exactly head + repeats + tail
     fn tickless(mut map: Beatmap) -> Beatmap {
-        map.difficulty_points =
-            vec![DifficultyPoint { time: 0.0, slider_velocity: 1.0, generate_ticks: false }];
+        map.difficulty_points = vec![DifficultyPoint {
+            time: 0.0,
+            slider_velocity: 1.0,
+            generate_ticks: false,
+        }];
         map
     }
 
@@ -511,7 +531,10 @@ mod tests {
             linear_slider(2e9, Vec2::ZERO, 100.0, 0),
         ]));
         match process_beatmap(&map) {
-            Err(EngineError::ResourceLimit { cap: "MAX_TOTAL_SLIDER_NESTED_OBJECTS", .. }) => {}
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_TOTAL_SLIDER_NESTED_OBJECTS",
+                ..
+            }) => {}
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
     }
@@ -522,7 +545,10 @@ mod tests {
         // slider declaring exactly the per-slider vertex cap in control
         // points retains that many vertices; two of those sit exactly on the
         // total budget and the smallest possible further path goes past it
-        assert_eq!(2 * limits::MAX_SLIDER_PATH_VERTICES, limits::MAX_TOTAL_SLIDER_PATH_VERTICES);
+        assert_eq!(
+            2 * limits::MAX_SLIDER_PATH_VERTICES,
+            limits::MAX_TOTAL_SLIDER_PATH_VERTICES
+        );
         let at_cap = |start: f64| HitObject {
             start_time: start,
             pos: Vec2::ZERO,
@@ -549,7 +575,10 @@ mod tests {
             linear_slider(2e9, Vec2::ZERO, 100.0, 0),
         ]));
         match process_beatmap(&map) {
-            Err(EngineError::ResourceLimit { cap: "MAX_TOTAL_SLIDER_PATH_VERTICES", .. }) => {}
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_TOTAL_SLIDER_PATH_VERTICES",
+                ..
+            }) => {}
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
     }
@@ -558,7 +587,10 @@ mod tests {
     fn per_map_difficulty_values_come_from_the_difficulty_module() {
         let map = base_map(vec![circle(1000.0, Vec2::new(256.0, 192.0), true, 0)]);
         let processed = process_beatmap(&map).unwrap();
-        assert_eq!(processed.scale, super::super::difficulty::scale_from_circle_size(4.0));
+        assert_eq!(
+            processed.scale,
+            super::super::difficulty::scale_from_circle_size(4.0)
+        );
         assert_eq!(processed.preempt, 600.0);
         assert_eq!(processed.fade_in, 400.0);
         assert_eq!(processed.windows.great(), 49.5);
@@ -618,7 +650,9 @@ mod tests {
         // length 100 -> ticks at 70 only (140 > 100); duration = 100 / 0.28
         let map = base_map(vec![linear_slider(1000.0, Vec2::new(100.0, 100.0), 100.0, 0)]);
         let p = process_beatmap(&map).unwrap();
-        let ProcessedKind::Slider(s) = &p.objects[0].kind else { panic!("expected slider") };
+        let ProcessedKind::Slider(s) = &p.objects[0].kind else {
+            panic!("expected slider")
+        };
 
         assert_eq!(s.velocity, 100.0 * 1.4 / 500.0);
         assert_eq!(s.tick_distance, s.velocity * 500.0 / 2.0);
@@ -642,8 +676,7 @@ mod tests {
         assert_eq!(tick.path_progress, 70.0 / 100.0);
         assert_eq!(tick.position, Vec2::new(170.0, 100.0));
         // slidertick.cs:24-35: span 0 offset is TimePreempt * 0.66f (widened)
-        let expected_tick_preempt =
-            (tick.time - 1000.0) / 2.0 + 600.0 * (0.66f32 as f64);
+        let expected_tick_preempt = (tick.time - 1000.0) / 2.0 + 600.0 * (0.66f32 as f64);
         assert_eq!(tick.preempt, expected_tick_preempt);
 
         let tail = &s.nested[2];
@@ -658,14 +691,15 @@ mod tests {
     fn repeat_slider_nested_positions_and_preempts() {
         let map = base_map(vec![linear_slider(0.0, Vec2::ZERO, 100.0, 2)]);
         let p = process_beatmap(&map).unwrap();
-        let ProcessedKind::Slider(s) = &p.objects[0].kind else { panic!("expected slider") };
+        let ProcessedKind::Slider(s) = &p.objects[0].kind else {
+            panic!("expected slider")
+        };
 
         assert_eq!(s.span_count, 3);
         // odd span count -> tail sits at the far end
         assert_eq!(s.end_position, Vec2::new(100.0, 0.0));
 
-        let repeats: Vec<_> =
-            s.nested.iter().filter(|n| n.kind == NestedKind::Repeat).collect();
+        let repeats: Vec<_> = s.nested.iter().filter(|n| n.kind == NestedKind::Repeat).collect();
         assert_eq!(repeats.len(), 2);
         // slider.cs:215-224: repeat time comes from span arithmetic, position
         // from the path progress (span+1) % 2
@@ -700,7 +734,9 @@ mod tests {
         // bonus = (int)(12.6667...) - 5 - 2 = 5
         let map = base_map(vec![spinner(0.0, 2000.0)]);
         let p = process_beatmap(&map).unwrap();
-        let ProcessedKind::Spinner(sp) = &p.objects[0].kind else { panic!("expected spinner") };
+        let ProcessedKind::Spinner(sp) = &p.objects[0].kind else {
+            panic!("expected spinner")
+        };
         assert_eq!(sp.spins_required, 5);
         assert_eq!(sp.max_bonus_spins, 5);
         assert_eq!(sp.spins_required_for_bonus(), 7);
@@ -725,7 +761,9 @@ mod tests {
         }]);
         map.overall_difficulty = 10.0;
         let p = process_beatmap(&map).unwrap();
-        let ProcessedKind::Spinner(sp) = &p.objects[0].kind else { panic!("expected spinner") };
+        let ProcessedKind::Spinner(sp) = &p.objects[0].kind else {
+            panic!("expected spinner")
+        };
         assert_eq!(sp.spins_required, 1_500_000_000);
         // wrapping_sub reproduces c#'s unchecked wraparound rather than the
         // saturated value a checked subtraction would otherwise clamp to
@@ -736,7 +774,9 @@ mod tests {
     fn nested_objects_are_sorted_by_time() {
         let map = base_map(vec![linear_slider(0.0, Vec2::ZERO, 100.0, 3)]);
         let p = process_beatmap(&map).unwrap();
-        let ProcessedKind::Slider(s) = &p.objects[0].kind else { panic!("expected slider") };
+        let ProcessedKind::Slider(s) = &p.objects[0].kind else {
+            panic!("expected slider")
+        };
         for pair in s.nested.windows(2) {
             assert!(pair[0].time <= pair[1].time);
         }

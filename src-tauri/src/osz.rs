@@ -16,9 +16,7 @@ use zip::ZipArchive;
 
 use crate::cache::{create_leased_dir, CacheLease};
 use crate::error::IpcError;
-use crate::limits::{
-    MAX_OSZ_ENTRIES, MAX_OSZ_EXTRACTED_BYTES, MAX_OSZ_FILE_BYTES, MAX_OSZ_SCAN_BYTES,
-};
+use crate::limits::{MAX_OSZ_ENTRIES, MAX_OSZ_EXTRACTED_BYTES, MAX_OSZ_FILE_BYTES, MAX_OSZ_SCAN_BYTES};
 
 pub struct OszArchive {
     archive: ZipArchive<BufReader<File>>,
@@ -55,7 +53,9 @@ impl std::fmt::Debug for MatchedOsu {
 }
 
 fn archive_err(what: impl std::fmt::Display) -> IpcError {
-    IpcError::BeatmapParse { message: format!("osz: {what}") }
+    IpcError::BeatmapParse {
+        message: format!("osz: {what}"),
+    }
 }
 
 // zip 8's enclosed_name() only rejects a root/prefix component when it
@@ -169,7 +169,11 @@ fn zip64_declared_entry_count(file: &mut File, eocd_pos: u64) -> Option<u64> {
         let cd_offset = u64::from_le_bytes(record[48..56].try_into().unwrap());
         // zip's fit rule: the declared entries' minimum central-directory
         // bytes must exist between the directory offset and the record
-        if hit < declared.saturating_mul(CDFH_FIXED_LEN as u64).saturating_add(cd_offset) {
+        if hit
+            < declared
+                .saturating_mul(CDFH_FIXED_LEN as u64)
+                .saturating_add(cd_offset)
+        {
             continue;
         }
         return Some(declared);
@@ -230,8 +234,7 @@ fn count_physical_entries(file: &mut File, cd_start: u64, ceiling: u64) -> u64 {
 /// probes and fall back to the real record exactly like zip's fallback
 fn scan_eocd_candidates(file: &mut File, tail: &[u8], tail_start: u64) -> Option<u64> {
     let u16_at = |at: usize| u16::from_le_bytes([tail[at], tail[at + 1]]);
-    let u32_at =
-        |at: usize| u32::from_le_bytes([tail[at], tail[at + 1], tail[at + 2], tail[at + 3]]);
+    let u32_at = |at: usize| u32::from_le_bytes([tail[at], tail[at + 1], tail[at + 2], tail[at + 3]]);
     let cap = MAX_OSZ_ENTRIES as u64;
 
     for start in (0..=tail.len() - EOCD_FIXED_LEN).rev() {
@@ -246,8 +249,7 @@ fn scan_eocd_candidates(file: &mut File, tail: &[u8], tail_start: u64) -> Option
         let cd_size = u64::from(u32_at(start + 12));
         let cd_offset = u64::from(u32_at(start + 16));
 
-        if declared == 0xffff || cd_size == u64::from(u32::MAX) || cd_offset == u64::from(u32::MAX)
-        {
+        if declared == 0xffff || cd_size == u64::from(u32::MAX) || cd_offset == u64::from(u32::MAX) {
             match zip64_declared_entry_count(file, eocd_pos) {
                 Some(count) => return Some(count),
                 None => continue,
@@ -346,10 +348,7 @@ pub fn open_osz_with_max_len(path: &Path, max_len: u64) -> Result<OszArchive, Ip
         // absolute-name check above, a single unsafe name rejects the whole
         // archive outright -- fail closed, per spec
         let has_parent_component = entry.name().split(['/', '\\']).any(|c| c == "..");
-        if entry.enclosed_name().is_none()
-            || has_parent_component
-            || is_absolute_entry_name(entry.name())
-        {
+        if entry.enclosed_name().is_none() || has_parent_component || is_absolute_entry_name(entry.name()) {
             return Err(archive_err(format!("unsafe entry name {:?}", entry.name())));
         }
         names.push(entry.name().to_string());
@@ -390,8 +389,7 @@ impl OszArchive {
         per_candidate_cap: u64,
         scan_budget: u64,
     ) -> Result<Option<MatchedOsu>, IpcError> {
-        let found =
-            self.find_osu_ranked(std::slice::from_ref(&md5), per_candidate_cap, scan_budget)?;
+        let found = self.find_osu_ranked(std::slice::from_ref(&md5), per_candidate_cap, scan_budget)?;
         Ok(found.map(|(_, matched)| matched))
     }
 
@@ -401,10 +399,7 @@ impl OszArchive {
     /// order must come here rather than calling `find_osu_by_md5` per hash --
     /// that would hand the same archive a fresh `MAX_OSZ_SCAN_BYTES` for
     /// every hash it tried
-    pub fn find_osu_by_any_md5(
-        &mut self,
-        md5s: &[&str],
-    ) -> Result<Option<(usize, MatchedOsu)>, IpcError> {
+    pub fn find_osu_by_any_md5(&mut self, md5s: &[&str]) -> Result<Option<(usize, MatchedOsu)>, IpcError> {
         self.find_osu_ranked(md5s, engine::limits::MAX_OSU_FILE_BYTES, MAX_OSZ_SCAN_BYTES)
     }
 
@@ -420,7 +415,11 @@ impl OszArchive {
         // force unbounded decompression on the way to not-found. each read
         // is also clamped to what the budget can still afford, so actual
         // decompression never outruns the cap by more than a single byte
-        let mut budget = ByteBudget { used: 0, max: scan_budget, cap: "MAX_OSZ_SCAN_BYTES" };
+        let mut budget = ByteBudget {
+            used: 0,
+            max: scan_budget,
+            cap: "MAX_OSZ_SCAN_BYTES",
+        };
         let mut best: Option<(usize, MatchedOsu)> = None;
         for index in self.osu_indices_by_name() {
             let read_cap = per_candidate_cap.min(budget.remaining());
@@ -437,7 +436,11 @@ impl OszArchive {
             let Some(rank) = md5s.iter().position(|m| actual.eq_ignore_ascii_case(m)) else {
                 continue;
             };
-            let matched = MatchedOsu { index, bytes, md5: actual };
+            let matched = MatchedOsu {
+                index,
+                bytes,
+                md5: actual,
+            };
             // the first hash can never be beaten, so it ends the scan where a
             // single-hash search always did; a lower-ranked hit is only held
             // until a better one turns up
@@ -453,7 +456,9 @@ impl OszArchive {
 
     /// the deterministic override target: first .osu by entry name
     pub fn first_osu(&mut self) -> Result<Option<MatchedOsu>, IpcError> {
-        let Some(&index) = self.osu_indices_by_name().first() else { return Ok(None) };
+        let Some(&index) = self.osu_indices_by_name().first() else {
+            return Ok(None);
+        };
         let Some(bytes) = self.read_member_capped(index, engine::limits::MAX_OSU_FILE_BYTES)? else {
             return Ok(None);
         };
@@ -555,11 +560,17 @@ impl OszArchive {
     ) -> Result<ExtractedScene, IpcError> {
         std::fs::create_dir_all(cache_root)?;
         let lease = create_leased_dir(cache_root, label)?;
-        let mut budget = ByteBudget { used: 0, max: max_total, cap: "MAX_OSZ_EXTRACTED_BYTES" };
+        let mut budget = ByteBudget {
+            used: 0,
+            max: max_total,
+            cap: "MAX_OSZ_EXTRACTED_BYTES",
+        };
 
         let osu_rel = {
             let entry = self.archive.by_index(osu_index).map_err(archive_err)?;
-            entry.enclosed_name().expect("open_osz validated every entry name")
+            entry
+                .enclosed_name()
+                .expect("open_osz validated every entry name")
         };
         let osu_path = lease.dir().join(&osu_rel);
         budget.charge(osu_bytes.len() as u64)?;
@@ -567,8 +578,7 @@ impl OszArchive {
 
         for media in media_names {
             let want = normalize_entry_name(media);
-            let found =
-                (0..self.names.len()).find(|&i| normalize_entry_name(&self.names[i]) == want);
+            let found = (0..self.names.len()).find(|&i| normalize_entry_name(&self.names[i]) == want);
             let Some(index) = found else {
                 // a beatmap referencing media its archive lacks is common;
                 // the scene simply loads without it (AudioMissing warning
@@ -576,7 +586,9 @@ impl OszArchive {
                 continue;
             };
             let mut entry = self.archive.by_index(index).map_err(archive_err)?;
-            let rel = entry.enclosed_name().expect("open_osz validated every entry name");
+            let rel = entry
+                .enclosed_name()
+                .expect("open_osz validated every entry name");
             let out_path = lease.dir().join(rel);
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -595,7 +607,11 @@ impl OszArchive {
         }
 
         let beatmap_dir = lease.dir().to_path_buf();
-        Ok(ExtractedScene { lease, osu_path, beatmap_dir })
+        Ok(ExtractedScene {
+            lease,
+            osu_path,
+            beatmap_dir,
+        })
     }
 }
 
@@ -626,12 +642,19 @@ mod tests {
         // uppercase extension must still count as a candidate
         assert_eq!(archive.names()[hit.index].to_ascii_lowercase(), "b [hard].osu");
 
-        assert!(archive.find_osu_by_md5("00000000000000000000000000000000").unwrap().is_none());
+        assert!(archive
+            .find_osu_by_md5("00000000000000000000000000000000")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn first_osu_is_deterministic_by_name() {
-        let (_dir, path) = temp_osz(&[("z.osu", b"zz".as_slice()), ("a.osu", b"aa".as_slice()), ("audio.mp3", b"x".as_slice())]);
+        let (_dir, path) = temp_osz(&[
+            ("z.osu", b"zz".as_slice()),
+            ("a.osu", b"aa".as_slice()),
+            ("audio.mp3", b"x".as_slice()),
+        ]);
         let mut archive = open_osz(&path).unwrap();
         let first = archive.first_osu().unwrap().unwrap();
         assert_eq!(first.bytes, b"aa");
@@ -639,7 +662,10 @@ mod tests {
 
     #[test]
     fn oversized_candidates_are_skipped_not_fatal() {
-        let (_dir, path) = temp_osz(&[("big.osu", b"0123456789".as_slice()), ("small.osu", b"ok".as_slice())]);
+        let (_dir, path) = temp_osz(&[
+            ("big.osu", b"0123456789".as_slice()),
+            ("small.osu", b"ok".as_slice()),
+        ]);
         let mut archive = open_osz(&path).unwrap();
         let want = format!("{:x}", md5::compute(b"ok"));
         // cap below big.osu's size: it can never decode, so it is not a
@@ -669,7 +695,11 @@ mod tests {
 
         let mut archive = open_osz(&path).unwrap();
         match archive.find_osu_by_md5_with_caps(&want, 64, 7) {
-            Err(IpcError::ResourceLimit { cap, limit: 7, actual: 8 }) => {
+            Err(IpcError::ResourceLimit {
+                cap,
+                limit: 7,
+                actual: 8,
+            }) => {
                 assert_eq!(cap, "MAX_OSZ_SCAN_BYTES");
             }
             other => panic!("expected ResourceLimit, got {other:?}"),
@@ -690,8 +720,10 @@ mod tests {
         // the preferred hash wins even though the other member matches too,
         // and even though that other member comes first by entry name
         let mut archive = open_osz(&path).unwrap();
-        let (rank, hit) =
-            archive.find_osu_by_any_md5(&[b_hash.as_str(), a_hash.as_str()]).unwrap().unwrap();
+        let (rank, hit) = archive
+            .find_osu_by_any_md5(&[b_hash.as_str(), a_hash.as_str()])
+            .unwrap()
+            .unwrap();
         assert_eq!(rank, 0);
         assert_eq!(hit.bytes, b"bbbb");
 
@@ -705,7 +737,11 @@ mod tests {
         // hash that has not been tried yet
         let mut archive = open_osz(&path).unwrap();
         match archive.find_osu_ranked(&[absent.as_str(), b_hash.as_str()], 64, 7) {
-            Err(IpcError::ResourceLimit { cap, limit: 7, actual: 8 }) => {
+            Err(IpcError::ResourceLimit {
+                cap,
+                limit: 7,
+                actual: 8,
+            }) => {
                 assert_eq!(cap, "MAX_OSZ_SCAN_BYTES");
             }
             other => panic!("expected ResourceLimit, got {other:?}"),
@@ -716,7 +752,10 @@ mod tests {
     fn oversized_skipped_candidates_still_charge_the_scan_budget() {
         // big.osu exceeds the 5-byte candidate cap, so its skip charges
         // cap + 1 = 6 bytes; a 7-byte budget then cannot afford small.osu
-        let (_dir, path) = temp_osz(&[("big.osu", b"0123456789".as_slice()), ("small.osu", b"ok".as_slice())]);
+        let (_dir, path) = temp_osz(&[
+            ("big.osu", b"0123456789".as_slice()),
+            ("small.osu", b"ok".as_slice()),
+        ]);
         let want = format!("{:x}", md5::compute(b"ok"));
 
         let mut archive = open_osz(&path).unwrap();
@@ -801,10 +840,10 @@ mod tests {
     fn prepended_over_cap_archives_still_reject() {
         // the prefix shifts every offset, but the physically present
         // directory records must still be found and counted against the cap
-        let names: Vec<String> =
-            (0..=crate::limits::MAX_OSZ_ENTRIES).map(|i| format!("f{i}.txt")).collect();
-        let entries: Vec<(&str, &[u8])> =
-            names.iter().map(|n| (n.as_str(), b"".as_slice())).collect();
+        let names: Vec<String> = (0..=crate::limits::MAX_OSZ_ENTRIES)
+            .map(|i| format!("f{i}.txt"))
+            .collect();
+        let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), b"".as_slice())).collect();
         let (_plain_dir, plain) = temp_osz(&entries);
         let dir = tempfile::tempdir().unwrap();
         let mut bytes = b"junk".to_vec();
@@ -858,7 +897,8 @@ mod tests {
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         zip.set_raw_comment(bare_eocd(0xffff).into_boxed_slice()).unwrap();
-        zip.start_file("map.osu", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.start_file("map.osu", zip::write::SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"osu file format v14").unwrap();
         zip.finish().unwrap();
 
@@ -891,8 +931,10 @@ mod tests {
         let path = dir.path().join("commented.osz");
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        zip.set_raw_comment(implausible_fake_eocd(0xfffe).into_boxed_slice()).unwrap();
-        zip.start_file("map.osu", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.set_raw_comment(implausible_fake_eocd(0xfffe).into_boxed_slice())
+            .unwrap();
+        zip.start_file("map.osu", zip::write::SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"osu file format v14").unwrap();
         zip.finish().unwrap();
 
@@ -925,7 +967,8 @@ mod tests {
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         zip.set_raw_comment(fake.into_boxed_slice()).unwrap();
-        zip.start_file("map.osu", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.start_file("map.osu", zip::write::SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"osu file format v14").unwrap();
         zip.finish().unwrap();
 
@@ -1014,14 +1057,16 @@ mod tests {
 
     #[test]
     fn entry_count_cap_boundary() {
-        let names_at: Vec<String> =
-            (0..crate::limits::MAX_OSZ_ENTRIES).map(|i| format!("f{i}.txt")).collect();
+        let names_at: Vec<String> = (0..crate::limits::MAX_OSZ_ENTRIES)
+            .map(|i| format!("f{i}.txt"))
+            .collect();
         let at: Vec<(&str, &[u8])> = names_at.iter().map(|n| (n.as_str(), b"".as_slice())).collect();
         let (_dir, path) = temp_osz(&at);
         assert!(open_osz(&path).is_ok());
 
-        let names_past: Vec<String> =
-            (0..=crate::limits::MAX_OSZ_ENTRIES).map(|i| format!("f{i}.txt")).collect();
+        let names_past: Vec<String> = (0..=crate::limits::MAX_OSZ_ENTRIES)
+            .map(|i| format!("f{i}.txt"))
+            .collect();
         let past: Vec<(&str, &[u8])> = names_past.iter().map(|n| (n.as_str(), b"".as_slice())).collect();
         let (_dir2, path2) = temp_osz(&past);
         match open_osz(&path2) {
@@ -1054,15 +1099,30 @@ mod tests {
         let matched = archive.first_osu().unwrap().unwrap();
 
         let extracted = archive
-            .extract_scene(matched.index, &matched.bytes, &["audio.mp3", "sb\\bg.jpg"], cache_root.path(), "test")
+            .extract_scene(
+                matched.index,
+                &matched.bytes,
+                &["audio.mp3", "sb\\bg.jpg"],
+                cache_root.path(),
+                "test",
+            )
             .unwrap();
 
         assert_eq!(extracted.beatmap_dir, extracted.lease.dir());
         assert_eq!(std::fs::read(&extracted.osu_path).unwrap(), osu);
         assert!(extracted.osu_path.starts_with(extracted.lease.dir()));
-        assert_eq!(std::fs::read(extracted.beatmap_dir.join("Audio.MP3")).unwrap(), b"mp3 bytes");
-        assert_eq!(std::fs::read(extracted.beatmap_dir.join("sb").join("bg.jpg")).unwrap(), b"jpg bytes");
-        assert!(!extracted.beatmap_dir.join("unrelated.wav").exists(), "only required members");
+        assert_eq!(
+            std::fs::read(extracted.beatmap_dir.join("Audio.MP3")).unwrap(),
+            b"mp3 bytes"
+        );
+        assert_eq!(
+            std::fs::read(extracted.beatmap_dir.join("sb").join("bg.jpg")).unwrap(),
+            b"jpg bytes"
+        );
+        assert!(
+            !extracted.beatmap_dir.join("unrelated.wav").exists(),
+            "only required members"
+        );
 
         let dir = extracted.lease.dir().to_path_buf();
         drop(extracted);
@@ -1076,7 +1136,13 @@ mod tests {
         let mut archive = open_osz(&path).unwrap();
         let matched = archive.first_osu().unwrap().unwrap();
         let extracted = archive
-            .extract_scene(matched.index, &matched.bytes, &["nope.mp3"], cache_root.path(), "t")
+            .extract_scene(
+                matched.index,
+                &matched.bytes,
+                &["nope.mp3"],
+                cache_root.path(),
+                "t",
+            )
             .unwrap();
         assert!(!extracted.beatmap_dir.join("nope.mp3").exists());
     }
@@ -1090,13 +1156,26 @@ mod tests {
         let mut archive = open_osz(&path).unwrap();
         let matched = archive.first_osu().unwrap().unwrap();
         assert!(archive
-            .extract_scene_with_budget(matched.index, &matched.bytes, &["a.mp3"], cache_root.path(), "t", 10)
+            .extract_scene_with_budget(
+                matched.index,
+                &matched.bytes,
+                &["a.mp3"],
+                cache_root.path(),
+                "t",
+                10
+            )
             .is_ok());
 
         let mut archive = open_osz(&path).unwrap();
         let matched = archive.first_osu().unwrap().unwrap();
-        match archive.extract_scene_with_budget(matched.index, &matched.bytes, &["a.mp3"], cache_root.path(), "t", 9)
-        {
+        match archive.extract_scene_with_budget(
+            matched.index,
+            &matched.bytes,
+            &["a.mp3"],
+            cache_root.path(),
+            "t",
+            9,
+        ) {
             Err(IpcError::ResourceLimit { cap, limit: 9, .. }) => {
                 assert_eq!(cap, "MAX_OSZ_EXTRACTED_BYTES");
             }

@@ -46,7 +46,10 @@ pub fn create_leased_dir(root: &Path, label: &str) -> io::Result<CacheLease> {
     let lock = File::create(dir.join(LOCK_FILE))?;
     lock.try_lock()
         .map_err(|e| io::Error::other(format!("fresh lock file already locked: {e}")))?;
-    Ok(CacheLease { dir, lock: Some(lock) })
+    Ok(CacheLease {
+        dir,
+        lock: Some(lock),
+    })
 }
 
 /// deletes every cache directory whose lock nobody holds. failures are

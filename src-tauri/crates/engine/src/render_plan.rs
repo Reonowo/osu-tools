@@ -158,7 +158,9 @@ fn xy(v: Vec2) -> [f32; 2] {
 /// its end, so the degenerate entries collapse to 1.0, preserving the
 /// invariant that segment ends close at the path's end
 fn finite_segment_ends(ends: Vec<f64>) -> Vec<f64> {
-    ends.into_iter().map(|p| if p.is_finite() { p } else { 1.0 }).collect()
+    ends.into_iter()
+        .map(|p| if p.is_finite() { p } else { 1.0 })
+        .collect()
 }
 
 pub fn build_render_plan(map: &Beatmap, processed: &ProcessedBeatmap) -> RenderPlan {
@@ -227,7 +229,10 @@ pub fn build_render_plan(map: &Beatmap, processed: &ProcessedBeatmap) -> RenderP
         .collect();
 
     RenderPlan {
-        playfield: PlayfieldConstants { width: 512.0, height: 384.0 },
+        playfield: PlayfieldConstants {
+            width: 512.0,
+            height: 384.0,
+        },
         combo_colours,
         hit_windows: HitWindowBounds {
             great: processed.windows.great(),
@@ -273,7 +278,10 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 2.0,
             combo_colors: Vec::new(),
-            timing_points: vec![TimingPoint { time: 0.0, beat_len: 500.0 }],
+            timing_points: vec![TimingPoint {
+                time: 0.0,
+                beat_len: 500.0,
+            }],
             difficulty_points: Vec::new(),
             hit_objects,
         }
@@ -297,8 +305,14 @@ mod tests {
             combo_offset: 0,
             kind: HitObjectKind::Slider(SliderData {
                 control_points: vec![
-                    PathControlPoint { pos: Vec2::ZERO, path_type: Some(PathType::Linear) },
-                    PathControlPoint { pos: Vec2::new(length as f32, 0.0), path_type: None },
+                    PathControlPoint {
+                        pos: Vec2::ZERO,
+                        path_type: Some(PathType::Linear),
+                    },
+                    PathControlPoint {
+                        pos: Vec2::new(length as f32, 0.0),
+                        path_type: None,
+                    },
                 ],
                 expected_distance: Some(length),
                 repeat_count,
@@ -374,7 +388,9 @@ mod tests {
         let map = base_map(vec![linear_slider(1000.0, Vec2::new(100.0, 100.0), 100.0, 0)]);
         let processed = process_beatmap(&map).unwrap();
         let plan = build_render_plan(&map, &processed);
-        let RenderKind::Slider(rs) = &plan.objects[0].kind else { panic!("expected slider") };
+        let RenderKind::Slider(rs) = &plan.objects[0].kind else {
+            panic!("expected slider")
+        };
         let crate::beatmap::ProcessedKind::Slider(ps) = &processed.objects[0].kind else {
             panic!("expected processed slider")
         };
@@ -394,7 +410,11 @@ mod tests {
         let kinds: Vec<_> = rs.nested.iter().map(|n| n.kind).collect();
         assert_eq!(
             kinds,
-            vec![RenderNestedKind::Head, RenderNestedKind::Tick, RenderNestedKind::Tail]
+            vec![
+                RenderNestedKind::Head,
+                RenderNestedKind::Tick,
+                RenderNestedKind::Tail
+            ]
         );
         for (rn, pn) in rs.nested.iter().zip(&ps.nested) {
             assert_eq!(rn.span_index, pn.span_index);
@@ -413,7 +433,9 @@ mod tests {
         // spinners always render at the playfield centre
         assert_eq!(obj.position, [256.0, 192.0]);
         assert_eq!(obj.end_time, 2000.0);
-        let RenderKind::Spinner(sp) = &obj.kind else { panic!("expected spinner") };
+        let RenderKind::Spinner(sp) = &obj.kind else {
+            panic!("expected spinner")
+        };
         assert_eq!(sp.duration, 2000.0);
         assert_eq!(sp.spins_required, 5);
         assert_eq!(sp.max_bonus_spins, 5);
@@ -453,12 +475,20 @@ mod tests {
         let pobj = &processed.objects[0];
         let offset = pobj.stacked_position - pobj.position;
         assert_ne!(offset, Vec2::ZERO, "the slider must have stacked");
-        let crate::beatmap::ProcessedKind::Slider(ps) = &pobj.kind else { panic!() };
-        let RenderKind::Slider(rs) = &plan.objects[0].kind else { panic!() };
+        let crate::beatmap::ProcessedKind::Slider(ps) = &pobj.kind else {
+            panic!()
+        };
+        let RenderKind::Slider(rs) = &plan.objects[0].kind else {
+            panic!()
+        };
 
         let expected_end = ps.end_position + offset;
         assert_eq!(rs.end_position, [expected_end.x, expected_end.y]);
-        assert_eq!(rs.vertices, vec![0.0, 0.0, 100.0, 0.0], "vertices stay head-relative");
+        assert_eq!(
+            rs.vertices,
+            vec![0.0, 0.0, 100.0, 0.0],
+            "vertices stay head-relative"
+        );
         for (rn, pn) in rs.nested.iter().zip(&ps.nested) {
             assert_eq!(rn.position, [pn.stacked_position.x, pn.stacked_position.y]);
         }
@@ -510,8 +540,14 @@ mod tests {
         // the nulls serde_json writes for non-finite floats
         let map = base_map(vec![linear_slider(1000.0, Vec2::new(100.0, 100.0), 0.0, 0)]);
         let plan = plan_for(&map);
-        let RenderKind::Slider(rs) = &plan.objects[0].kind else { panic!("expected slider") };
-        assert!(rs.segment_ends.iter().all(|p| p.is_finite()), "{:?}", rs.segment_ends);
+        let RenderKind::Slider(rs) = &plan.objects[0].kind else {
+            panic!("expected slider")
+        };
+        assert!(
+            rs.segment_ends.iter().all(|p| p.is_finite()),
+            "{:?}",
+            rs.segment_ends
+        );
 
         let v = serde_json::to_value(&plan).unwrap();
         let ends = v["objects"][0]["kind"]["segmentEnds"].as_array().unwrap();

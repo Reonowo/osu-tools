@@ -535,7 +535,10 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         .control_points
         .timing_points
         .iter()
-        .map(|tp| TimingPoint { time: tp.time + offset, beat_len: tp.beat_len })
+        .map(|tp| TimingPoint {
+            time: tp.time + offset,
+            beat_len: tp.beat_len,
+        })
         .collect();
     let difficulty_points = raw
         .control_points

@@ -49,7 +49,10 @@ pub fn cursor_state_at(frames: &[ReplayFrame], time: f64) -> Option<CursorSample
         // frames[0].time is not "before" anything: it lands here only when
         // time < frames[0].time strictly, since the partition predicate
         // includes an exact match, pushing idx to at least 1 in that case
-        return Some(CursorSample { pos: frames[0].pos, buttons: Buttons::default() });
+        return Some(CursorSample {
+            pos: frames[0].pos,
+            buttons: Buttons::default(),
+        });
     }
     // framedreplayinputhandler.cs:141-146 -- when query time matches a run of
     // equal-time frames exactly, the handler settles on the last of the run
@@ -85,10 +88,18 @@ pub fn press_edges(frames: &[ReplayFrame]) -> Vec<Press> {
     let mut prev = Buttons::default();
     for (frame_index, frame) in frames.iter().enumerate() {
         if frame.buttons.left() && !prev.left() {
-            presses.push(Press { time: frame.time, action: OsuAction::Left, frame_index });
+            presses.push(Press {
+                time: frame.time,
+                action: OsuAction::Left,
+                frame_index,
+            });
         }
         if frame.buttons.right() && !prev.right() {
-            presses.push(Press { time: frame.time, action: OsuAction::Right, frame_index });
+            presses.push(Press {
+                time: frame.time,
+                action: OsuAction::Right,
+                frame_index,
+            });
         }
         prev = frame.buttons;
     }
@@ -102,7 +113,11 @@ mod tests {
     use crate::replay::frames::{Buttons, ReplayFrame};
 
     fn frame(time: f64, x: f32, y: f32, raw: u32) -> ReplayFrame {
-        ReplayFrame { time, pos: Vec2::new(x, y), buttons: Buttons::new(raw) }
+        ReplayFrame {
+            time,
+            pos: Vec2::new(x, y),
+            buttons: Buttons::new(raw),
+        }
     }
 
     #[test]
@@ -128,7 +143,10 @@ mod tests {
         // nothing pressed: partition_point's `<=` predicate already includes
         // an exact match, so idx lands on 1 (not 0) here and start resolves
         // to frames[0] itself
-        let frames = [frame(100.0, 10.0, 20.0, Buttons::LEFT_1), frame(200.0, 30.0, 40.0, 0)];
+        let frames = [
+            frame(100.0, 10.0, 20.0, Buttons::LEFT_1),
+            frame(200.0, 30.0, 40.0, 0),
+        ];
         let s = cursor_state_at(&frames, 100.0).unwrap();
         assert_eq!(s.pos, Vec2::new(10.0, 20.0));
         assert!(s.buttons.left());
@@ -140,7 +158,10 @@ mod tests {
         let frames = [frame(0.0, 0.0, 0.0, 0), frame(100.0, 10.0, 20.0, 1)];
         let s = cursor_state_at(&frames, 25.0).unwrap();
         let t = 25.0f32 / 100.0f32;
-        assert_eq!(s.pos, Vec2::new(0.0, 0.0) + t * (Vec2::new(10.0, 20.0) - Vec2::new(0.0, 0.0)));
+        assert_eq!(
+            s.pos,
+            Vec2::new(0.0, 0.0) + t * (Vec2::new(10.0, 20.0) - Vec2::new(0.0, 0.0))
+        );
         // buttons come from the frame at or before the sample, uninterpolated
         assert!(!s.buttons.left());
         let s = cursor_state_at(&frames, 100.0).unwrap();
@@ -151,7 +172,11 @@ mod tests {
     #[test]
     fn exactly_at_a_frame_time_the_frame_position_holds() {
         // current == 0 early-out in the framework lerp
-        let frames = [frame(0.0, 0.0, 0.0, 0), frame(100.0, 10.0, 20.0, 0), frame(200.0, 50.0, 50.0, 0)];
+        let frames = [
+            frame(0.0, 0.0, 0.0, 0),
+            frame(100.0, 10.0, 20.0, 0),
+            frame(200.0, 50.0, 50.0, 0),
+        ];
         let s = cursor_state_at(&frames, 100.0).unwrap();
         assert_eq!(s.pos, Vec2::new(10.0, 20.0));
     }
@@ -171,7 +196,11 @@ mod tests {
         // of the run via forward-direction single-step convergence, pinned by
         // FramedReplayInputHandlerTest.cs's TestMultipleFramesSameTime ("forward
         // direction is prioritized when multiple frames have the same time")
-        let frames = [frame(0.0, 0.0, 0.0, 0), frame(100.0, 10.0, 10.0, 1), frame(100.0, 90.0, 90.0, 2)];
+        let frames = [
+            frame(0.0, 0.0, 0.0, 0),
+            frame(100.0, 10.0, 10.0, 1),
+            frame(100.0, 90.0, 90.0, 2),
+        ];
         let s = cursor_state_at(&frames, 100.0).unwrap();
         assert_eq!(s.pos, Vec2::new(90.0, 90.0));
         assert!(s.buttons.right());
@@ -187,7 +216,12 @@ mod tests {
             frame(0.0, 0.0, 0.0, 0),
             frame(16.0, 0.0, 0.0, Buttons::LEFT_1 | Buttons::RIGHT_1),
             // k1 joins m1: still left, no new edge
-            frame(32.0, 0.0, 0.0, Buttons::LEFT_1 | Buttons::LEFT_2 | Buttons::RIGHT_1),
+            frame(
+                32.0,
+                0.0,
+                0.0,
+                Buttons::LEFT_1 | Buttons::LEFT_2 | Buttons::RIGHT_1,
+            ),
             frame(48.0, 0.0, 0.0, 0),
             frame(64.0, 0.0, 0.0, Buttons::LEFT_2),
         ];

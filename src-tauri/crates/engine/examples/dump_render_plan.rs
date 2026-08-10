@@ -20,7 +20,11 @@ fn main() {
         .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("osu"))
         .collect();
     paths.sort();
-    assert!(!paths.is_empty(), "no fixture beatmaps found at {}", fixtures.display());
+    assert!(
+        !paths.is_empty(),
+        "no fixture beatmaps found at {}",
+        fixtures.display()
+    );
 
     for path in paths {
         let bytes = std::fs::read(&path).expect("read .osu");

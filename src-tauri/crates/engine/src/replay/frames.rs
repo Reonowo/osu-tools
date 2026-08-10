@@ -119,7 +119,11 @@ mod tests {
     #[test]
     fn accumulates_deltas_and_decodes_buttons() {
         let frames = convert_frames(
-            &[action(100, 10.0, 20.0, 0), action(16, 11.0, 21.0, 5), action(16, 12.0, 22.0, 2)],
+            &[
+                action(100, 10.0, 20.0, 0),
+                action(16, 11.0, 21.0, 5),
+                action(16, 12.0, 22.0, 2),
+            ],
             14,
         );
         assert_eq!(frames.len(), 3);
@@ -135,10 +139,7 @@ mod tests {
     #[test]
     fn seed_pseudo_frame_is_dropped() {
         // legacyscoredecoder.cs:282-286
-        let frames = convert_frames(
-            &[action(100, 10.0, 20.0, 0), action(-12345, 0.0, 0.0, 1337)],
-            14,
-        );
+        let frames = convert_frames(&[action(100, 10.0, 20.0, 0), action(-12345, 0.0, 0.0, 1337)], 14);
         assert_eq!(frames.len(), 1);
     }
 
@@ -156,7 +157,11 @@ mod tests {
         // legacyscoredecoder.cs:319-324: frames[1] earlier than frames[0]
         // pins frame 0 to time 0 and frame 1 to frame 0's old time
         let frames = convert_frames(
-            &[action(100, 1.0, 1.0, 0), action(-50, 2.0, 2.0, 0), action(400, 3.0, 3.0, 0)],
+            &[
+                action(100, 1.0, 1.0, 0),
+                action(-50, 2.0, 2.0, 0),
+                action(400, 3.0, 3.0, 0),
+            ],
             14,
         );
         assert_eq!(frames[0].time, 0.0);
@@ -166,7 +171,11 @@ mod tests {
         // legacyscoredecoder.cs:326-328: frame 0 later than frame 2 drags
         // frames 0 and 1 back to frame 2's time
         let frames = convert_frames(
-            &[action(1000, 1.0, 1.0, 0), action(-900, 2.0, 2.0, 0), action(400, 3.0, 3.0, 0)],
+            &[
+                action(1000, 1.0, 1.0, 0),
+                action(-900, 2.0, 2.0, 0),
+                action(400, 3.0, 3.0, 0),
+            ],
             14,
         );
         // first fixup runs first: [1000, 100, 500] -> [0, 1000, ...] no --

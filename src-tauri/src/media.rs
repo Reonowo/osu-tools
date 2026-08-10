@@ -28,7 +28,11 @@ pub fn read_file_capped(path: &Path, cap: u64, cap_name: &'static str) -> Result
     let file = std::fs::File::open(path)?;
     let declared = file.metadata()?.len();
     if declared > cap {
-        return Err(IpcError::ResourceLimit { cap: cap_name.to_string(), limit: cap, actual: declared });
+        return Err(IpcError::ResourceLimit {
+            cap: cap_name.to_string(),
+            limit: cap,
+            actual: declared,
+        });
     }
     let mut bytes = Vec::new();
     file.take(cap + 1).read_to_end(&mut bytes)?;
@@ -93,7 +97,11 @@ mod tests {
         std::fs::write(&path, vec![0u8; 8]).unwrap();
         assert_eq!(read_file_capped(&path, 8, "TEST_CAP").unwrap().len(), 8);
         match read_file_capped(&path, 7, "TEST_CAP") {
-            Err(IpcError::ResourceLimit { cap, limit: 7, actual: 8 }) => assert_eq!(cap, "TEST_CAP"),
+            Err(IpcError::ResourceLimit {
+                cap,
+                limit: 7,
+                actual: 8,
+            }) => assert_eq!(cap, "TEST_CAP"),
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
     }

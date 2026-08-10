@@ -117,15 +117,37 @@ fn processed_beatmaps_match_lazer_dumps() {
             .unwrap_or_else(|e| panic!("{name}: decode failed: {e}"));
         let processed = process_beatmap(&map).unwrap_or_else(|e| panic!("{name}: process failed: {e}"));
 
-        assert_eq!(processed.format_version, dump.format_version, "{name}: format version");
+        assert_eq!(
+            processed.format_version, dump.format_version,
+            "{name}: format version"
+        );
         assert!(
             (processed.stack_leniency - dump.stack_leniency).abs() <= RATIO_TOL as f32,
             "{name}: stack leniency"
         );
-        close(processed.windows.great(), dump.windows.great, DISTANCE_TOL, &format!("{name}: great window"));
-        close(processed.windows.ok(), dump.windows.ok, DISTANCE_TOL, &format!("{name}: ok window"));
-        close(processed.windows.meh(), dump.windows.meh, DISTANCE_TOL, &format!("{name}: meh window"));
-        assert_eq!(processed.objects.len(), dump.objects.len(), "{name}: object count");
+        close(
+            processed.windows.great(),
+            dump.windows.great,
+            DISTANCE_TOL,
+            &format!("{name}: great window"),
+        );
+        close(
+            processed.windows.ok(),
+            dump.windows.ok,
+            DISTANCE_TOL,
+            &format!("{name}: ok window"),
+        );
+        close(
+            processed.windows.meh(),
+            dump.windows.meh,
+            DISTANCE_TOL,
+            &format!("{name}: meh window"),
+        );
+        assert_eq!(
+            processed.objects.len(),
+            dump.objects.len(),
+            "{name}: object count"
+        );
 
         for (i, (ours, theirs)) in processed.objects.iter().zip(&dump.objects).enumerate() {
             let ctx = format!("{name} object {i}");
@@ -140,7 +162,10 @@ fn processed_beatmaps_match_lazer_dumps() {
             assert_vec2_close(ours.position, theirs.position, &ctx);
             assert_vec2_close(ours.stacked_position, theirs.stacked_position, &ctx);
             assert_eq!(ours.stack_height, theirs.stack_height, "{ctx}: stack height");
-            assert!((processed.scale - theirs.scale).abs() <= RATIO_TOL as f32, "{ctx}: scale");
+            assert!(
+                (processed.scale - theirs.scale).abs() <= RATIO_TOL as f32,
+                "{ctx}: scale"
+            );
             close(processed.preempt, theirs.preempt, DISTANCE_TOL, &ctx);
             close(processed.fade_in, theirs.fade_in, DISTANCE_TOL, &ctx);
             assert_eq!(ours.combo_index, theirs.combo_index, "{ctx}: combo index");

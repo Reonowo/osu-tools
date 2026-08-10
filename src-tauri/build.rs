@@ -43,7 +43,9 @@ fn main() {
 // dependency block tauri-build would otherwise have embedded on its own
 fn embed_common_controls_v6_manifest() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("no CARGO_MANIFEST_DIR");
-    let manifest_path = std::path::Path::new(&manifest_dir).join("resources").join("common-controls-v6.manifest");
+    let manifest_path = std::path::Path::new(&manifest_dir)
+        .join("resources")
+        .join("common-controls-v6.manifest");
     // forward slashes sidestep rc.exe's backslash-escaping rules entirely
     let manifest_path = manifest_path.display().to_string().replace('\\', "/");
 

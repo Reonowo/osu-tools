@@ -68,7 +68,11 @@ impl SpinnerState {
         self.current_spin_max = self.current_spin_max.max(self.current_spin_rotation().abs());
         let mut completed = 0;
         while self.current_spin_max >= 360.0 {
-            let direction = if self.current_spin_rotation() >= 0.0 { 1.0 } else { -1.0 };
+            let direction = if self.current_spin_rotation() >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
             self.completed_spins += 1;
             completed += 1;
             self.total_at_last_completion += direction * 360.0;
@@ -286,7 +290,12 @@ mod tests {
     // spinner_map(duration, od) builds a map whose only object is a spinner
     // starting at 1000. helper: circular frames around (256, 192) at radius
     // 100, `steps_per_rev` frames per revolution, 10ms apart, buttons held
-    fn spin_frames(start: f64, revolutions: f64, steps_per_rev: u32, raw: u32) -> Vec<crate::replay::frames::ReplayFrame> {
+    fn spin_frames(
+        start: f64,
+        revolutions: f64,
+        steps_per_rev: u32,
+        raw: u32,
+    ) -> Vec<crate::replay::frames::ReplayFrame> {
         let total_steps = (revolutions * steps_per_rev as f64).ceil() as u32;
         (0..=total_steps)
             .map(|i| {
@@ -308,9 +317,15 @@ mod tests {
         // > 0.9 once widened (lazer awards ok). the same expression in f64
         // rounds to exactly 0.9 and would fall through to meh
         let progress = super::completion_progress(972.0, 3);
-        assert!(progress > 0.9, "f32 arithmetic must clear the ok boundary, got {progress}");
+        assert!(
+            progress > 0.9,
+            "f32 arithmetic must clear the ok boundary, got {progress}"
+        );
         let f64_progress = 972.0f64 / 360.0 / 3.0;
-        assert!(f64_progress <= 0.9, "f64 arithmetic would sit on the boundary, got {f64_progress}");
+        assert!(
+            f64_progress <= 0.9,
+            "f64 arithmetic would sit on the boundary, got {f64_progress}"
+        );
     }
 
     #[test]
@@ -318,13 +333,17 @@ mod tests {
         // od 5, duration 2000 -> spins_required 5, bonus gap 2, max bonus 5
         let beatmap = spinner_map(2000.0, 5.0);
         // 8 revolutions in 45-degree steps while holding left
-        let timeline = simulate(
-            &beatmap,
-            &wrap(spin_frames(1000.0, 8.0, 8, Buttons::LEFT_1)),
-        )
-        .unwrap();
-        let spins = timeline.events.iter().filter(|e| e.kind == JudgementKind::SpinnerSpin).count();
-        let bonus = timeline.events.iter().filter(|e| e.kind == JudgementKind::SpinnerBonus).count();
+        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 8.0, 8, Buttons::LEFT_1))).unwrap();
+        let spins = timeline
+            .events
+            .iter()
+            .filter(|e| e.kind == JudgementKind::SpinnerSpin)
+            .count();
+        let bonus = timeline
+            .events
+            .iter()
+            .filter(|e| e.kind == JudgementKind::SpinnerBonus)
+            .count();
         // 8 full spins minus interpolation slack: the first 7 complete within
         // the window (last frames run past end_time). required+gap = 7 spins
         // classified as SpinnerSpin, the rest as bonus
@@ -349,7 +368,10 @@ mod tests {
         let beatmap = spinner_map(2000.0, 5.0); // spins_required 5, end_time 3000
         fn pos_at_degrees(theta_deg: f64) -> (f32, f32) {
             let theta = theta_deg.to_radians();
-            (256.0 + 100.0 * theta.cos() as f32, 192.0 + 100.0 * theta.sin() as f32)
+            (
+                256.0 + 100.0 * theta.cos() as f32,
+                192.0 + 100.0 * theta.sin() as f32,
+            )
         }
         // 12 held steps (150 degrees each, then a final 140) accumulate
         // exactly 1790 degrees of rotation by t=1120 -- 4 spins complete
@@ -357,8 +379,7 @@ mod tests {
         // threshold, all from exact frame-to-frame deltas (no interpolation
         // involved, so the arithmetic is exact)
         let steps_deg = [
-            0.0, 150.0, 300.0, 450.0, 600.0, 750.0, 900.0, 1050.0, 1200.0, 1350.0, 1500.0, 1650.0,
-            1790.0,
+            0.0, 150.0, 300.0, 450.0, 600.0, 750.0, 900.0, 1050.0, 1200.0, 1350.0, 1500.0, 1650.0, 1790.0,
         ];
         let mut frames: Vec<_> = steps_deg
             .iter()
@@ -375,8 +396,15 @@ mod tests {
         frames.push(frame(3010.0, x, y, Buttons::LEFT_1));
 
         let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
-        let spins = timeline.events.iter().filter(|e| e.kind == JudgementKind::SpinnerSpin).count();
-        assert_eq!(spins, 5, "the flush must complete the fifth spin before the deadline");
+        let spins = timeline
+            .events
+            .iter()
+            .filter(|e| e.kind == JudgementKind::SpinnerSpin)
+            .count();
+        assert_eq!(
+            spins, 5,
+            "the flush must complete the fifth spin before the deadline"
+        );
         assert_eq!(
             timeline.events.last().unwrap().kind,
             JudgementKind::SpinnerFinal(HitGrade::Great),
@@ -389,7 +417,10 @@ mod tests {
         let beatmap = spinner_map(2000.0, 5.0);
         let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 8.0, 8, 0))).unwrap();
         assert_eq!(timeline.events.len(), 1);
-        assert_eq!(timeline.events[0].kind, JudgementKind::SpinnerFinal(HitGrade::Miss));
+        assert_eq!(
+            timeline.events[0].kind,
+            JudgementKind::SpinnerFinal(HitGrade::Miss)
+        );
         assert_eq!(timeline.totals.count_miss, 1);
     }
 
@@ -401,7 +432,11 @@ mod tests {
         let mut frames = Vec::new();
         for i in 0..100u32 {
             // oscillate between angle 0 and angle 135 degrees
-            let theta = if i % 2 == 0 { 0.0f64 } else { 3.0 * std::f64::consts::FRAC_PI_4 };
+            let theta = if i % 2 == 0 {
+                0.0f64
+            } else {
+                3.0 * std::f64::consts::FRAC_PI_4
+            };
             frames.push(frame(
                 1000.0 + i as f64 * 15.0,
                 256.0 + 100.0 * theta.cos() as f32,
@@ -410,8 +445,14 @@ mod tests {
             ));
         }
         let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
-        assert!(timeline.events.iter().all(|e| e.kind != JudgementKind::SpinnerSpin));
-        assert_eq!(timeline.events.last().unwrap().kind, JudgementKind::SpinnerFinal(HitGrade::Miss));
+        assert!(timeline
+            .events
+            .iter()
+            .all(|e| e.kind != JudgementKind::SpinnerSpin));
+        assert_eq!(
+            timeline.events.last().unwrap().kind,
+            JudgementKind::SpinnerFinal(HitGrade::Miss)
+        );
     }
 
     #[test]
