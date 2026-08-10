@@ -2,6 +2,7 @@ import type { LoadedScene } from "../lib/scene-types";
 
 export function testScene(overrides: Partial<LoadedScene> = {}): LoadedScene {
 	return {
+		epoch: 1,
 		beatmap: {
 			title: "t",
 			artist: "a",

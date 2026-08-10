@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EditingSettings, EffectSettings, IpcError, LoadedScene, OverlaySettings, Settings } from "./scene-types";
+import type {
+	EditDelta,
+	EditingSettings,
+	EditOp,
+	EffectSettings,
+	IpcError,
+	LoadedScene,
+	OverlaySettings,
+	Settings
+} from "./scene-types";
 
 const IPC_ERROR_KINDS = new Set([
 	"replayParse",
@@ -10,7 +19,10 @@ const IPC_ERROR_KINDS = new Set([
 	"unsupportedMode",
 	"resourceLimit",
 	"io",
-	"internal"
+	"internal",
+	"invalidEdit",
+	"staleSession",
+	"notEditable"
 ]);
 
 export function isIpcError(e: unknown): e is IpcError {
@@ -61,4 +73,24 @@ export function invokeSetViewerPrefs(
 
 export function invokeClearRecents(): Promise<Settings> {
 	return invoke<Settings>("clear_recents");
+}
+
+export function invokeApplyEdit(epoch: number, baseRevision: number, ops: EditOp[], label: string): Promise<EditDelta> {
+	return invoke<EditDelta>("apply_edit", { epoch, baseRevision, ops, label });
+}
+
+export function invokeUndo(epoch: number): Promise<EditDelta> {
+	return invoke<EditDelta>("undo", { epoch });
+}
+
+export function invokeRedo(epoch: number): Promise<EditDelta> {
+	return invoke<EditDelta>("redo", { epoch });
+}
+
+export function invokeRevertAll(epoch: number): Promise<EditDelta> {
+	return invoke<EditDelta>("revert_all", { epoch });
+}
+
+export function invokeResync(epoch: number): Promise<EditDelta> {
+	return invoke<EditDelta>("resync", { epoch });
 }

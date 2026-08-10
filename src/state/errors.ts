@@ -49,5 +49,15 @@ export function describeIpcError(e: IpcError): { title: string; detail: string; 
 			return { title: "file error", detail: e.message, recovery: null };
 		case "internal":
 			return { title: "internal error", detail: e.message, recovery: null };
+		case "invalidEdit":
+			return { title: "couldn't apply the edit", detail: e.message, recovery: null };
+		case "staleSession":
+			return {
+				title: "the edit hit a replaced session",
+				detail: "the replay changed under this edit; the view resynced to the authoritative document",
+				recovery: null
+			};
+		case "notEditable":
+			return { title: "this replay can't be frame-edited", detail: e.reason, recovery: null };
 	}
 }

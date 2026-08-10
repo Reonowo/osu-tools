@@ -3,6 +3,8 @@
 // error.rs); this file is the only frontend declaration of these shapes
 
 export interface LoadedScene {
+	/// session identity; increments on each load, invalidates prior edits
+	epoch: number;
 	beatmap: BeatmapMeta;
 	replay: ReplayMeta;
 	frames: FrameDto[];
@@ -54,6 +56,35 @@ export interface FrameDto {
 	y: number;
 	/// raw bitfield: m1=1, m2=2, k1=4, k2=8, smoke=16
 	buttons: number;
+}
+
+export type EditOp =
+	| { kind: "moveFrames"; moves: { index: number; x: number; y: number }[] }
+	| { kind: "insertFrames"; frames: FrameDto[] }
+	| { kind: "deleteFrames"; indices: number[] }
+	| { kind: "setButtons"; sets: { index: number; buttons: number }[] }
+	| { kind: "setPlayerName"; name: string | null }
+	| { kind: "setTimestamp"; ticks: string };
+
+export interface IndexedFrame {
+	index: number;
+	frame: FrameDto;
+}
+
+export type FrameChanges =
+	| { updated: IndexedFrame[]; inserted: IndexedFrame[]; removed: number[] }
+	| { fullFrames: FrameDto[] };
+
+export interface EditDelta {
+	revision: number;
+	frames: FrameChanges | null;
+	playerName: string | null;
+	timestampTicks: string;
+	dirty: boolean;
+	canUndo: boolean;
+	canRedo: boolean;
+	history: { labels: string[]; cursor: number };
+	simulation: SimulationDto | null;
 }
 
 export type Grade = "great" | "ok" | "meh" | "miss";
@@ -161,7 +192,10 @@ export type IpcError =
 	| { kind: "unsupportedMode"; mode: string }
 	| { kind: "resourceLimit"; cap: string; limit: number; actual: number }
 	| { kind: "io"; message: string }
-	| { kind: "internal"; message: string };
+	| { kind: "internal"; message: string }
+	| { kind: "invalidEdit"; message: string }
+	| { kind: "staleSession" }
+	| { kind: "notEditable"; reason: string };
 
 /** mirrors settings.rs OverlayPrefs */
 export interface OverlaySettings {
