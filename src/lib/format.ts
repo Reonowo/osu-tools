@@ -74,14 +74,24 @@ export function formatRelativeTime(fromMs: number, nowMs: number): string {
 	return `${Math.floor(elapsed / WEEK_MS)} weeks ago`;
 }
 
+/** .net ticks at 1970-01-01, the unix epoch's offset from 0001-01-01 */
+const UNIX_EPOCH_TICKS = 621_355_968_000_000_000n;
+const UNIX_EPOCH_MS = UNIX_EPOCH_TICKS / 10_000n;
+
 /** .net ticks (100ns since 0001-01-01) to unix milliseconds. the value
  * exceeds 2^53, so it arrives as a decimal string and is reduced in bigint */
 export function ticksToUnixMs(ticks: string): number | null {
 	try {
 		const value = BigInt(ticks);
 		if (value <= 0n) return null;
-		return Number(value / 10_000n - 62_135_596_800_000n);
+		return Number(value / 10_000n - UNIX_EPOCH_MS);
 	} catch {
 		return null;
 	}
+}
+
+/** the exact inverse of ticksToUnixMs: unix milliseconds back to a .net
+ * ticks decimal string (100ns units since 0001-01-01) */
+export function unixMsToTicks(unixMs: number): string {
+	return (BigInt(Math.round(unixMs)) * 10_000n + UNIX_EPOCH_TICKS).toString();
 }

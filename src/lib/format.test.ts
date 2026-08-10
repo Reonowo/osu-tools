@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { formatAccuracy, formatButtons, formatMods, formatRelativeTime, formatTime, ticksToUnixMs } from "./format";
+import {
+	formatAccuracy,
+	formatButtons,
+	formatMods,
+	formatRelativeTime,
+	formatTime,
+	ticksToUnixMs,
+	unixMsToTicks
+} from "./format";
 
 describe("format helpers", () => {
 	test("time formats signed m:ss.SSS", () => {
@@ -79,5 +87,11 @@ describe("ticksToUnixMs", () => {
 		expect(ticksToUnixMs("0")).toBeNull();
 		expect(ticksToUnixMs("-1")).toBeNull();
 		expect(ticksToUnixMs("not a number")).toBeNull();
+	});
+
+	test("unixMsToTicks inverts ticksToUnixMs exactly", () => {
+		const ticks = "638712000000000000";
+		expect(unixMsToTicks(ticksToUnixMs(ticks)!)).toBe(ticks);
+		expect(ticksToUnixMs(unixMsToTicks(1_722_470_400_000))).toBe(1_722_470_400_000);
 	});
 });
