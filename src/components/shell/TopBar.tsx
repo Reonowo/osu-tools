@@ -1,5 +1,5 @@
 // the docked top bar: identity, the loaded beatmap/player line, mod chips,
-// and the watch/edit switcher plus the (still inert) edit-history controls
+// and the watch/edit switcher plus the edit-history controls
 
 import { Download, Redo2, Settings2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,9 +13,6 @@ import { useViewerStore, type ViewerMode } from "@/state/store";
 // glyphs inside get the mirrored skew so their text stays upright
 const LOGO_SKEW = "skew-x-[-11.3deg]";
 const LOGO_COUNTER_SKEW = "skew-x-[11.3deg]";
-
-// why the history controls are dead, not what they would be called
-const EDIT_BLOCKER = "the replay document has no mutation surface until the replay-document ipc commands land";
 
 // the "R" tile + wordmark, shared verbatim with StartScreen's header so the
 // skew constants above stay defined in exactly one place
@@ -35,6 +32,9 @@ export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () =>
 	const derived = useViewerStore((s) => s.derived);
 	const mode = useViewerStore((s) => s.mode);
 	const setMode = useViewerStore((s) => s.setMode);
+	const editor = useViewerStore((s) => s.editor);
+	const undoEdit = useViewerStore((s) => s.undoEdit);
+	const redoEdit = useViewerStore((s) => s.redoEdit);
 
 	// AppShell only mounts once App.tsx has a loaded scene, so these are
 	// always populated in practice -- the fallbacks just keep this component
@@ -104,32 +104,66 @@ export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () =>
 
 				<Separator orientation="vertical" className="h-6" />
 
-				{/* undo/redo are icon-only *and* disabled, so the span wrapper is
-				load-bearing here for the reason the export button's no longer is:
-				a natively disabled button suppresses mouse events outright, and
-				the tooltip is the only thing that can say why they are dead */}
-				<div className="flex items-center gap-1">
-					<Tooltip>
-						<TooltipTrigger render={<span />}>
-							<Button size="icon-sm" variant="ghost" aria-label="undo" disabled>
-								<Undo2 />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>nothing to undo: {EDIT_BLOCKER}</TooltipContent>
-					</Tooltip>
-					<Tooltip>
-						<TooltipTrigger render={<span />}>
-							<Button size="icon-sm" variant="ghost" aria-label="redo" disabled>
-								<Redo2 />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>nothing to redo: {EDIT_BLOCKER}</TooltipContent>
-					</Tooltip>
-				</div>
+				{/* undo/redo are icon-only *and* disabled when there's nothing to do,
+				so the span wrapper is load-bearing here for the reason the export
+				button's no longer is: a natively disabled button suppresses mouse
+				events outright, and the tooltip is the only thing that can say
+				what the next step would be */}
+				{(() => {
+					const labels = editor?.history.labels ?? [];
+					const cursor = editor?.history.cursor ?? 0;
+					const nextUndo = cursor > 0 ? labels[cursor - 1] : null;
+					const nextRedo = cursor < labels.length ? labels[cursor] : null;
+					return (
+						<div className="flex items-center gap-1">
+							<Tooltip>
+								<TooltipTrigger render={<span />}>
+									<Button
+										size="icon-sm"
+										variant="ghost"
+										aria-label="undo"
+										disabled={editor?.canUndo !== true}
+										onClick={() => void undoEdit()}
+									>
+										<Undo2 />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent>
+									{nextUndo !== null ? `undo ${nextUndo}` : "nothing to undo"}
+								</TooltipContent>
+							</Tooltip>
+							<Tooltip>
+								<TooltipTrigger render={<span />}>
+									<Button
+										size="icon-sm"
+										variant="ghost"
+										aria-label="redo"
+										disabled={editor?.canRedo !== true}
+										onClick={() => void redoEdit()}
+									>
+										<Redo2 />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent>
+									{nextRedo !== null ? `redo ${nextRedo}` : "nothing to redo"}
+								</TooltipContent>
+							</Tooltip>
+						</div>
+					);
+				})()}
 
-				{/* no dirty chip: replay editing has no ipc yet, so a document can
-				never actually have unsaved edits -- this is where an "unsaved
-				changes" chip would render once mutation lands */}
+				{editor?.dirty === true && (
+					<Tooltip>
+						<TooltipTrigger render={<span />}>
+							<span className="rounded-full border border-primary/40 bg-primary/[.13] px-2 py-0.5 text-[10px] text-primary">
+								unsaved edits
+							</span>
+						</TooltipTrigger>
+						<TooltipContent>
+							this document differs from the file on disk; export writes the edited version
+						</TooltipContent>
+					</Tooltip>
+				)}
 
 				{/* the trigger is live -- ExportDialog is the inert surface it opens:
 				the destination field, browse, and the "export .osr" footer button
