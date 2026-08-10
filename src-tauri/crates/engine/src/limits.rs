@@ -16,6 +16,9 @@
 //! | [`MAX_OSR_FILE_BYTES`] | 32 MiB | raw `.osr` file byte length, checked in `formats::osr::decode_osr` before any framing is parsed | `formats::osr::tests::osr_file_size_cap_boundary` |
 //! | [`MAX_LZMA_DECOMPRESSED_BYTES`] | 128 MiB | the lzma-alone replay frame payload's decompressed size, enforced three ways in `formats::osr::decompress_lzma_capped`: a header precheck against the stream's declared uncompressed size, a `CappedWriter` bound on bytes actually produced, and lzma-rs's own `memlimit` guarding its internal dictionary buffer | `formats::osr::tests::lzma_bomb_declared_size_hits_cap` (declared-size precheck), `...::lzma_decompressed_size_cap_boundary` (accept-at-cap via the real decode path, which is also `CappedWriter`'s accept branch), `...::lzma_capped_writer_is_the_sole_guard_for_small_dict_sentinel_streams` (`CappedWriter`'s reject branch, on the one stream shape where neither of the other two layers can fire), `...::lzma_inflated_dict_size_hits_internal_memlimit` (lzma-rs's own memlimit) |
 //! | [`MAX_REPLAY_FRAMES`] | 4,000,000 | parsed replay frame count, checked in `formats::osr::parse_actions` | `formats::osr::tests::frame_count_cap_boundary` |
+//! | [`MAX_EDIT_BATCH_MEMBERS`] | 4,000,000 (= [`MAX_REPLAY_FRAMES`]) | member count of one `replay::document::ReplayDocument::apply_edit_batch` call, so a legitimate whole-stream edit is never amplification-capped | `replay::document::tests::batch_member_cap_boundary` |
+//! | [`MAX_UNDO_DEPTH`] | 1,000 | undo history entries retained per `replay::document::ReplayDocument`; the oldest entry evicts at the cap, and an eviction sets a sticky per-kind dirty flag so a diverged document can never read back as pristine | `replay::document::tests::undo_depth_cap_evicts_the_oldest_and_dirtiness_sticks` |
+//! | [`MAX_UNDO_RETAINED_MEMBERS`] | 8,000,000 (= 2 × [`MAX_REPLAY_FRAMES`]) | the member total retained across the undo history's entries, bounding memory where [`MAX_UNDO_DEPTH`] alone cannot: a whole-stream batch or a restore snapshot weighs up to [`MAX_REPLAY_FRAMES`] members on its own, so counting entries admits gigabytes; oldest entries evict past the budget with the same sticky-flag latch, and the entry just pushed never evicts so one over-budget step still lands | `replay::document::tests::undo_history_evicts_by_retained_members_too` and `...::the_newest_entry_survives_a_budget_it_alone_exceeds` |
 //! | [`MAX_SIMULATION_SWEEP_STEPS`] | 1,000,000,000 | the total inner-loop steps one `simulation::simulate` run may spend across its per-instant walks: press receptor + note-lock walks, the slider tracking sweep, the drain's per-slider scan, and the spinner rotation sweep. per-instant cost is proportional to the born, unresolved span, which lazer pays too -- but lazer's update count is human-bounded while this one is file-bounded ([`MAX_REPLAY_FRAMES`] admits millions of crafted instants over [`MAX_HIT_OBJECTS`] simultaneous objects, products in the trillions). `simulate` passes the constant into the budget-parameterized runner and the walks charge a shared counter, checked after each frame entry and deadline group so the overshoot is bounded by one instant's walks; like [`MAX_SLIDER_PATH_VERTICES`], tests supply a tighter budget through the parameterized entry point | `simulation::tests::sweep_step_budget_boundary` |
 //! | [`MAX_OSR_SERIALIZED_PAYLOAD_BYTES`] | 128 MiB | uncompressed frame text `formats::osr::serialize_actions` produces when `encode_osr` is asked to reserialize (as opposed to passing through the original verbatim compressed payload), checked incrementally as that text is written and before compression is attempted, so an oversized crafted file fails fast without first materialising the whole string or paying for a wasted lzma pass | `formats::osr::tests::reserialized_payload_size_cap_boundary` |
 //! | [`MAX_SLIDER_PATH_VERTICES`] | 2,000,000 | the piecewise-linear vertex count of a slider's path, enforced at two layers: per-segment inside `path::approximator` (every approximator function takes it as an explicit `max_vertices` parameter rather than reading the constant directly, so a segment alone can never exceed it) and cross-segment inside `path::slider_path::SliderPath`'s path calculation, which accumulates vertices across all of a slider's segments even when every individual segment stayed under budget on its own | `path::approximator::tests::slider_path_vertex_count_cap_boundary` exercises the per-segment layer; `tests/slider_path_fixtures.rs`'s `vertex_budget_surfaces_as_resource_limit` and `cross_segment_vertex_budget_boundary` exercise the cross-segment accumulation layer specifically (the latter proves the cap by a segment combination no single segment could trip on its own) |
@@ -120,6 +123,26 @@ pub const MAX_TOTAL_SLIDER_PATH_VERTICES: usize = 4_000_000;
 pub const MAX_OSR_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_LZMA_DECOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_REPLAY_FRAMES: usize = 4_000_000;
+
+/// most members one edit batch may carry. a legitimate whole-stream snap or
+/// smooth touches every frame, so the cap prevents amplification, not scale;
+/// enforced by `replay::document::ReplayDocument::apply_edit_batch`
+pub const MAX_EDIT_BATCH_MEMBERS: usize = MAX_REPLAY_FRAMES;
+
+/// undo history entries retained per document. the oldest entry evicts at
+/// the cap, which strands nothing: `revert_all` restores the retained
+/// pristine baseline directly rather than walking the stack
+pub const MAX_UNDO_DEPTH: usize = 1_000;
+
+/// the member total retained across the undo history's entries, bounding
+/// memory where the entry-count cap cannot: a whole-stream batch or a
+/// restore snapshot weighs up to [`MAX_REPLAY_FRAMES`] members by itself, so
+/// [`MAX_UNDO_DEPTH`] entries could otherwise retain gigabytes. twice the
+/// frame cap keeps at least one worst-case step plus headroom (the entry
+/// just pushed never evicts, so an over-budget step still lands); the redo
+/// stack holds at most what the undo history previously retained, so the
+/// combined retention bound is twice this again
+pub const MAX_UNDO_RETAINED_MEMBERS: usize = 2 * MAX_REPLAY_FRAMES;
 
 /// bounds the total inner-loop steps one `simulation::simulate` run may
 /// spend across its per-instant walks: the press receptor and note-lock

@@ -94,6 +94,12 @@ pub struct ReplayAction {
 /// (legacyscoreencoder.cs:174). no encoder emits a non-canonical spelling
 pub const SEED_FRAME_DELTA: i64 = -12345;
 
+/// legacyscoreencoder.cs:74 -- the first stable-compatible version number
+/// lazer stamps on its own replays. distinct from the score-info trailer
+/// threshold one above it: 30000000 marks the play as lazer-native,
+/// 30000001+ additionally appends the score-info blob
+pub const FIRST_LAZER_VERSION: u32 = 30_000_000;
+
 /// legacyscoredecoder.cs:117 — the first replay version whose framing carries a
 /// length-prefixed lazer score-info array after the online score id. at or above
 /// it that array is read unconditionally, so it must be present even when its
