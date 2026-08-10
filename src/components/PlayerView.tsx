@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { isFullFrames, remapIndex } from "@/editor/splice";
 import { audioExtendedBounds } from "@/lib/timeline";
 import { htmlAudioAdapter } from "@/playback/clock";
 import { frameCursor } from "@/playback/frame-cursor";
@@ -11,6 +12,7 @@ export function PlayerView() {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const rendererRef = useRef<GameplayRenderer | null>(null);
 	const sceneId = useViewerStore((s) => s.sceneId);
+	const editRevision = useViewerStore((s) => s.editRevision);
 	const overlays = useViewerStore((s) => s.overlays);
 	const effects = useViewerStore((s) => s.effects);
 	const viewportZoom = useViewerStore((s) => s.viewportZoom);
@@ -100,6 +102,28 @@ export function PlayerView() {
 			playbackClock.attachAudio(null);
 		};
 	}, [sceneId]);
+
+	// edit-driven frame-stream changes: re-feed content, keep continuity.
+	// unlike the sceneId effect this never seeks, never touches audio, and
+	// never resets the viewport -- editRevision exists so edits don't reset
+	// what the user is looking at
+	useEffect(() => {
+		if (editRevision === 0) return;
+		const { scene, derived, lastSplice, audioDurationMs } = viewerStore.getState();
+		if (scene === null || derived === null) return;
+		const selected = frameCursor.selectedIndex();
+		rendererRef.current?.setScene(scene, derived);
+		const bounds = audioExtendedBounds(derived.bounds, audioDurationMs);
+		playbackClock.setBounds(bounds.minTime, bounds.maxTime);
+		frameCursor.setFrames(scene.frames.map((f) => f.time));
+		// an exact selection survives an index delta by remapping through the
+		// splice; a fullFrames delta has no splice, and the cursor's derived
+		// index already re-resolves by time
+		if (selected !== null && lastSplice !== null && !isFullFrames(lastSplice)) {
+			const remapped = remapIndex(selected, lastSplice);
+			if (remapped !== null) frameCursor.select(remapped);
+		}
+	}, [editRevision]);
 
 	// store -> clock: playing + rate + volume
 	useEffect(() => {
