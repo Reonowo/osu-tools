@@ -109,7 +109,7 @@ export function usePlaybackShortcuts() {
 		// passive: the viewer layout never scrolls, so default is never prevented
 		// here. ctrl+wheel is the one wheel gesture that does need a
 		// preventDefault (the webview's own page zoom), and wheelFrameStep bails
-		// on it -- the viewport carries its own non-passive listener for it
+		// on it -- App.tsx suppresses it app-wide with a non-passive listener
 		window.addEventListener("wheel", onWheel, { passive: true });
 		return () => window.removeEventListener("wheel", onWheel);
 	}, []);

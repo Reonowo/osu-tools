@@ -41,7 +41,6 @@ import type { FrameDto, Grade, LoadedScene } from "@/lib/scene-types";
 import { audioExtendedBounds, type TimeBounds } from "@/lib/timeline";
 import {
 	clampSpan,
-	detailSpanForWheel,
 	laneTimeAtPixel,
 	laneTransform,
 	rulerTicks,
@@ -144,9 +143,10 @@ export function DetailLanes() {
 	const derived = useViewerStore((s) => s.derived);
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
-	const setDetailSpan = useViewerStore((s) => s.setDetailSpan);
 	const mode = useViewerStore((s) => s.mode);
 	const pressSelection = useViewerStore((s) => s.editor?.pressSelection ?? null);
+	const panelOpen = useViewerStore((s) => s.panelOpen);
+	const panelTab = useViewerStore((s) => s.panelTab);
 	/** the live drag's frame-snapped outcome, drawn in place of the spans it
 	 * replaces -- local dom state, never the store or the pixi chrome */
 	const [dragPreview, setDragPreview] = useState<PressDragPreview | null>(null);
@@ -169,13 +169,20 @@ export function DetailLanes() {
 	const holds = useMemo(() => holdsForScene(scene?.frames ?? []), [scene]);
 
 	// the selected press, resolved to its run for the lane highlight. edit
-	// mode only -- watch mode's lanes keep their observational look
+	// mode only -- watch mode's lanes keep their observational look -- and
+	// only while the sidebar is open on the keypress tab: the highlight is
+	// that panel's presence on the timeline, and a brightened span with no
+	// visible owner reads as a glitch. hide, not clear -- the selection
+	// itself stays in the store, so reopening the panel restores it exactly.
+	// (the drag preview below is gesture state and never gates on the panel,
+	// and the viewport's frame-selection chrome is tool-owned elsewhere)
 	const selectedHighlight = useMemo(() => {
-		if (mode !== "edit" || scene === null || pressSelection === null) return null;
+		if (mode !== "edit" || !panelOpen || panelTab !== "keys") return null;
+		if (scene === null || pressSelection === null) return null;
 		const run = pressRunFromIndex(scene.frames, pressSelection.key, pressSelection.startIndex);
 		if (run === null) return null;
 		return { bit: physicalButton(pressSelection.key).edgesKey, startTime: run.startTime };
-	}, [mode, scene, pressSelection]);
+	}, [mode, panelOpen, panelTab, scene, pressSelection]);
 
 	// sliceEpochRef is the counter of record, bumped synchronously by the rAF
 	// loop the instant the playhead threatens to outgrow the pre-rendered
@@ -459,14 +466,11 @@ export function DetailLanes() {
 	const percentOf = (t: number) => `${windowFraction(neighbourhood, t) * 100}%`;
 
 	return (
-		<div
-			data-native-wheel=""
-			onWheel={(e) => {
-				const next = detailSpanForWheel(detailSpanMs, e);
-				if (next !== null) setDetailSpan(next);
-			}}
-			className="relative flex border-b border-[#17171b] bg-surface-rail"
-		>
+		// no wheel handling and no native-wheel opt-out here: plain wheel
+		// frame-steps over these lanes exactly as it does everywhere else, and
+		// the span zoom rides ctrl+wheel on the dock (TimelineDock), one rule
+		// for every tier
+		<div className="relative flex border-b border-[#17171b] bg-surface-rail">
 			<div className="w-[74px] shrink-0 border-r border-[#17171b] pr-2 pb-1 text-right font-mono text-[10.5px]">
 				<div className="h-[17px]" />
 				<div className="flex h-[17px] items-center justify-end text-[#71717a]">judge</div>

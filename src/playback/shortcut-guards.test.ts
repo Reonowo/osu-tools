@@ -99,6 +99,12 @@ describe("withinNativeWheelUi", () => {
 
 describe("wheelFrameStep", () => {
 	const canvas = el("canvas");
+	// the two timeline tiers as the guard walk sees them: plain divs with no
+	// native-wheel opt-out anywhere up the chain -- the detail lanes lost
+	// theirs when their span zoom moved to ctrl+wheel, so one wheel gesture
+	// means one thing over the whole dock
+	const overviewStrip = el("div", {}, el("div", {}, el("div")));
+	const detailLane = el("div", { "data-hold-lane": "k1" }, el("div", {}, el("div")));
 
 	test("one frame per event, in the wheel's direction, whatever the magnitude", () => {
 		expect(wheelFrameStep({ deltaY: -1, ctrlKey: false, target: canvas })).toBe(-1);
@@ -107,20 +113,32 @@ describe("wheelFrameStep", () => {
 		expect(wheelFrameStep({ deltaY: 4000, ctrlKey: false, target: canvas })).toBe(1);
 	});
 
+	test("plain wheel frame-steps over both timeline tiers, same as over the viewport", () => {
+		expect(wheelFrameStep({ deltaY: 100, ctrlKey: false, target: overviewStrip })).toBe(1);
+		expect(wheelFrameStep({ deltaY: -100, ctrlKey: false, target: overviewStrip })).toBe(-1);
+		expect(wheelFrameStep({ deltaY: 100, ctrlKey: false, target: detailLane })).toBe(1);
+		expect(wheelFrameStep({ deltaY: -100, ctrlKey: false, target: detailLane })).toBe(-1);
+	});
+
 	test("a purely horizontal wheel steps nothing", () => {
 		expect(wheelFrameStep({ deltaY: 0, ctrlKey: false, target: canvas })).toBeNull();
 	});
 
-	test("ctrl+wheel steps nothing -- it belongs to the viewport's zoom", () => {
-		// the gesture must not scrub the replay out from under the zoom, and over
-		// the timeline (data-native-wheel, so already excluded) it must not zoom
-		// the detail tier either -- see detailSpanForWheel
+	test("ctrl+wheel steps nothing anywhere -- it is zoom, wherever it lands", () => {
+		// the viewport's pointer-anchored zoom and the timeline dock's span
+		// zoom (detailSpanForWheel) both ride ctrl+wheel, and neither may have
+		// the replay scrubbed out from under it by the same gesture
 		expect(wheelFrameStep({ deltaY: -100, ctrlKey: true, target: canvas })).toBeNull();
 		expect(wheelFrameStep({ deltaY: 100, ctrlKey: true, target: canvas })).toBeNull();
+		expect(wheelFrameStep({ deltaY: 100, ctrlKey: true, target: overviewStrip })).toBeNull();
+		expect(wheelFrameStep({ deltaY: 100, ctrlKey: true, target: detailLane })).toBeNull();
 	});
 
 	test("scrollable ui keeps its native scroll", () => {
 		const inDialog = el("div", {}, el("div", { role: "dialog" }));
 		expect(wheelFrameStep({ deltaY: 100, ctrlKey: false, target: inDialog })).toBeNull();
+		// the side panels' scrollable bodies stay opted out too
+		const inPanelBody = el("dd", {}, el("div", { "data-native-wheel": "" }));
+		expect(wheelFrameStep({ deltaY: 100, ctrlKey: false, target: inPanelBody })).toBeNull();
 	});
 });

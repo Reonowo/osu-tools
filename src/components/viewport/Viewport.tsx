@@ -53,8 +53,9 @@ export function Viewport() {
 		};
 
 		// non-passive and element-scoped, unlike the global frame-stepping wheel
-		// listener: ctrl+wheel is the webview's own page zoom, and only a
-		// preventDefault on the element under the pointer suppresses it
+		// listener: ctrl+wheel is the webview's own page zoom, which App.tsx
+		// also suppresses app-wide -- the preventDefault here predates that and
+		// stays so this element's zoom never depends on a listener elsewhere
 		const onWheel = (e: WheelEvent) => {
 			if (!e.ctrlKey) return;
 			e.preventDefault();

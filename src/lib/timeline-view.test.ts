@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	bracketPixels,
 	clampSpan,
 	detailSpanForWheel,
 	laneTimeAtPixel,
@@ -11,28 +12,60 @@ import {
 	windowFraction,
 	zoomFactor
 } from "./timeline-view";
+import { fractionFor } from "./timeline";
 
 const bounds = { minTime: -1000, maxTime: 99_000 };
 
 describe("detailSpanForWheel", () => {
-	test("wheel-down widens the span and wheel-up narrows it", () => {
-		expect(detailSpanForWheel(20_000, { deltaY: 100, ctrlKey: false })).toBe(25_000);
-		expect(detailSpanForWheel(20_000, { deltaY: -100, ctrlKey: false })).toBe(16_000);
+	const wheel = (deltaY: number, deltaMode = 0) => ({ deltaY, ctrlKey: true, deltaMode });
+
+	test("ctrl+wheel-down widens the span and ctrl+wheel-up narrows it", () => {
+		expect(detailSpanForWheel(20_000, wheel(100))).toBe(25_000);
+		expect(detailSpanForWheel(20_000, wheel(-100))).toBe(16_000);
 	});
 
 	test("zooming in and back out lands exactly where it started", () => {
-		const inOnce = detailSpanForWheel(20_000, { deltaY: -100, ctrlKey: false });
-		expect(detailSpanForWheel(inOnce!, { deltaY: 100, ctrlKey: false })).toBe(20_000);
+		const inOnce = detailSpanForWheel(20_000, wheel(-100));
+		expect(detailSpanForWheel(inOnce!, wheel(100))).toBe(20_000);
 	});
 
-	test("a horizontal-only trackpad swipe leaves the span alone", () => {
+	test("four quarter-notches compose to one whole one, so a touchpad pinch matches a wheel", () => {
+		// the defect this pins down: a fixed per-event step made every tiny
+		// precision-touchpad delta apply a full notch, slamming the span
+		let span = 20_000;
+		for (let i = 0; i < 4; i++) span = detailSpanForWheel(span, wheel(25))!;
+		expect(span).toBeCloseTo(25_000, 9);
+	});
+
+	test("a single tiny delta barely moves the span", () => {
+		const next = detailSpanForWheel(20_000, wheel(-1))!;
+		expect(next).toBeLessThan(20_000);
+		expect(next).toBeGreaterThan(20_000 * 0.99);
+	});
+
+	test("line and page delta modes are normalised to pixels", () => {
+		expect(detailSpanForWheel(20_000, wheel(-3, 1))).toBe(detailSpanForWheel(20_000, wheel(-48)));
+		expect(detailSpanForWheel(20_000, wheel(-0.25, 2))).toBe(detailSpanForWheel(20_000, wheel(-100)));
+	});
+
+	test("a batched flick is capped rather than crossing the whole span range", () => {
+		expect(detailSpanForWheel(20_000, wheel(100_000))).toBe(detailSpanForWheel(20_000, wheel(150)));
+		expect(detailSpanForWheel(20_000, wheel(-100_000))).toBe(detailSpanForWheel(20_000, wheel(-150)));
+	});
+
+	test("a non-finite delta asks for nothing rather than a NaN span", () => {
+		expect(detailSpanForWheel(20_000, wheel(Number.NaN))).toBeNull();
+		expect(detailSpanForWheel(20_000, wheel(Number.POSITIVE_INFINITY))).toBeNull();
+	});
+
+	test("a horizontal-only trackpad swipe leaves the span alone even with ctrl held", () => {
 		// deltaY 0 carries no direction and must not fall into the zoom-in branch
-		expect(detailSpanForWheel(20_000, { deltaY: 0, ctrlKey: false })).toBeNull();
+		expect(detailSpanForWheel(20_000, wheel(0))).toBeNull();
 	});
 
-	test("ctrl+wheel leaves the span alone -- it is the viewport's zoom gesture", () => {
-		expect(detailSpanForWheel(20_000, { deltaY: 100, ctrlKey: true })).toBeNull();
-		expect(detailSpanForWheel(20_000, { deltaY: -100, ctrlKey: true })).toBeNull();
+	test("plain wheel leaves the span alone -- it frame-steps over the timeline like everywhere else", () => {
+		expect(detailSpanForWheel(20_000, { deltaY: 100, ctrlKey: false, deltaMode: 0 })).toBeNull();
+		expect(detailSpanForWheel(20_000, { deltaY: -100, ctrlKey: false, deltaMode: 0 })).toBeNull();
 	});
 });
 
@@ -213,6 +246,87 @@ describe("snapped timeline geometry", () => {
 		}
 		// a zero-length span collapses to exactly nothing; nothing narrower
 		expect(narrowest).toBe(0);
+	});
+});
+
+describe("bracketPixels", () => {
+	// the strip's regime: a 100s replay across a ~900px track, so the bracket
+	// moves well under a device pixel per frame -- exactly where two
+	// independently rounded edges used to step in opposite directions
+	const trackPx = 903.5;
+	const spanMs = 20_000;
+
+	test("the width is rigid: one snapped value for every centre, at every ratio", () => {
+		for (const dpr of DEVICE_PIXEL_RATIOS) {
+			const widths = new Set<number>();
+			for (let t = bounds.minTime; t <= bounds.maxTime; t += 313) {
+				widths.add(bracketPixels(bounds, t, spanMs, trackPx, dpr).width);
+			}
+			expect(widths.size).toBe(1);
+		}
+	});
+
+	test("both numbers land on the device-pixel grid", () => {
+		for (const dpr of DEVICE_PIXEL_RATIOS) {
+			for (let t = 10_000; t <= 90_000; t += 313) {
+				const { left, width } = bracketPixels(bounds, t, spanMs, trackPx, dpr);
+				expect(left * dpr).toBeCloseTo(Math.round(left * dpr), 9);
+				expect(width * dpr).toBeCloseTo(Math.round(width * dpr), 9);
+			}
+		}
+	});
+
+	test("the playhead-to-bracket offset stays constant through unpinned motion", () => {
+		// the strip's playhead pixel, exactly as its rAF loop computes it; the
+		// bracket must hold a fixed distance from it -- mapping the window's
+		// start for itself rounded on a different subpixel phase and made the
+		// gap flick by a device pixel while both slid
+		for (const dpr of DEVICE_PIXEL_RATIOS) {
+			const offsetsDev = new Set<number>();
+			for (let t = bounds.minTime + spanMs / 2 + 500; t <= bounds.maxTime - spanMs / 2 - 500; t += 313) {
+				const playheadPx = snapDevicePixels(fractionFor(bounds, t) * trackPx, dpr);
+				const { left } = bracketPixels(bounds, t, spanMs, trackPx, dpr);
+				offsetsDev.add(Math.round((playheadPx - left) * dpr));
+			}
+			expect(offsetsDev.size).toBe(1);
+		}
+	});
+
+	test("the left edge never steps backwards as the playhead advances", () => {
+		for (const dpr of DEVICE_PIXEL_RATIOS) {
+			let previous = Number.NEGATIVE_INFINITY;
+			for (let t = bounds.minTime; t <= bounds.maxTime; t += 47) {
+				const { left } = bracketPixels(bounds, t, spanMs, trackPx, dpr);
+				expect(left).toBeGreaterThanOrEqual(previous);
+				previous = left;
+			}
+		}
+	});
+
+	test("freezes at the head: pinned at 0 while the playhead travels the leading half-span", () => {
+		expect(bracketPixels(bounds, bounds.minTime, spanMs, trackPx, 1).left).toBe(0);
+		expect(bracketPixels(bounds, bounds.minTime + spanMs / 2 - 1, spanMs, trackPx, 1).left).toBe(0);
+	});
+
+	test("freezes at the tail: pinned against the track end while the playhead travels inside", () => {
+		for (const dpr of DEVICE_PIXEL_RATIOS) {
+			const atEnd = bracketPixels(bounds, bounds.maxTime, spanMs, trackPx, dpr);
+			// the two snapped numbers each move at most half a device pixel, so
+			// their sum sits within one device pixel of the track's true end
+			expect(Math.abs(atEnd.left + atEnd.width - trackPx)).toBeLessThanOrEqual(1 / dpr);
+			const inside = bracketPixels(bounds, bounds.maxTime - spanMs / 2 + 1, spanMs, trackPx, dpr);
+			expect(inside.left).toBe(atEnd.left);
+		}
+	});
+
+	test("a span wider than the replay covers the whole track", () => {
+		const { left, width } = bracketPixels(bounds, 50_000, 1_000_000, trackPx, 1);
+		expect(left).toBe(0);
+		expect(width).toBe(snapDevicePixels(trackPx, 1));
+	});
+
+	test("degenerate bounds collapse to nothing", () => {
+		expect(bracketPixels({ minTime: 0, maxTime: 0 }, 0, spanMs, trackPx, 1)).toEqual({ left: 0, width: 0 });
 	});
 });
 

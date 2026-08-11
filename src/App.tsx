@@ -23,6 +23,20 @@ export default function App() {
 		return () => void cleanup.then((unlisten) => unlisten());
 	}, []);
 
+	// ctrl+wheel is the webview's own page zoom, and nothing in this app is
+	// ever meant to resize that way -- the gesture belongs to the viewport's
+	// pointer-anchored zoom and the timeline dock's span zoom, both of which
+	// read the event through their own (bubbling, so unaffected) handlers.
+	// suppressed here, at the app root, so it also covers the start screen
+	// and every dialog; non-passive because preventDefault is the whole point
+	useEffect(() => {
+		function onWheel(e: WheelEvent) {
+			if (e.ctrlKey) e.preventDefault();
+		}
+		window.addEventListener("wheel", onWheel, { passive: false });
+		return () => window.removeEventListener("wheel", onWheel);
+	}, []);
+
 	// persistence is installed only after hydration resolves, so the loaded
 	// values are not immediately written back. the cancelled flag covers
 	// strict-mode's double mount, where the first effect is torn down while
@@ -71,7 +85,8 @@ export default function App() {
 			<MismatchDialog />
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
-			<Toaster theme="dark" position="bottom-right" richColors />
+			{/* select-text: error toasts are diagnostic copy opt-ins (index.css) */}
+			<Toaster theme="dark" position="bottom-right" richColors toastOptions={{ className: "select-text" }} />
 		</TooltipProvider>
 	);
 }

@@ -75,10 +75,11 @@ export function withinNativeWheelUi(target: unknown): boolean {
 }
 
 /** the frame step a wheel event asks for, or null when it asks for none: a
- * purely horizontal wheel carries no direction, ctrl+wheel is the viewport's
- * pointer-anchored zoom (which must not also scrub the replay out from under
- * it), and scrollable ui keeps its native scroll. one frame per event
- * whatever the delta magnitude -- no accumulation */
+ * purely horizontal wheel carries no direction, ctrl+wheel is zoom wherever
+ * it lands (the viewport's pointer-anchored zoom, the timeline dock's span
+ * zoom -- neither may have the replay scrubbed out from under it by the
+ * same gesture), and scrollable ui keeps its native scroll. one frame per
+ * event whatever the delta magnitude -- no accumulation */
 export function wheelFrameStep(e: { deltaY: number; ctrlKey: boolean; target: unknown }): 1 | -1 | null {
 	if (e.deltaY === 0) return null;
 	if (e.ctrlKey) return null;

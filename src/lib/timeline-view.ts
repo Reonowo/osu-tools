@@ -2,7 +2,7 @@
 // replay; the detail lanes map a span centred on the playhead, and this is
 // the maths that keeps that span inside the bounds and rules it
 
-import type { TimeBounds } from "./timeline";
+import { fractionFor, type TimeBounds } from "./timeline";
 
 export interface TimeWindow {
 	start: number;
@@ -29,18 +29,33 @@ export function windowAround(bounds: TimeBounds, centre: number, spanMs: number)
 	return { start, end: start + span };
 }
 
-// one wheel notch over the detail lanes; asymmetric so that zooming in and
-// back out returns close to where it started (0.8 x 1.25 === 1 exactly)
-const SPAN_WHEEL_IN = 0.8;
-const SPAN_WHEEL_OUT = 1.25;
+// one 100px ctrl+wheel notch over the timeline dock widens the span a
+// quarter. exponential in the pixel delta so a precision touchpad's stream
+// of small ctrl+wheel deltas composes to exactly what one notch would give
+// instead of each event slamming a full step, and so zooming in and back out
+// returns exactly where it started. the delta normalisation mirrors
+// renderer/playfield's wheelZoomFactor -- same line/page pixel factors, same
+// batched-flick cap -- duplicated because lib must not import from renderer
+const SPAN_WHEEL_PER_NOTCH = 1.25;
+const SPAN_WHEEL_LINE_PX = 16;
+const SPAN_WHEEL_PAGE_PX = 400;
+const SPAN_WHEEL_MAX_PX = 150;
 
-/** the span a wheel event over the detail lanes asks for, or null when it
- * asks for nothing: a horizontal-only trackpad swipe (deltaY 0) carries no
- * direction, and ctrl+wheel belongs to the viewport's pointer-anchored zoom
- * -- held over the timeline it must neither zoom this tier nor scrub */
-export function detailSpanForWheel(spanMs: number, e: { deltaY: number; ctrlKey: boolean }): number | null {
-	if (e.deltaY === 0 || e.ctrlKey) return null;
-	return spanMs * (e.deltaY > 0 ? SPAN_WHEEL_OUT : SPAN_WHEEL_IN);
+/** the span a wheel event over the timeline dock asks for, or null when it
+ * asks for nothing: zooming rides ctrl+wheel -- one rule with the viewport's
+ * pointer-anchored zoom, so the same gesture means zoom everywhere -- while
+ * plain wheel frame-steps over the timeline exactly as it does everywhere
+ * else (wheelFrameStep bails on ctrl for the mirror-image reason), and a
+ * horizontal-only trackpad swipe (deltaY 0) carries no direction */
+export function detailSpanForWheel(
+	spanMs: number,
+	e: { deltaY: number; ctrlKey: boolean; deltaMode: number }
+): number | null {
+	if (e.deltaY === 0 || !e.ctrlKey || !Number.isFinite(e.deltaY)) return null;
+	const px = e.deltaY * (e.deltaMode === 1 ? SPAN_WHEEL_LINE_PX : e.deltaMode === 2 ? SPAN_WHEEL_PAGE_PX : 1);
+	const capped = Math.min(Math.max(px, -SPAN_WHEEL_MAX_PX), SPAN_WHEEL_MAX_PX);
+	// wheel-down carries a positive deltaY and widens the span
+	return spanMs * SPAN_WHEEL_PER_NOTCH ** (capped / 100);
 }
 
 export function zoomFactor(spanMs: number, bounds: TimeBounds): number {
@@ -78,6 +93,40 @@ export function snapDevicePixels(px: number, dpr: number): number {
 	// browser; guard anyway rather than divide the whole geometry to NaN
 	const ratio = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
 	return Math.round(px * ratio) / ratio;
+}
+
+/** the zoom bracket's overview-strip geometry: the detail window mapped onto
+ * the track as one rigid piece, anchored to the playhead rather than mapped
+ * for itself. the left edge is the playhead's own snapped pixel minus a
+ * constant snapped half-span -- snapping the window's start independently
+ * rounds on a different subpixel phase than the playhead's centre, which made
+ * the gap between them flick by a device pixel while both slid. the width is
+ * snapped once from the span so the edges can never round in opposite
+ * directions. the arithmetic stays in whole device pixels until the return so
+ * the pinned and unpinned regimes meet without float drift. the freeze at the
+ * timeline's ends is the clamp, with the tail pin evaluated on the unpinned
+ * trajectory at the freeze boundary itself -- deriving it from the track end
+ * instead can sit a device pixel off the trajectory and let the bracket creep
+ * after the playhead enters the trailing half-span */
+export function bracketPixels(
+	bounds: TimeBounds,
+	centre: number,
+	spanMs: number,
+	trackPx: number,
+	dpr: number
+): { left: number; width: number } {
+	const full = bounds.maxTime - bounds.minTime;
+	if (full <= 0) return { left: 0, width: 0 };
+	// same guard as snapDevicePixels: a degenerate ratio must not NaN the strip
+	const ratio = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+	const span = clampSpan(bounds, spanMs);
+	const halfSpanPx = (span / 2 / full) * trackPx;
+	const widthDev = Math.round((span / full) * trackPx * ratio);
+	const halfSpanDev = Math.round(halfSpanPx * ratio);
+	const playheadDev = Math.round(fractionFor(bounds, centre) * trackPx * ratio);
+	const pinDev = Math.round((trackPx - halfSpanPx) * ratio) - halfSpanDev;
+	const leftDev = Math.min(Math.max(playheadDev - halfSpanDev, 0), pinDev);
+	return { left: leftDev / ratio, width: widthDev / ratio };
 }
 
 /** the detail tier's lane-layer geometry, exactly as its draw loop computes
