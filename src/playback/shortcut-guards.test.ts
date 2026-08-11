@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { wheelFrameStep, withinInteractiveControl, withinNativeWheelUi, type GuardElement } from "./shortcut-guards";
+import {
+	wheelFrameStep,
+	withinInteractiveControl,
+	withinNativeWheelUi,
+	withinViewportChrome,
+	type GuardElement
+} from "./shortcut-guards";
 
 function el(tagName: string, attrs: Record<string, string> = {}, parent: GuardElement | null = null): GuardElement {
 	return {
@@ -49,6 +55,21 @@ describe("withinInteractiveControl", () => {
 	test("allows null and non-element targets like window", () => {
 		expect(withinInteractiveControl(null)).toBe(false);
 		expect(withinInteractiveControl({})).toBe(false);
+	});
+});
+
+describe("withinViewportChrome", () => {
+	test("blocks the marked chrome container itself and everything inside it", () => {
+		const chrome = el("div", { "data-viewport-chrome": "" });
+		expect(withinViewportChrome(chrome)).toBe(true);
+		// padding and separators are plain divs/spans: the whole subtree is
+		// the chrome's, whitespace included
+		expect(withinViewportChrome(el("span", {}, el("div", {}, chrome)))).toBe(true);
+	});
+
+	test("allows the plain viewport surface", () => {
+		expect(withinViewportChrome(el("div", {}, el("div")))).toBe(false);
+		expect(withinViewportChrome(null)).toBe(false);
 	});
 });
 

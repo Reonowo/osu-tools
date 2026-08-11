@@ -45,6 +45,22 @@ export function withinInteractiveControl(target: unknown): boolean {
 	return false;
 }
 
+/** the marker the viewport's floating chrome containers carry (tool palette,
+ * zoom cluster, coordinate readout) so pointer gestures ignore presses
+ * anywhere on them: their padding, separators, and readouts are divs and
+ * spans no interactive-control walk would catch, and a gesture started there
+ * would edit whatever frame the chrome happens to obscure */
+export const VIEWPORT_CHROME_ATTR = "data-viewport-chrome";
+
+/** true when the event target sits inside floating viewport chrome; the
+ * whole container is the chrome's, controls and whitespace alike */
+export function withinViewportChrome(target: unknown): boolean {
+	for (let element = asGuardElement(target); element !== null; element = element.parentElement) {
+		if (element.getAttribute(VIEWPORT_CHROME_ATTR) !== null) return true;
+	}
+	return false;
+}
+
 /** true when the event target sits inside scrollable ui (settings dialog,
  * info panel, popovers) where the wheel keeps its native scroll behaviour
  * instead of frame-stepping */
