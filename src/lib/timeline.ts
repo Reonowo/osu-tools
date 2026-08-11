@@ -64,3 +64,17 @@ export function countAtOrBefore(times: readonly number[], t: number): number {
 	}
 	return lo;
 }
+
+/** countAtOrBefore over the objects that carry the times, so a caller with a
+ * frame array in hand does not materialize a parallel time array just to
+ * binary-search it */
+export function countTimedAtOrBefore(entries: readonly { time: number }[], t: number): number {
+	let lo = 0,
+		hi = entries.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (entries[mid].time <= t) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
