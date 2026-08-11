@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { withinInteractiveControl, type GuardElement } from "../../playback/shortcut-guards";
-import { FrameRow, frameWindowStart, suppressSpaceActivation } from "./FramesPanel";
+import { FrameRow, frameWindowStart, rangeSelection, suppressSpaceActivation } from "./FramesPanel";
 
 const rowMarkup = renderToStaticMarkup(<FrameRow setRef={() => {}} onActivate={() => {}} />);
 
@@ -50,6 +50,22 @@ describe("FrameRow", () => {
 		// enter is the row's own activation key and nothing else binds it
 		expect(pressed("Enter")).toBe(false);
 		expect(pressed("ArrowDown")).toBe(false);
+	});
+});
+
+describe("rangeSelection (shift-activation)", () => {
+	test("selects the contiguous inclusive range, whichever side the anchor sits", () => {
+		expect(rangeSelection(3, 7)).toEqual([3, 4, 5, 6, 7]);
+		expect(rangeSelection(7, 3)).toEqual([3, 4, 5, 6, 7]);
+	});
+
+	test("anchor and activated row coinciding selects that one frame", () => {
+		expect(rangeSelection(5, 5)).toEqual([5]);
+	});
+
+	test("a lead-in anchor below zero clamps to the first frame", () => {
+		// currentIndex() floors at 0 already; this keeps the helper total anyway
+		expect(rangeSelection(-1, 2)).toEqual([0, 1, 2]);
 	});
 });
 

@@ -14,11 +14,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { PanelHeader } from "@/components/shell/SidePanel";
 import { frameEditGate } from "@/editor/gate";
 import { insertOps, nudgeOps, snapOps } from "@/editor/ops";
+import { smoothMoveOps } from "@/editor/smooth";
+import { countedLabel, movedFrameCount } from "@/editor/tool-commits";
 import { formatButtons, formatTime } from "@/lib/format";
 import { formatLatticeStep, isOnLattice } from "@/lib/lattice";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
-import { useViewerStore, type EditorState } from "@/state/store";
+import { useViewerStore, viewerStore, type EditorState } from "@/state/store";
 import { SectionLabel } from "./SectionLabel";
 
 const ROW_COUNT = 9;
@@ -38,6 +40,16 @@ function opTargets(editor: EditorState): number[] {
  * has moved to */
 export function frameWindowStart(centerIndex: number, frameCount: number): number {
 	return Math.max(0, Math.min(centerIndex - CENTER_ROW, frameCount - ROW_COUNT));
+}
+
+/** shift-activation's frame selection: the contiguous inclusive index range
+ * between the frame-cursor row (the anchor) and the activated row */
+export function rangeSelection(anchor: number, activated: number): number[] {
+	const lo = Math.max(0, Math.min(anchor, activated));
+	const hi = Math.max(anchor, activated);
+	const range: number[] = [];
+	for (let i = lo; i <= hi; i++) range.push(i);
+	return range;
 }
 
 // enter activates a row; space stays the app's play/pause wherever focus sits,
@@ -87,14 +99,20 @@ export function FramesPanel() {
 	const derived = useViewerStore((s) => s.derived);
 	const editor = useViewerStore((s) => s.editor);
 	const commitEdit = useViewerStore((s) => s.commitEdit);
+	const setFrameSelection = useViewerStore((s) => s.setFrameSelection);
 	const snapPref = useViewerStore((s) => s.editing.snapToLattice);
 	const gate = scene !== null ? frameEditGate(scene) : null;
 	const canFrameEdit = gate?.editable === true;
 	const lattice = editor?.lattice ?? null;
+	const featherMs = useViewerStore((s) => s.featherMs);
+	const setFeatherMs = useViewerStore((s) => s.setFeatherMs);
+	const smoothStrength = useViewerStore((s) => s.smoothStrength);
+	const setSmoothStrength = useViewerStore((s) => s.setSmoothStrength);
 	const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const frameCount = scene === null ? 0 : scene.frames.length;
 	const [dxDraft, setDxDraft] = useState("0");
 	const [dyDraft, setDyDraft] = useState("0");
+	const [featherDraft, setFeatherDraft] = useState(String(featherMs));
 
 	function commitNudge() {
 		const dx = Number(dxDraft);
@@ -125,10 +143,19 @@ export function FramesPanel() {
 			const raw = e.currentTarget.dataset.frameIndex;
 			if (raw === undefined) return;
 			const index = Number(raw);
+			// shift-activation extends the frame selection from the frame-cursor
+			// row -- the keyboard route to range selection (a shift-enter on a
+			// focused row arrives here too: keyboard activation synthesizes a
+			// click that carries the modifier state). selecting never seeks, so
+			// the window stays put and the activated row keeps its focus
+			if (e.shiftKey) {
+				setFrameSelection(rangeSelection(frameCursor.currentIndex(), index));
+				return;
+			}
 			frameCursor.select(index);
 			rowRefs.current[index - frameWindowStart(index, frameCount)]?.focus();
 		},
-		[frameCount]
+		[frameCount, setFrameSelection]
 	);
 
 	useEffect(() => {
@@ -281,16 +308,51 @@ export function FramesPanel() {
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger render={<span className="flex-1" />}>
-								<Button disabled variant="outline" size="sm" className="w-full">
+								<Button
+									variant="outline"
+									size="sm"
+									className="w-full"
+									disabled={!canFrameEdit}
+									onClick={() => {
+										// the strength the user sees as they click, not whatever
+										// the slider reads when a queued intent finally expands
+										const strength = viewerStore.getState().smoothStrength;
+										void commitEdit({
+											label: (ops) => countedLabel("smooth", movedFrameCount(ops)),
+											payload: {
+												kind: "intent",
+												expand: (frames, editor) =>
+													smoothMoveOps(
+														frames,
+														opTargets(editor),
+														strength,
+														editor.lattice,
+														snapPref
+													)
+											}
+										});
+									}}
+								>
 									smooth
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="left">smoothing lands with the cursor-path tools</TooltipContent>
+							<TooltipContent side="left">
+								{gate !== null && !gate.editable
+									? gate.reason
+									: "smooth the selection (or the current frame) with the pinned gaussian kernel, blended by strength"}
+							</TooltipContent>
 						</Tooltip>
 					</div>
 					<label className="mt-2.5 block text-[10px] text-[#8a8a93]">
-						strength
-						<Slider disabled value={[0]} min={0} max={100} onValueChange={() => {}} className="mt-1.5" />
+						strength {smoothStrength}
+						<Slider
+							disabled={!canFrameEdit}
+							value={[smoothStrength]}
+							min={0}
+							max={100}
+							onValueChange={(value) => setSmoothStrength(Array.isArray(value) ? value[0] : value)}
+							className="mt-1.5"
+						/>
 					</label>
 					<div className="mt-2.5 grid grid-cols-2 gap-1.5">
 						<label className="block text-[10px] text-[#8a8a93]">
@@ -327,6 +389,35 @@ export function FramesPanel() {
 								className="mt-1 h-7 text-[11px] md:text-[11px]"
 							/>
 						</label>
+						<Tooltip>
+							<TooltipTrigger
+								render={
+									<label className="block text-[10px] text-[#8a8a93]">
+										feather ms
+										<Input
+											disabled={!canFrameEdit}
+											type="number"
+											min={0}
+											value={featherDraft}
+											onChange={(e) => {
+												// commit-on-change, session-only. a cleared field is held
+												// back here: Number("") is 0, not the NaN the store's
+												// finite guard catches, and committing it would turn
+												// "blank" into feather 0
+												setFeatherDraft(e.target.value);
+												if (e.target.value.trim() !== "") setFeatherMs(Number(e.target.value));
+											}}
+											onBlur={() => setFeatherDraft(String(viewerStore.getState().featherMs))}
+											className="mt-1 h-7 text-[11px] md:text-[11px]"
+										/>
+									</label>
+								}
+							/>
+							<TooltipContent side="left">
+								the time window past a moved selection's edges over which the move tool blends into the
+								surrounding path — 0 is a hard edge. the Δ nudge stays exact.
+							</TooltipContent>
+						</Tooltip>
 					</div>
 					{canFrameEdit ? (
 						<div className="mt-1.5 flex gap-1.5">{nudgeInsertButtons}</div>
