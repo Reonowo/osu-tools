@@ -92,9 +92,21 @@ export class SliderDrawable implements ObjectDrawable {
 		this.body = new SliderBodyRenderer(ctx.renderer, slider, accent, this.planScale);
 		this.view.addChild(this.body.view);
 
+		// nested piece layers, in lazer's own child order (drawableslider.cs:
+		// 100-122): ticks under repeats, the head above both -- added below,
+		// after these -- and the ball on top of everything. one container per
+		// piece kind rather than per-piece adds, or a repeat arrow would draw
+		// under a later tick instead of over every tick. argon draws no tail
+		// piece, so source's proxied-under-everything tail has no analogue
+		const tickLayer = new Container();
+		const repeatLayer = new Container();
+		this.view.addChild(tickLayer, repeatLayer);
+
 		// head: a full argon circle without the outer fill (osuargonskintransformer.cs:
 		// SliderHeadHitCircle -> ArgonMainCirclePiece(false)), judged by the
-		// sliderHead event (falls back to hit-on-time, decision 5)
+		// sliderHead event (falls back to hit-on-time, decision 5). added after
+		// the nested layers: source's headContainer sits above the shake
+		// container holding body/ticks/repeats, so arrows never cover the head
 		const headResult = resolveCircleResult(events, obj.startTime);
 		this.headHit = { time: headResult.time, miss: headResult.grade === "miss" };
 		this.headTracks = circleTracks(obj, headResult, true, this.hitAnimations);
@@ -131,7 +143,7 @@ export class SliderDrawable implements ObjectDrawable {
 			const view = new Container();
 			view.position.set(nested.position[0] - obj.position[0], nested.position[1] - obj.position[1]);
 			view.scale.set(this.planScale);
-			this.view.addChild(view);
+			(nested.kind === "tick" ? tickLayer : repeatLayer).addChild(view);
 			if (nested.kind === "tick") {
 				const tick = new ArgonTick(accent);
 				view.addChild(tick.view);
@@ -273,9 +285,10 @@ export class SliderDrawable implements ObjectDrawable {
 
 	destroy(): void {
 		this.body.destroy();
-		// the approach circle and every other piece here are real children of
-		// `view` (attach() only affects draw order, never scene-graph
-		// ownership), so this single cascade releases all of them. `context:
+		// the approach circle and every other piece here live under `view` --
+		// directly or via the tick/repeat layers -- and attach() only affects
+		// draw order, never scene-graph ownership, so this single recursive
+		// cascade releases all of them. `context:
 		// true` is required too: Graphics.destroy() (scene/graphics/shared/
 		// Graphics.js) only frees its owned GraphicsContext when `options ===
 		// true` or `options?.context === true` -- passing `{children: true}`
