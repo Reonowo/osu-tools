@@ -53,8 +53,8 @@ export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () =>
 
 			<Separator orientation="vertical" className="mx-3 h-6" />
 
-			{/* beatmap/player */}
-			<div className="flex min-w-0 flex-col gap-px">
+			{/* beatmap/player -- select-text: metadata is a copy opt-in (index.css) */}
+			<div className="flex min-w-0 flex-col gap-px select-text">
 				<div className="truncate text-[13.5px] font-semibold text-[#f4f4f5]">
 					{title} <span className="text-[11.5px] font-medium text-[#ff87bc]">[{version}]</span>
 				</div>

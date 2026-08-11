@@ -23,7 +23,8 @@ export function MismatchDialog() {
 			<DialogContent>
 				<DialogHeader>
 					<DialogTitle>beatmap doesn't match this replay</DialogTitle>
-					<DialogDescription className="space-y-2">
+					{/* select-text: the two hashes are diagnostic copy opt-ins (index.css) */}
+					<DialogDescription className="space-y-2 select-text">
 						<span className="block">
 							the replay was set on a beatmap with hash{" "}
 							<code className="text-xs">{pending?.expectedMd5}</code>, but the picked file hashes to{" "}

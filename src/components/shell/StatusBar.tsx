@@ -104,8 +104,13 @@ export function StatusBar() {
 				</PopoverTrigger>
 				{/* the popup's own w-72 is a fixed width, not a cap -- twMerge
 				keeps both it and max-w-md since they're different class groups, so
-				w-auto is here to cancel w-72 and let max-w-md actually be the cap */}
-				<PopoverContent side="top" align="end" className="w-auto max-w-md border border-border bg-popover">
+				w-auto is here to cancel w-72 and let max-w-md actually be the cap.
+				select-text: warning prose is a copy opt-in (see index.css) */}
+				<PopoverContent
+					side="top"
+					align="end"
+					className="w-auto max-w-md border border-border bg-popover select-text"
+				>
 					{warningList(warnings).map((warning) => (
 						<div key={warning.kind} className="flex items-start gap-2 text-xs text-[#e4e4e7]">
 							<AlertTriangle className="size-3 shrink-0 text-[#fbbf24]" />

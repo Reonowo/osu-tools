@@ -147,10 +147,28 @@
 		@apply border-border outline-ring/50;
 	}
 	body {
-		@apply bg-background text-foreground;
+		/* select-none is the app-wide default: chrome text is gesture surface,
+		not document, and a drag must never leave a selection highlight behind.
+		copyable text opts back in with select-text, deliberately and only
+		where copying has a use: the top bar's beatmap/player metadata, the
+		replay panel's stat values and md5, and warning/diagnostic text */
+		@apply bg-background text-foreground select-none;
 	}
 	html {
 		@apply font-sans;
+		/* the app is dark-only (index.html pins class="dark"), but the ua
+		does not know that without this declaration: native form-control
+		chrome -- the datetime-local input's calendar glyph and its picker
+		popup especially -- otherwise renders its light (black-on-white)
+		variant. the custom scrollbar styles below are unaffected */
+		color-scheme: dark;
+	}
+	/* form fields keep their native selection: user-select is not inherited,
+	but `auto` resolves through the parent chain, and an input that cannot
+	select its own value is unusable */
+	input,
+	textarea {
+		@apply select-text;
 	}
 	::-webkit-scrollbar {
 		width: 8px;
