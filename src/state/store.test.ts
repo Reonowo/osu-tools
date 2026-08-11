@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import type { StoreApi } from "zustand";
+import type { PhysicalKey } from "../engine/buttons";
+import { PressDragController } from "../editor/press-drag";
+import { adjacentFrameTime, expandDeletePress, expandRetimePress, outcomeSelection } from "../editor/press-ops";
+import { pressRunAt, pressRunFromIndex } from "../editor/press-runs";
 import { GesturePreview } from "../editor/preview";
 import type {
 	EditDelta,
@@ -20,7 +25,7 @@ import {
 	DETAIL_SPAN_MIN,
 	effectiveEffects
 } from "./defaults";
-import { createViewerStore, type IpcDeps } from "./store";
+import { createViewerStore, type IpcDeps, type ViewerState } from "./store";
 
 const baseSettings: Settings = {
 	osuStablePath: null,
@@ -1823,5 +1828,564 @@ describe("editor slice and edit queue", () => {
 		// the dequeued second undo re-checked canUndo and dropped silently
 		expect(undos).toBe(1);
 		expect(store.getState().lastError).toBeNull();
+	});
+});
+
+describe("press selection", () => {
+	// two K1 presses: [16, 48) rising at index 1 and [64, 80) rising at 4
+	function pressScene(): LoadedScene {
+		const frames = [
+			{ time: 0, x: 0, y: 0, buttons: 0 },
+			{ time: 16, x: 16, y: 0, buttons: 5 },
+			{ time: 32, x: 32, y: 0, buttons: 5 },
+			{ time: 48, x: 48, y: 0, buttons: 0 },
+			{ time: 64, x: 64, y: 0, buttons: 5 },
+			{ time: 80, x: 80, y: 0, buttons: 0 }
+		];
+		return testScene({ frames });
+	}
+
+	/** echoes a dispatched setButtons batch back as its landed delta, the
+	 * way the real engine would splice it */
+	function echoingDeps(store: () => StoreApi<ViewerState>, revisions: { next: number }) {
+		return deps({
+			loadReplay: async () => pressScene(),
+			applyEdit: async (_e, _r, ops) => {
+				const frames = store().getState().scene!.frames;
+				const updated = ops.flatMap((op) =>
+					op.kind === "setButtons"
+						? op.sets.map((s) => ({ index: s.index, frame: { ...frames[s.index], buttons: s.buttons } }))
+						: []
+				);
+				revisions.next += 1;
+				return {
+					revision: revisions.next,
+					frames: { updated, inserted: [], removed: [] },
+					playerName: "p",
+					timestampTicks: "0",
+					dirty: true,
+					canUndo: true,
+					canRedo: false,
+					history: { labels: ["x"], cursor: 1 },
+					simulation: null
+				} satisfies EditDelta;
+			}
+		});
+	}
+
+	test("setPressSelection holds exactly one press, independent of the frame selection", async () => {
+		const store = createViewerStore(deps({ loadReplay: async () => pressScene() }));
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setFrameSelection([2, 3]);
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 1 });
+		expect(store.getState().editor!.frameSelection).toEqual([2, 3]);
+		store.getState().setPressSelection(null);
+		expect(store.getState().editor!.pressSelection).toBeNull();
+		expect(store.getState().editor!.frameSelection).toEqual([2, 3]);
+	});
+
+	test("a scene install clears the press selection and the armed key", async () => {
+		const store = createViewerStore(deps({ loadReplay: async () => pressScene() }));
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		store.getState().setArmedKey("K2");
+		await store.getState().openReplay("C:\\other.osr");
+		expect(store.getState().editor!.pressSelection).toBeNull();
+		expect(store.getState().armedKey).toBeNull();
+	});
+
+	test("a fullFrames delta clears the press selection", async () => {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => pressScene(),
+				revertAll: async () => ({
+					...identityDelta,
+					revision: 1,
+					frames: { fullFrames: pressScene().frames }
+				})
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		await store.getState().revertAll();
+		expect(store.getState().editor!.pressSelection).toBeNull();
+	});
+
+	test("undo clears the selection when no run of its key contains the prior start", async () => {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => pressScene(),
+				applyEdit: async () => ({
+					...identityDelta,
+					revision: 1,
+					dirty: true,
+					canUndo: true,
+					frames: {
+						updated: [{ index: 0, frame: { time: 0, x: 0, y: 0, buttons: 5 } }],
+						inserted: [],
+						removed: []
+					}
+				}),
+				undo: async () => ({
+					...identityDelta,
+					revision: 2,
+					frames: {
+						updated: [{ index: 0, frame: { time: 0, x: 0, y: 0, buttons: 0 } }],
+						inserted: [],
+						removed: []
+					}
+				})
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		// grow the press back to 0 ms, select the grown press, then undo it
+		// away: the prior start (0 ms) is contained by no post-undo K1 run
+		await store.getState().commitEdit({
+			label: "grow",
+			payload: { kind: "ops", ops: [{ kind: "setButtons", sets: [{ index: 0, buttons: 5 }] }] }
+		});
+		store.getState().setPressSelection({ key: "K1", startIndex: 0 });
+		await store.getState().undoEdit();
+		expect(store.getState().editor!.pressSelection).toBeNull();
+	});
+
+	test("undo keeps the selection while the same press still contains the prior start", async () => {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => pressScene(),
+				applyEdit: async () => ({
+					...identityDelta,
+					revision: 1,
+					dirty: true,
+					canUndo: true,
+					frames: {
+						updated: [{ index: 2, frame: { time: 32, x: 32, y: 0, buttons: 0 } }],
+						inserted: [],
+						removed: []
+					}
+				}),
+				undo: async () => ({
+					...identityDelta,
+					revision: 2,
+					frames: {
+						updated: [{ index: 2, frame: { time: 32, x: 32, y: 0, buttons: 5 } }],
+						inserted: [],
+						removed: []
+					}
+				})
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		// shrink the press to [16, 32), select it, undo the shrink: the
+		// prior start 16 is still contained by the restored [16, 48) run
+		await store.getState().commitEdit({
+			label: "shrink",
+			payload: { kind: "ops", ops: [{ kind: "setButtons", sets: [{ index: 2, buttons: 0 }] }] }
+		});
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		await store.getState().undoEdit();
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 1 });
+	});
+
+	test("a press commit's computed outcome overrides generic re-resolution", async () => {
+		// nudging the start later: the prior start time (16 ms) is contained
+		// by no post-delta run, so generic resolution would clear -- the
+		// computed outcome carries the nudged edge's new identity instead
+		const revisions = { next: 0 };
+		const store: StoreApi<ViewerState> = createViewerStore(echoingDeps(() => store, revisions));
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		let outcome: { key: PhysicalKey; startTime: number } | null = null;
+		await store.getState().commitEdit({
+			label: "nudge K1 press start",
+			payload: {
+				kind: "intent",
+				expand: (frames, editor) => {
+					const sel = editor.pressSelection;
+					if (sel === null) return null;
+					const run = pressRunFromIndex(frames, sel.key, sel.startIndex);
+					if (run === null) return null;
+					const expansion = expandRetimePress(frames, run, { start: 32 }, editor.lattice, "this nudge");
+					if ("rejected" in expansion) return null;
+					outcome = expansion.outcome;
+					return expansion.ops;
+				}
+			},
+			pressOutcome: (frames) => outcomeSelection(frames, outcome)
+		});
+		expect(store.getState().scene!.frames[1].buttons).toBe(0);
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 2 });
+	});
+
+	test("queued press intents chase the selection: two nudges compound instead of repeating", async () => {
+		const revisions = { next: 0 };
+		const store: StoreApi<ViewerState> = createViewerStore(echoingDeps(() => store, revisions));
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setPressSelection({ key: "K1", startIndex: 4 });
+		const nudgeEarlier = () => {
+			let outcome: { key: PhysicalKey; startTime: number } | null = null;
+			return store.getState().commitEdit({
+				label: "nudge K1 press start",
+				payload: {
+					kind: "intent",
+					expand: (frames, editor) => {
+						const sel = editor.pressSelection;
+						if (sel === null) return null;
+						const run = pressRunFromIndex(frames, sel.key, sel.startIndex);
+						if (run === null) return null;
+						const target = adjacentFrameTime(frames, run.startTime, -1);
+						if (target === null) return null;
+						const expansion = expandRetimePress(
+							frames,
+							run,
+							{ start: target },
+							editor.lattice,
+							"this nudge"
+						);
+						if ("rejected" in expansion) return null;
+						outcome = expansion.outcome;
+						return expansion.ops;
+					}
+				},
+				pressOutcome: (frames) => outcomeSelection(frames, outcome)
+			});
+		};
+		// both queued before either lands: the second must step from the
+		// first's outcome, not repeat the same expansion. the first step
+		// presses the frame at 48 ms -- meeting the [16, 48) press, which
+		// merges -- and the second steps the merged run's start to 0 ms
+		const a = nudgeEarlier();
+		const b = nudgeEarlier();
+		await Promise.all([a, b]);
+		const buttons = store.getState().scene!.frames.map((f) => f.buttons);
+		expect(buttons).toEqual([5, 5, 5, 5, 5, 0]);
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 0 });
+	});
+
+	test("a pure move-frames commit leaves the press selection untouched", async () => {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => pressScene(),
+				applyEdit: async () => moveDelta(1, 2, { time: 32, x: 99, y: 9, buttons: 5 }, "move")
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 2, x: 99, y: 9 }] }] }
+		});
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 1 });
+	});
+
+	test("a released drag commits exactly the previewed expansion (preview equals commit)", async () => {
+		const revisions = { next: 0 };
+		const dispatched: EditOp[][] = [];
+		const store: StoreApi<ViewerState> = createViewerStore(
+			deps({
+				loadReplay: async () => pressScene(),
+				applyEdit: async (_e, _r, ops) => {
+					dispatched.push(ops);
+					const frames = store.getState().scene!.frames;
+					const updated = ops.flatMap((op) =>
+						op.kind === "setButtons"
+							? op.sets.map((s) => ({
+									index: s.index,
+									frame: { ...frames[s.index], buttons: s.buttons }
+								}))
+							: []
+					);
+					revisions.next += 1;
+					return {
+						...identityDelta,
+						revision: revisions.next,
+						dirty: true,
+						canUndo: true,
+						frames: { updated, inserted: [], removed: [] }
+					};
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const frames = store.getState().scene!.frames;
+
+		// the gesture: grab the [16, 48) press's body and slide it right by 15
+		// ms, edges snapping to the frames at 32 and 64 -- meeting the second
+		// press, so the previewed outcome is the merged span
+		const controller = new PressDragController();
+		const down = controller.pointerDown(30, {
+			key: "K1",
+			frames,
+			msPerPx: 1,
+			slopPx: 4,
+			edgeZonePx: 3,
+			lattice: null
+		});
+		expect(down.select).toEqual({ key: "K1", startIndex: 1 });
+		store.getState().setPressSelection(down.select!);
+		const moved = controller.pointerMove(45);
+		expect(moved.preview?.span).toEqual({ start: 32, end: 80 });
+		const up = controller.pointerUp(45);
+		expect(up.commit?.edit).toEqual({ start: 32, end: 64 });
+
+		// the shell's drag intent: re-expanded at dispatch from the dragged
+		// run's time-space identity and the drag's final edit, exactly as
+		// DetailLanes commits it through pressRunCommit
+		let outcome: { key: PhysicalKey; startTime: number } | null = null;
+		await store.getState().commitEdit({
+			label: "drag K1 press",
+			payload: {
+				kind: "intent",
+				expand: (dispatchFrames, editor) => {
+					const run = pressRunAt(dispatchFrames, up.commit!.key, up.commit!.runStartTime);
+					if (run === null) return null;
+					const expansion = expandRetimePress(
+						dispatchFrames,
+						run,
+						up.commit!.edit,
+						editor.lattice,
+						"this drag"
+					);
+					if ("rejected" in expansion) return null;
+					outcome = expansion.outcome;
+					return expansion.ops;
+				}
+			},
+			pressOutcome: (postFrames) => outcomeSelection(postFrames, outcome)
+		});
+
+		// the dispatched ops are the previewed expansion, byte-equal
+		const previewedExpansion = expandRetimePress(
+			frames,
+			pressRunFromIndex(frames, "K1", 1)!,
+			up.commit!.edit,
+			null,
+			"this drag"
+		);
+		if ("rejected" in previewedExpansion) throw new Error(previewedExpansion.rejected);
+		expect(dispatched).toEqual([previewedExpansion.ops]);
+		// and the landed stream realizes exactly the previewed merged span
+		const buttons = store.getState().scene!.frames.map((f) => f.buttons);
+		expect(buttons).toEqual([0, 0, 5, 5, 5, 0]);
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 2 });
+	});
+
+	test("a queued drag stays bound to the press it previewed, not the moved selection", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		let call = 0;
+		const revisions = { next: 1 };
+		const echo = (ops: EditOp[]): EditDelta => {
+			const frames = store.getState().scene!.frames;
+			const updated = ops.flatMap((op) =>
+				op.kind === "setButtons"
+					? op.sets.map((s) => ({ index: s.index, frame: { ...frames[s.index], buttons: s.buttons } }))
+					: []
+			);
+			revisions.next += 1;
+			return {
+				...identityDelta,
+				revision: revisions.next,
+				dirty: true,
+				canUndo: true,
+				frames: { updated, inserted: [], removed: [] }
+			};
+		};
+		const store: StoreApi<ViewerState> = createViewerStore(
+			deps({
+				loadReplay: async () => pressScene(),
+				applyEdit: async (_e, _r, ops) => {
+					call += 1;
+					if (call === 1)
+						return new Promise<EditDelta>((resolve) => {
+							resolveFirst = resolve;
+						});
+					return echo(ops);
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+
+		// an unrelated commit in flight: the drag released behind it queues.
+		// its delta carries no frame changes -- a splice would cancel the
+		// queued drag instead (the next test)
+		const first = store.getState().commitEdit({
+			label: "hold",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 0, x: 1, y: 1 }] }] }
+		});
+
+		// the gesture: grab the [16, 48) press's start edge and slide it to 32
+		const controller = new PressDragController();
+		const down = controller.pointerDown(18, {
+			key: "K1",
+			frames: store.getState().scene!.frames,
+			msPerPx: 1,
+			slopPx: 4,
+			edgeZonePx: 3,
+			lattice: null
+		});
+		store.getState().setPressSelection(down.select!);
+		controller.pointerMove(34);
+		const up = controller.pointerUp(34);
+		// the released commit names the dragged run in time-space
+		expect(up.commit).toEqual({ key: "K1", runStartTime: 16, edit: { start: 32 } });
+
+		// the drag intent queues behind the in-flight commit, bound to the
+		// dragged run exactly as DetailLanes commits it through pressRunCommit
+		let outcome: { key: PhysicalKey; startTime: number } | null = null;
+		const drag = store.getState().commitEdit({
+			label: "drag K1 press",
+			payload: {
+				kind: "intent",
+				expand: (dispatchFrames, editor) => {
+					const run = pressRunAt(dispatchFrames, up.commit!.key, up.commit!.runStartTime);
+					if (run === null) return null;
+					const expansion = expandRetimePress(
+						dispatchFrames,
+						run,
+						up.commit!.edit,
+						editor.lattice,
+						"this drag"
+					);
+					if ("rejected" in expansion) return null;
+					outcome = expansion.outcome;
+					return expansion.ops;
+				},
+				remap: () => false
+			},
+			pressOutcome: (postFrames) => outcomeSelection(postFrames, outcome)
+		});
+
+		// before the queued drag expands, the user selects the other press
+		store.getState().setPressSelection({ key: "K1", startIndex: 4 });
+		await Promise.resolve();
+		resolveFirst({ ...identityDelta, revision: 1 });
+		await Promise.all([first, drag]);
+
+		// the dragged press [16, 48) was retimed to [32, 48); the selected
+		// press [64, 80) was never touched, and the selection follows the
+		// dragged press's outcome
+		expect(store.getState().scene!.frames.map((f) => f.buttons)).toEqual([0, 0, 5, 0, 5, 0]);
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 2 });
+	});
+
+	test("a queued drag cancels when an intervening splice lands ahead of it", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		const dispatched: EditOp[][] = [];
+		const store: StoreApi<ViewerState> = createViewerStore(
+			deps({
+				loadReplay: async () => pressScene(),
+				applyEdit: async (_e, _r, ops) => {
+					dispatched.push(ops);
+					return new Promise<EditDelta>((resolve) => {
+						resolveFirst = resolve;
+					});
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+
+		const first = store.getState().commitEdit({
+			label: "grow",
+			payload: { kind: "ops", ops: [{ kind: "setButtons", sets: [{ index: 3, buttons: 5 }] }] }
+		});
+
+		const controller = new PressDragController();
+		const down = controller.pointerDown(18, {
+			key: "K1",
+			frames: store.getState().scene!.frames,
+			msPerPx: 1,
+			slopPx: 4,
+			edgeZonePx: 3,
+			lattice: null
+		});
+		store.getState().setPressSelection(down.select!);
+		controller.pointerMove(34);
+		const up = controller.pointerUp(34);
+
+		// the drag's frozen edit was previewed over pre-splice frames: the
+		// queued intent must cancel rather than commit an expansion the
+		// preview never showed, exactly as pressRunCommit's remap decides
+		const settled: string[] = [];
+		const drag = store.getState().commitEdit({
+			label: "drag K1 press",
+			payload: {
+				kind: "intent",
+				expand: (dispatchFrames, editor) => {
+					const run = pressRunAt(dispatchFrames, up.commit!.key, up.commit!.runStartTime);
+					if (run === null) return null;
+					const expansion = expandRetimePress(
+						dispatchFrames,
+						run,
+						up.commit!.edit,
+						editor.lattice,
+						"this drag"
+					);
+					if ("rejected" in expansion) return null;
+					return expansion.ops;
+				},
+				remap: () => false
+			},
+			onSettled: (outcome) => settled.push(outcome)
+		});
+		await Promise.resolve();
+		resolveFirst(moveDelta(1, 3, { time: 48, x: 48, y: 0, buttons: 5 }, "grow"));
+		await Promise.all([first, drag]);
+
+		expect(settled).toEqual(["cancelled"]);
+		// only the first commit ever crossed ipc; the drag never dispatched
+		expect(dispatched).toHaveLength(1);
+		expect(store.getState().scene!.frames.map((f) => f.buttons)).toEqual([0, 5, 5, 5, 5, 0]);
+	});
+
+	test("an unrelated splice keeps the selection on its exact run across duplicate start times", async () => {
+		// two K1 runs share the 10 ms start millisecond: a zero-length press
+		// and a re-press; time containment alone resolves to the later one
+		const frames = [
+			{ time: 0, x: 0, y: 0, buttons: 0 },
+			{ time: 10, x: 10, y: 0, buttons: 5 },
+			{ time: 10, x: 10, y: 0, buttons: 0 },
+			{ time: 10, x: 10, y: 0, buttons: 5 },
+			{ time: 30, x: 30, y: 0, buttons: 5 },
+			{ time: 40, x: 40, y: 0, buttons: 0 }
+		];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => testScene({ frames }),
+				applyEdit: async () => moveDelta(1, 0, { time: 0, x: 9, y: 9, buttons: 0 }, "move")
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 0, x: 9, y: 9 }] }] }
+		});
+		expect(store.getState().editor!.pressSelection).toEqual({ key: "K1", startIndex: 1 });
+	});
+
+	test("a delete press outcome clears the selection with the delta", async () => {
+		const revisions = { next: 0 };
+		const store: StoreApi<ViewerState> = createViewerStore(echoingDeps(() => store, revisions));
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setPressSelection({ key: "K1", startIndex: 1 });
+		await store.getState().commitEdit({
+			label: "delete K1 press",
+			payload: {
+				kind: "intent",
+				expand: (frames, editor) => {
+					const sel = editor.pressSelection;
+					if (sel === null) return null;
+					const run = pressRunFromIndex(frames, sel.key, sel.startIndex);
+					if (run === null) return null;
+					const expansion = expandDeletePress(frames, run);
+					if ("rejected" in expansion) return null;
+					return expansion.ops;
+				}
+			},
+			pressOutcome: () => null
+		});
+		expect(store.getState().scene!.frames.map((f) => f.buttons)).toEqual([0, 0, 0, 0, 5, 0]);
+		expect(store.getState().editor!.pressSelection).toBeNull();
 	});
 });

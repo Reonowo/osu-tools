@@ -2,7 +2,9 @@
 // ipc goes through an injected deps object so bun tests script it
 
 import { createStore, useStore, type StoreApi } from "zustand";
+import type { PhysicalKey } from "../engine/buttons";
 import { gesturePreview } from "../editor/preview";
+import { pressRunAt, pressRunFromIndex, type PressSelection } from "../editor/press-runs";
 import { applyFrameChanges, isFullFrames, remapQueuedOps, remapSelection } from "../editor/splice";
 import {
 	invokeApplyEdit,
@@ -93,6 +95,10 @@ export interface EditorState {
 	/** the frame selection: sorted frame indices the cursor-path tools operate
 	 * on. independent of the frame cursor -- selecting never seeks */
 	frameSelection: number[];
+	/** the press selection: the single press keypress editing operates on.
+	 * independent of the frame selection -- keypress work and cursor-path
+	 * work never fight over each other's state -- and selecting never seeks */
+	pressSelection: PressSelection | null;
 }
 
 export type CommitOutcome = "landed" | "skipped" | "cancelled" | "failed";
@@ -118,6 +124,12 @@ export interface EditCommit {
 	 * was dropped by a cancellation path ("cancelled"), or its dispatch threw
 	 * ("failed"). the gesture preview ties its pending entries to this */
 	onSettled?: (outcome: CommitOutcome) => void;
+	/** a press operation's computed outcome: called when this commit's delta
+	 * lands with frame changes, against the post-splice frames; what it
+	 * returns replaces the press selection, null clearing it. commits
+	 * without one leave re-resolution to the generic key + time containment
+	 * rule (installDelta) */
+	pressOutcome?: (frames: readonly FrameDto[]) => PressSelection | null;
 }
 
 /** injected side-channels for state the store does not own: the gesture
@@ -173,6 +185,10 @@ export interface ViewerState {
 	panelOpen: boolean;
 	panelTab: PanelTab;
 	tool: ToolId;
+	/** the armed key tile: filters the press table and names the key
+	 * add-press writes. session-only, never persisted; reset by every scene
+	 * install; uncoupled from the press selection */
+	armedKey: PhysicalKey | null;
 	/** ms; the move tool's feather window. session-only, never persisted */
 	featherMs: number;
 	/** percent 0-100; the smooth tool's original->smoothed blend. session-only */
@@ -242,6 +258,8 @@ export interface ViewerState {
 	redoEdit(): Promise<void>;
 	revertAll(): Promise<void>;
 	setFrameSelection(indices: number[]): void;
+	setPressSelection(selection: PressSelection | null): void;
+	setArmedKey(key: PhysicalKey | null): void;
 }
 
 export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreApi<ViewerState> {
@@ -281,7 +299,11 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			editQueue = [];
 		}
 
-		function installDelta(delta: EditDelta, epochTag: number): void {
+		function installDelta(
+			delta: EditDelta,
+			epochTag: number,
+			pressOutcome?: (frames: readonly FrameDto[]) => PressSelection | null
+		): void {
 			const { scene, editor } = get();
 			if (scene === null || editor === null || editor.epoch !== epochTag) return;
 			// serialized commands cannot reorder, so an older revision can only
@@ -293,6 +315,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			let editRevision = get().editRevision;
 			let lastSplice = get().lastSplice;
 			let frameSelection = editor.frameSelection;
+			let pressSelection = editor.pressSelection;
 			if (delta.frames !== null) {
 				frames = applyFrameChanges(scene.frames, delta.frames);
 				editRevision += 1;
@@ -302,8 +325,39 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					// sense; selections' referents likewise
 					cancelQueued();
 					frameSelection = [];
+					pressSelection = null;
 				} else {
 					frameSelection = remapSelection(frameSelection, delta.frames);
+					if (pressOutcome !== undefined) {
+						// the landing commit named a press: its computed outcome --
+						// the nudged edge's new identity, the merged run's start --
+						// resolved against the post-splice frames
+						pressSelection = pressOutcome(frames);
+					} else if (pressSelection !== null) {
+						// engine-driven deltas (undo/redo) and commits that never
+						// named a press re-resolve index-first: the start frame
+						// remapped through the splice, while it still holds a run
+						// of the key, names the same press exactly -- two runs of
+						// one key can share a start millisecond, where time
+						// containment alone would jump to the later one. key +
+						// time containment is the fallback when that frame is
+						// gone or released, clearing honestly when no run of the
+						// key contains the prior start. pure move-frames splices
+						// resolve back to the identical run, leaving the
+						// selection untouched
+						const [remapped] = remapSelection([pressSelection.startIndex], delta.frames);
+						const exact =
+							remapped === undefined ? null : pressRunFromIndex(frames, pressSelection.key, remapped);
+						if (exact !== null) {
+							pressSelection = { key: pressSelection.key, startIndex: exact.startIndex };
+						} else {
+							const priorTime = scene.frames[pressSelection.startIndex]?.time;
+							const run =
+								priorTime === undefined ? null : pressRunAt(frames, pressSelection.key, priorTime);
+							pressSelection =
+								run === null ? null : { key: pressSelection.key, startIndex: run.startIndex };
+						}
+					}
 					remapQueuedPayloads(delta.frames);
 				}
 			}
@@ -325,7 +379,8 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					canUndo: delta.canUndo,
 					canRedo: delta.canRedo,
 					history: delta.history,
-					frameSelection
+					frameSelection,
+					pressSelection
 				}
 			});
 			// after the state write: a hook that reads the store back must see
@@ -409,7 +464,11 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 						// tell this commit's own entry apart from the still-pending
 						// ones it remaps
 						if (pending.kind === "commit") pending.commit.onSettled?.("landed");
-						installDelta(delta, epochTag);
+						installDelta(
+							delta,
+							epochTag,
+							pending.kind === "commit" ? pending.commit.pressOutcome : undefined
+						);
 					} catch (e) {
 						if (pending.kind === "commit") pending.commit.onSettled?.("failed");
 						// a response for a replaced session is dropped outright: the
@@ -471,6 +530,9 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// the last one would be pointing at nothing in particular
 				viewportZoom: DEFAULT_VIEWPORT_ZOOM,
 				viewportPan: NO_VIEWPORT_PAN,
+				// a key armed for the previous replay would aim add-press at a
+				// tile whose counts no longer mean anything
+				armedKey: null,
 				editor: {
 					epoch: scene.epoch,
 					revision: 0,
@@ -481,7 +543,8 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					// inferred once here and frozen: the lattice comes from the
 					// source's own untouched frames, and edits must never shift it
 					lattice: inferLattice(scene.frames),
-					frameSelection: []
+					frameSelection: [],
+					pressSelection: null
 				},
 				editRevision: 0,
 				lastSplice: null,
@@ -576,6 +639,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			panelOpen: false,
 			panelTab: "replay",
 			tool: "select",
+			armedKey: null,
 			featherMs: DEFAULT_FEATHER_MS,
 			smoothStrength: DEFAULT_SMOOTH_STRENGTH,
 			detailSpanMs: DEFAULT_DETAIL_SPAN,
@@ -776,7 +840,13 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				const editor = get().editor;
 				if (editor === null) return;
 				set({ editor: { ...editor, frameSelection: indices } });
-			}
+			},
+			setPressSelection: (selection) => {
+				const editor = get().editor;
+				if (editor === null) return;
+				set({ editor: { ...editor, pressSelection: selection } });
+			},
+			setArmedKey: (key) => set({ armedKey: key })
 		};
 	});
 }
