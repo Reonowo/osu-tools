@@ -18,6 +18,7 @@ import {
 	type GestureEffects,
 	type GestureEnv
 } from "@/editor/gesture-controller";
+import { pressDrag } from "@/editor/press-drag";
 import { gesturePreview, opsToAuthoritative, selectionToAuthoritative } from "@/editor/preview";
 import { countedLabel, deletedFrameCount, movedFrameCount } from "@/editor/tool-commits";
 import { countTimedAtOrBefore } from "@/lib/timeline";
@@ -358,7 +359,13 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 				return;
 			}
 			if (e.key !== "Escape") return;
+			// a live press drag owns escape (DetailLanes cancels it); the
+			// clear-selections stage must not fire on the same keypress
+			if (pressDrag.live) return;
+			// the else stage lets go of everything: the frame selection and
+			// the press selection clear together
 			if ((state.editor?.frameSelection.length ?? 0) > 0) state.setFrameSelection([]);
+			if (state.editor?.pressSelection != null) state.setPressSelection(null);
 		};
 
 		// a structural splice landing mid-gesture (an erase's delta, a
