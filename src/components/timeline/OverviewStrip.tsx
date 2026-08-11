@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, type PointerEvent } from "react";
 import { audioExtendedBounds, fractionFor, timeFor } from "@/lib/timeline";
-import { windowAround } from "@/lib/timeline-view";
+import { bracketPixels } from "@/lib/timeline-view";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore } from "@/state/store";
 import { Playhead, playheadTransform } from "./Playhead";
@@ -60,13 +60,18 @@ export function OverviewStrip() {
 				playheadRef.current.style.transform = playheadTransform(offset, window.devicePixelRatio);
 			}
 			// null when the bracket isn't mounted (watch mode) -- cheaper to skip
-			// the windowAround call than to compute a position nothing reads
+			// the bracketPixels call than to compute a position nothing reads.
+			// same t as the playhead's write above, snapped onto the same grid,
+			// moved by transform: the bracket slides with the playhead as one
+			// rigid piece instead of its edges rounding percent for themselves.
+			// the width is written every tick even though only a zoom changes
+			// it: the div remounts on a watch->edit toggle without this effect
+			// restarting, so any skip-if-unchanged cache here would leave the
+			// fresh div at width auto until the next zoom
 			if (bracketRef.current !== null) {
-				const detailWindow = windowAround(bounds, t, detailSpanMs);
-				const left = fractionFor(bounds, detailWindow.start) * 100;
-				const right = fractionFor(bounds, detailWindow.end) * 100;
-				bracketRef.current.style.left = `${left}%`;
-				bracketRef.current.style.width = `${right - left}%`;
+				const bracket = bracketPixels(bounds, t, detailSpanMs, track.widthPx.current, window.devicePixelRatio);
+				bracketRef.current.style.transform = `translate3d(${bracket.left}px, 0, 0)`;
+				bracketRef.current.style.width = `${bracket.width}px`;
 			}
 			raf = requestAnimationFrame(loop);
 		};
@@ -99,14 +104,21 @@ export function OverviewStrip() {
 			// a clean pointer-capture seek
 			className="relative h-[26px] touch-none cursor-pointer overflow-hidden border-b border-[#17171b] bg-surface-strip"
 			onPointerDown={(e) => {
+				// the default action here is arming a native drag: with a text
+				// selection anywhere on the page, a press that lands on it starts
+				// a browser drag mid-scrub ("no drop" cursor) and the scrub dies.
+				// preventing it keeps the gesture a scrub unconditionally
+				e.preventDefault();
 				e.currentTarget.setPointerCapture(e.pointerId);
-				playheadRef.current?.setAttribute("data-scrubbing", "");
 				seekFromPointer(e);
 			}}
+			// the capture test is the whole gesture state, which is also what
+			// makes interruption safe: a pointercancel (or any capture loss)
+			// releases the capture, so the next move seeks nothing and the next
+			// pointer-down starts a fresh scrub
 			onPointerMove={(e) => {
 				if (e.currentTarget.hasPointerCapture(e.pointerId)) seekFromPointer(e);
 			}}
-			onLostPointerCapture={() => playheadRef.current?.removeAttribute("data-scrubbing")}
 		>
 			{/* 1: lead-in hatch, static per scene */}
 			<div
@@ -123,11 +135,13 @@ export function OverviewStrip() {
 			<div className="absolute inset-x-0 bottom-0 h-0.5 bg-border">
 				<div ref={fillRef} className="absolute inset-y-0 left-0 bg-primary" />
 			</div>
-			{/* 5: zoom bracket, edit-mode only, rAF-driven */}
+			{/* 5: zoom bracket, edit-mode only, rAF-driven (translated from the
+			track's left edge; the loop writes transform + a width that only
+			changes with the zoom) */}
 			{showBracket && (
 				<div
 					ref={bracketRef}
-					className="pointer-events-none absolute inset-y-0 border-x border-primary/60 bg-primary/[.07]"
+					className="pointer-events-none absolute inset-y-0 left-0 border-x border-primary/60 bg-primary/[.07]"
 				/>
 			)}
 			{/* 6: playhead, rAF-driven */}
