@@ -64,3 +64,14 @@ export const PHYSICAL_BUTTONS: readonly PhysicalButton[] = [
 	{ label: "M1", edgesKey: "m1", is: isM1 },
 	{ label: "M2", edgesKey: "m2", is: isM2 }
 ];
+
+const BY_LABEL = Object.fromEntries(PHYSICAL_BUTTONS.map((button) => [button.label, button])) as Record<
+	PhysicalKey,
+	PhysicalButton
+>;
+
+/** lookup by label -- press editing resolves its (key, run) identities
+ * through this instead of re-deriving the predicate per call site */
+export function physicalButton(key: PhysicalKey): PhysicalButton {
+	return BY_LABEL[key];
+}
