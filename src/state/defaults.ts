@@ -48,6 +48,18 @@ export function effectiveEffects(effects: EffectSettings): EffectSettings {
 	};
 }
 
+/** the viewer mode folded into what the renderer reads, the same pattern as
+ * effectiveEffects: edit mode force-draws the cursor path and frame markers
+ * (the frames the tools operate on must never be invisible) without ever
+ * rewriting the stored preferences, so switching back to watch restores
+ * exactly the configured view. click markers and cursor hiding follow their
+ * stored values in both modes */
+export function effectiveOverlays(overlays: OverlaySettings, mode: "watch" | "edit"): OverlaySettings {
+	if (mode === "watch") return overlays;
+	if (overlays.cursorPath && overlays.frameMarkers) return overlays;
+	return { ...overlays, cursorPath: true, frameMarkers: true };
+}
+
 /** linear amplitude percent */
 export const DEFAULT_VOLUME = 100;
 export const VOLUME_MIN = 0;
@@ -63,6 +75,25 @@ export function clampVolume(volume: number): number {
 
 export function clampDisplayLength(ms: number): number {
 	return Math.round(Math.min(Math.max(ms, DISPLAY_LENGTH_MIN), DISPLAY_LENGTH_MAX));
+}
+
+/** the move tool's feather window, ms (parent design spec: default 40).
+ * session-only, like rate: it belongs to the replay being edited, not the app */
+export const DEFAULT_FEATHER_MS = 40;
+export const FEATHER_MIN_MS = 0;
+export const FEATHER_MAX_MS = 1000;
+
+export function clampFeather(ms: number): number {
+	if (!Number.isFinite(ms)) return DEFAULT_FEATHER_MS;
+	return Math.round(Math.min(Math.max(ms, FEATHER_MIN_MS), FEATHER_MAX_MS));
+}
+
+/** the smooth tool's original->smoothed blend, percent. session-only */
+export const DEFAULT_SMOOTH_STRENGTH = 100;
+
+export function clampStrength(value: number): number {
+	if (!Number.isFinite(value)) return DEFAULT_SMOOTH_STRENGTH;
+	return Math.round(Math.min(Math.max(value, 0), 100));
 }
 
 /** the detail tier's visible span, ms. the floor matches timeline-view's
