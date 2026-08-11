@@ -154,8 +154,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
 				{/* the sections outgrow the shortest supported window (tauri.conf.json
 				    pins minHeight 640) and already overrun the default one. the popup
 				    is fixed and centred, so anything past the viewport edge cannot be
-				    scrolled to at all -- it has to scroll within itself */}
-				<div className="grid gap-4 overflow-y-auto">
+				    scrolled to at all -- it has to scroll within itself. horizontal
+				    overflow is clipped the way every panel body clips it: the switch
+				    control's deliberately oversized hit target pokes past this box,
+				    and without the clip that gap becomes a scrollbar */}
+				<div className="grid gap-4 overflow-x-hidden overflow-y-auto">
 					<section className="space-y-2">
 						<SectionLabel>osu! stable install</SectionLabel>
 						<div className="flex items-center gap-2 text-sm">
