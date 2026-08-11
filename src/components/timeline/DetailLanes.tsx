@@ -17,8 +17,23 @@
 // is where a span's two edges start stepping in opposite directions and the
 // lanes look like they stall and then jump backwards
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { PHYSICAL_BUTTONS } from "@/engine/buttons";
+import {
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+	type MouseEvent as ReactMouseEvent,
+	type PointerEvent as ReactPointerEvent
+} from "react";
+import { frameEditGate } from "@/editor/gate";
+import { CLICK_SLOP_SCREEN_PX } from "@/editor/gesture-controller";
+import { pressRunCommit } from "@/editor/press-commits";
+import { pressDrag, type PressDragEffects, type PressDragPreview } from "@/editor/press-drag";
+import { expandRetimePress, type PressEdit } from "@/editor/press-ops";
+import { pressRunAt, pressRunFromIndex } from "@/editor/press-runs";
+import { pressLabel } from "@/editor/tool-commits";
+import { physicalButton, PHYSICAL_BUTTONS, type PhysicalKey } from "@/engine/buttons";
 import { holdSpansFlat, sliceSpansFlat } from "@/engine/interpolation";
 import type { VelocitySample } from "@/lib/analysis";
 import { formatTime } from "@/lib/format";
@@ -27,15 +42,17 @@ import { audioExtendedBounds, type TimeBounds } from "@/lib/timeline";
 import {
 	clampSpan,
 	detailSpanForWheel,
+	laneTimeAtPixel,
+	laneTransform,
 	rulerTicks,
-	snapDevicePixels,
 	timeToPixels,
 	windowAround,
 	windowFraction,
 	type TimeWindow
 } from "@/lib/timeline-view";
+import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
-import { useViewerStore } from "@/state/store";
+import { useViewerStore, viewerStore } from "@/state/store";
 import { Playhead, playheadTransform } from "./Playhead";
 import { useTrackMetrics } from "./use-track-metrics";
 
@@ -62,6 +79,9 @@ type BitKey = "k1" | "k2" | "m1" | "m2";
 // physical keys, not raw bits -- a keyboard tap must light the K1 lane
 // alone, never K1 and M1 together (buttons.ts's PHYSICAL_BUTTONS)
 const HOLD_ORDER: readonly BitKey[] = PHYSICAL_BUTTONS.map((button) => button.edgesKey);
+
+/** px around a span edge where a pointer-down grabs that edge alone */
+const EDGE_ZONE_PX = 5;
 
 interface JudgeMark {
 	time: number;
@@ -125,6 +145,14 @@ export function DetailLanes() {
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 	const setDetailSpan = useViewerStore((s) => s.setDetailSpan);
+	const mode = useViewerStore((s) => s.mode);
+	const pressSelection = useViewerStore((s) => s.editor?.pressSelection ?? null);
+	/** the live drag's frame-snapped outcome, drawn in place of the spans it
+	 * replaces -- local dom state, never the store or the pixi chrome */
+	const [dragPreview, setDragPreview] = useState<PressDragPreview | null>(null);
+	/** the lane gesture's frozen inversion: view, transform, and box are
+	 * captured at pointer-down so a mid-drag re-slice cannot re-aim it */
+	const laneGestureRef = useRef<{ pointerId: number; toTime: (e: { clientX: number }) => number } | null>(null);
 
 	// AppShell (and so TimelineDock) only mounts once App.tsx has a loaded
 	// scene, and mode only reaches "edit" with one loaded -- these fallbacks
@@ -139,6 +167,15 @@ export function DetailLanes() {
 	// since store.install() sets both together)
 	const judgeMarks = useMemo(() => judgeMarksFor(scene), [scene]);
 	const holds = useMemo(() => holdsForScene(scene?.frames ?? []), [scene]);
+
+	// the selected press, resolved to its run for the lane highlight. edit
+	// mode only -- watch mode's lanes keep their observational look
+	const selectedHighlight = useMemo(() => {
+		if (mode !== "edit" || scene === null || pressSelection === null) return null;
+		const run = pressRunFromIndex(scene.frames, pressSelection.key, pressSelection.startIndex);
+		if (run === null) return null;
+		return { bit: physicalButton(pressSelection.key).edgesKey, startTime: run.startTime };
+	}, [mode, scene, pressSelection]);
 
 	// sliceEpochRef is the counter of record, bumped synchronously by the rAF
 	// loop the instant the playhead threatens to outgrow the pre-rendered
@@ -227,15 +264,16 @@ export function DetailLanes() {
 			// tick it happens, ahead of the re-slice below; the transform slides
 			// the neighbourhood under the window in one snapped step, which is what
 			// makes every lane move together instead of each rounding for itself.
+			// laneTransform is shared with the pointer handlers' click-to-time
+			// inversion, so a hit computes through exactly the drawn geometry.
 			// a zero viewSpan is only reachable at float magnitudes where the span
 			// sits below one ulp of the window's start (rulerTicks guards the same
 			// case), and it would divide the layer's width to Infinity
 			const layer = laneLayerRef.current;
-			if (layer !== null && viewSpan > 0) {
-				const layerPx = ((neighbourhood.end - neighbourhood.start) / viewSpan) * trackPx;
-				const viewStartInLayer = snapDevicePixels(timeToPixels(neighbourhood, view.start, layerPx), dpr);
-				layer.style.width = `${layerPx}px`;
-				layer.style.transform = `translate3d(${-viewStartInLayer}px, 0, 0)`;
+			const transform = viewSpan > 0 ? laneTransform(neighbourhood, view, trackPx, dpr) : null;
+			if (layer !== null && transform !== null) {
+				layer.style.width = `${transform.layerPx}px`;
+				layer.style.transform = `translate3d(${-transform.viewStartInLayer}px, 0, 0)`;
 			}
 
 			// re-slice when the visible window is about to outgrow the
@@ -265,6 +303,157 @@ export function DetailLanes() {
 		return () => cancelAnimationFrame(raf);
 	}, [bounds.minTime, bounds.maxTime, detailSpanMs, neighbourhood]);
 
+	const cancelLiveDrag = () => {
+		if (!pressDrag.live) return;
+		laneGestureRef.current = null;
+		detachEscape();
+		const fx = pressDrag.cancel();
+		if (fx.preview !== undefined) setDragPreview(fx.preview);
+	};
+
+	// the drag's escape listener registers at pointer-down and detaches with
+	// the gesture, so it always registers after use-edit-tools' mount-time
+	// listener and therefore runs after it -- the viewport's handler sees
+	// pressDrag.live and yields its clear-selections stage, then this one
+	// cancels. the ordering holds by registration time, not by mount order
+	const escapeListenerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
+	const attachEscape = () => {
+		if (escapeListenerRef.current !== null) return;
+		const listener = (e: KeyboardEvent) => {
+			if (e.key === "Escape") cancelLiveDrag();
+		};
+		escapeListenerRef.current = listener;
+		window.addEventListener("keydown", listener);
+	};
+	function detachEscape() {
+		if (escapeListenerRef.current !== null) {
+			window.removeEventListener("keydown", escapeListenerRef.current);
+			escapeListenerRef.current = null;
+		}
+	}
+
+	// any landing delta -- structural or a buttons-only rewrite from a queued
+	// commit or an undo -- invalidates the frozen frames the live drag
+	// computes against, and preview-equals-commit only holds over unchanged
+	// frames: cancel rather than commit against a stream the preview never saw
+	const editRevision = useViewerStore((s) => s.editRevision);
+	useEffect(() => {
+		cancelLiveDrag();
+		// the listener must not outlive the component either
+		return detachEscape;
+	}, [editRevision]);
+
+	/** the intent the released drag commits (press-commits.ts): re-expanded
+	 * at dispatch against the then-current frames from the drag's final edit
+	 * -- identical inputs, so the previewed expansion is the committed
+	 * expansion. bound to the dragged run's time-space identity rather than
+	 * the selection: a commit queued behind an in-flight edit must not
+	 * follow a selection the user moved after release */
+	const commitDrag = (commit: { key: PhysicalKey; runStartTime: number; edit: PressEdit }) => {
+		void viewerStore.getState().commitEdit({
+			...pressRunCommit(pressLabel("drag", commit.key), commit.key, commit.runStartTime, (frames, run, ed) =>
+				expandRetimePress(frames, run, commit.edit, ed.lattice, "this drag")
+			),
+			// the preview stands in until the delta's own spans replace it (or
+			// the commit dies) -- no frame shows neither
+			onSettled: () => setDragPreview(null)
+		});
+	};
+
+	const applyDragFx = (fx: PressDragEffects) => {
+		const state = viewerStore.getState();
+		if (fx.pause) state.setPlaying(false);
+		if (fx.select !== undefined) state.setPressSelection(fx.select);
+		if (fx.clearSelection) state.setPressSelection(null);
+		if (fx.preview !== undefined) setDragPreview(fx.preview);
+		if (fx.commit !== undefined) commitDrag(fx.commit);
+	};
+
+	/** the frozen pixel-to-time inversion for one gesture: the same
+	 * laneTransform the draw loop just painted with */
+	const laneInversion = (): ((e: { clientX: number }) => number) | null => {
+		const trackEl = track.element.current;
+		const trackPx = track.widthPx.current;
+		if (trackEl === null || trackPx <= 0) return null;
+		const view = windowAround(bounds, playbackClock.currentTime(), detailSpanMs);
+		const transform = laneTransform(neighbourhood, view, trackPx, window.devicePixelRatio);
+		if (transform === null) return null;
+		const rect = trackEl.getBoundingClientRect();
+		return (e) => laneTimeAtPixel(neighbourhood, transform, e.clientX - rect.left);
+	};
+
+	const laneKeyForEvent = (target: EventTarget | null): PhysicalKey | null => {
+		const laneEl = target instanceof Element ? target.closest("[data-hold-lane]") : null;
+		if (laneEl === null) return null;
+		const bit = (laneEl as HTMLElement).dataset.holdLane;
+		return PHYSICAL_BUTTONS.find((button) => button.edgesKey === bit)?.label ?? null;
+	};
+
+	const onLanePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+		if (e.button !== 0 || pressDrag.live || laneGestureRef.current !== null) return;
+		const state = viewerStore.getState();
+		// watch-mode lanes keep their current behaviour: no selection, no drag
+		if (state.mode !== "edit" || state.scene === null || state.editor === null) return;
+		if (!frameEditGate(state.scene).editable) return;
+		const key = laneKeyForEvent(e.target);
+		if (key === null) return;
+		const toTime = laneInversion();
+		if (toTime === null) return;
+		const trackPx = track.widthPx.current;
+		const view = windowAround(bounds, playbackClock.currentTime(), detailSpanMs);
+		e.preventDefault();
+		e.currentTarget.setPointerCapture(e.pointerId);
+		laneGestureRef.current = { pointerId: e.pointerId, toTime };
+		attachEscape();
+		applyDragFx(
+			pressDrag.pointerDown(toTime(e), {
+				key,
+				frames: state.scene.frames,
+				msPerPx: (view.end - view.start) / trackPx,
+				slopPx: CLICK_SLOP_SCREEN_PX,
+				edgeZonePx: EDGE_ZONE_PX,
+				lattice: state.editor.lattice
+			})
+		);
+	};
+
+	const onLanePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+		const gesture = laneGestureRef.current;
+		if (gesture === null || e.pointerId !== gesture.pointerId) return;
+		applyDragFx(pressDrag.pointerMove(gesture.toTime(e)));
+	};
+
+	const onLanePointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+		const gesture = laneGestureRef.current;
+		if (gesture === null || e.pointerId !== gesture.pointerId) return;
+		laneGestureRef.current = null;
+		detachEscape();
+		if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+		applyDragFx(pressDrag.pointerUp(gesture.toTime(e)));
+	};
+
+	const onLanePointerCancel = (e: ReactPointerEvent<HTMLDivElement>) => {
+		const gesture = laneGestureRef.current;
+		if (gesture === null || e.pointerId !== gesture.pointerId) return;
+		laneGestureRef.current = null;
+		detachEscape();
+		applyDragFx(pressDrag.cancel());
+	};
+
+	// double-click is the one deliberate seek affordance; single-click never
+	// seeks. resolved through the same inversion as the drag hit-testing
+	const onLaneDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
+		const state = viewerStore.getState();
+		if (state.mode !== "edit" || state.scene === null) return;
+		if (!frameEditGate(state.scene).editable) return;
+		const key = laneKeyForEvent(e.target);
+		if (key === null) return;
+		const toTime = laneInversion();
+		if (toTime === null) return;
+		const run = pressRunAt(state.scene.frames, key, toTime(e));
+		if (run !== null) frameCursor.select(run.startIndex);
+	};
+
 	// neighbourhood-relative, so every one of these is written once per slice
 	// and never touched again -- the layer's transform is what moves them
 	const percentOf = (t: number) => `${windowFraction(neighbourhood, t) * 100}%`;
@@ -290,8 +479,19 @@ export function DetailLanes() {
 
 			{/* overflow-hidden belongs here rather than on each lane: the layer
 			below is NEIGHBOURHOOD_FACTOR windows wide and hangs out of the track on
-			both sides, and this is the box that clips it back to the visible span */}
-			<div ref={track.attach} className="relative min-w-0 flex-1 overflow-hidden pb-1">
+			both sides, and this is the box that clips it back to the visible span.
+			the pointer handlers live here too -- capture retargets a drag's later
+			events to this box, and only presses inside a [data-hold-lane] row do
+			anything, so the ruler, judge and velocity rows stay untouched */}
+			<div
+				ref={track.attach}
+				onPointerDown={onLanePointerDown}
+				onPointerMove={onLanePointerMove}
+				onPointerUp={onLanePointerUp}
+				onPointerCancel={onLanePointerCancel}
+				onDoubleClick={onLaneDoubleClick}
+				className="relative min-w-0 flex-1 overflow-hidden pb-1"
+			>
 				{/* the lane layer, out of flow so it can be wider than the track --
 				the gutter column beside it is what gives this row its height */}
 				<div ref={laneLayerRef} className="absolute inset-y-0 left-0">
@@ -322,26 +522,63 @@ export function DetailLanes() {
 					</div>
 
 					{/* all four rows share one mark style (bg-[#99ddff]) per the brief --
-					only the gutter labels distinguish k1/k2 from m1/m2 by colour */}
-					{HOLD_ORDER.map((bit) => (
-						<div key={bit} className="relative h-[13px] border-b border-[#101013]">
-							{slicedHolds[bit].map((span, i) => {
-								// both edges read off the same fraction map and neither is
-								// rounded on its own -- the layer's transform is the only
-								// snapped quantity in the group, which is what stops a span's
-								// two edges stepping in opposite directions on a sub-pixel move
-								const left = windowFraction(neighbourhood, span.start);
-								const right = windowFraction(neighbourhood, span.end);
-								return (
+					only the gutter labels distinguish k1/k2 from m1/m2 by colour. the
+					selected press's span brightens; a live drag hides the spans its
+					expansion replaces and draws the realized outcome in their place */}
+					{HOLD_ORDER.map((bit) => {
+						const preview =
+							dragPreview !== null && physicalButton(dragPreview.key).edgesKey === bit
+								? dragPreview
+								: null;
+						const selectedTime = selectedHighlight?.bit === bit ? selectedHighlight.startTime : null;
+						const spans =
+							preview === null
+								? slicedHolds[bit]
+								: slicedHolds[bit].filter((span) =>
+										preview.hide.every((range) => span.end < range.from || span.start > range.to)
+									);
+						const previewFractions =
+							preview === null
+								? null
+								: {
+										left: windowFraction(neighbourhood, preview.span.start),
+										right: windowFraction(neighbourhood, preview.span.end)
+									};
+						return (
+							<div key={bit} data-hold-lane={bit} className="relative h-[13px] border-b border-[#101013]">
+								{spans.map((span, i) => {
+									// both edges read off the same fraction map and neither is
+									// rounded on its own -- the layer's transform is the only
+									// snapped quantity in the group, which is what stops a span's
+									// two edges stepping in opposite directions on a sub-pixel move
+									const left = windowFraction(neighbourhood, span.start);
+									const right = windowFraction(neighbourhood, span.end);
+									const selected =
+										preview === null &&
+										selectedTime !== null &&
+										span.start <= selectedTime &&
+										selectedTime <= span.end;
+									return (
+										<div
+											key={i}
+											data-selected={selected ? "" : undefined}
+											className="absolute inset-y-[3px] rounded-[2px] bg-[#99ddff] data-[selected]:bg-[#e8f7ff] data-[selected]:shadow-[0_0_0_1px_#ffffff66]"
+											style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
+										/>
+									);
+								})}
+								{previewFractions !== null && (
 									<div
-										key={i}
-										className="absolute inset-y-[3px] rounded-[2px] bg-[#99ddff]"
-										style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
+										className="absolute inset-y-[3px] rounded-[2px] bg-[#e8f7ff] shadow-[0_0_0_1px_#ffffff66]"
+										style={{
+											left: `${previewFractions.left * 100}%`,
+											width: `${(previewFractions.right - previewFractions.left) * 100}%`
+										}}
 									/>
-								);
-							})}
-						</div>
-					))}
+								)}
+							</div>
+						);
+					})}
 
 					{/* the trace shares the layer rather than sitting outside it: left
 					on the track it would re-point itself every frame and drift a
