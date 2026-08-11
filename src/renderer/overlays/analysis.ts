@@ -7,6 +7,7 @@
 // all pinned to ppy/osu@83b8a64bec19e1463353645c2d6d10c75e275b43
 
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
+import { previewedPathPoints, snapshotIsEmpty, type PreviewSnapshot } from "../../editor/preview";
 import { isLeft, isRight } from "../../engine/buttons";
 import type { Press } from "../../engine/interpolation";
 import type { FrameDto } from "../../lib/scene-types";
@@ -85,6 +86,11 @@ export class AnalysisDrawable implements ObjectDrawable {
 	private readonly pressTimes: number[];
 	private readonly framePool = new Map<number, Sprite>();
 	private readonly clickPool = new Map<number, Sprite>();
+	/** markers for pending boundary frames; rebuilt while an erase previews */
+	private readonly insertedLayer = new Container();
+	/** pooled marker positions were overridden by a preview and need one
+	 * restore pass when the preview ends */
+	private markersPreviewed = false;
 
 	constructor(private readonly ctx: RenderContext) {
 		this.frames = ctx.scene.frames;
@@ -94,19 +100,25 @@ export class AnalysisDrawable implements ObjectDrawable {
 		// newer markers draw above older (analysismarker.cs:25 -- depth = -lifetimeend)
 		this.frameLayer.sortableChildren = true;
 		this.clickLayer.sortableChildren = true;
-		this.view.addChild(this.path, this.frameLayer, this.clickLayer);
+		this.view.addChild(this.path, this.frameLayer, this.insertedLayer, this.clickLayer);
 		ctx.layers.analysis.addChild(this.view);
 	}
 
-	private frameSprite(index: number): Sprite {
-		const frame = this.frames[index];
-		const left = isLeft(frame.buttons);
-		const right = isRight(frame.buttons);
+	/** the buttons-derived half of a frame marker's look, applied at spawn and
+	 * re-applied while a preview rewrites a survivor's pattern */
+	private applyMarkerStyle(sprite: Sprite, buttons: number): void {
+		const left = isLeft(buttons);
+		const right = isRight(buttons);
 		const variant = left && right ? "frame-both" : left ? "frame-left" : right ? "frame-right" : "frame-none";
-		const sprite = new Sprite(markerTexture(this.ctx, variant));
-		sprite.anchor.set(0.5);
+		sprite.texture = markerTexture(this.ctx, variant);
 		// framemarker.cs:61 -- 4px held, 2.5px idle
 		sprite.width = sprite.height = left || right ? 4 : 2.5;
+	}
+
+	private markerSpriteFor(frame: FrameDto): Sprite {
+		const sprite = new Sprite();
+		sprite.anchor.set(0.5);
+		this.applyMarkerStyle(sprite, frame.buttons);
 		sprite.position.set(frame.x, frame.y);
 		sprite.zIndex = frame.time;
 		return sprite;
@@ -155,23 +167,87 @@ export class AnalysisDrawable implements ObjectDrawable {
 		const overlays = this.ctx.getOverlays();
 		this.path.visible = overlays.cursorPath;
 		this.frameLayer.visible = overlays.frameMarkers;
+		this.insertedLayer.visible = overlays.frameMarkers;
 		this.clickLayer.visible = overlays.clickMarkers;
 		const length = overlays.displayLength;
+
+		// the gesture preview reaches the path and frame markers here: edit
+		// chrome previews, and this window *is* what the tools operate on.
+		// click markers stay authoritative -- presses are preserved by the
+		// hybrid rule, not previewed
+		const snapshot = this.ctx.getEditChrome()?.preview() ?? null;
+		const previewing = snapshot !== null && !snapshotIsEmpty(snapshot);
 
 		if (overlays.cursorPath) {
 			const { lo, hi } = aliveWindow(this.frameTimes, t, length);
 			this.path.clear();
-			if (hi - lo >= 2) {
+			if (previewing) {
+				const points = previewedPathPoints(this.frames, lo, hi, snapshot, t - length, t);
+				if (points.length >= 2) {
+					this.path.moveTo(points[0].x, points[0].y);
+					for (let i = 1; i < points.length; i++) this.path.lineTo(points[i].x, points[i].y);
+					this.path.stroke({ width: 2, color: 0xeb4791, join: "round", cap: "round" });
+				}
+			} else if (hi - lo >= 2) {
 				this.path.moveTo(this.frames[lo].x, this.frames[lo].y);
 				for (let i = lo + 1; i < hi; i++) this.path.lineTo(this.frames[i].x, this.frames[i].y);
 				// cursorpathcontainer.cs:24,30 -- pathradius 1 (2px total width), pink2
 				this.path.stroke({ width: 2, color: 0xeb4791, join: "round", cap: "round" });
 			}
 		}
-		if (overlays.frameMarkers)
-			this.syncPool(this.framePool, this.frameLayer, this.frameTimes, t, length, (i) => this.frameSprite(i));
+		if (overlays.frameMarkers) {
+			this.syncPool(this.framePool, this.frameLayer, this.frameTimes, t, length, (i) =>
+				this.markerSpriteFor(this.frames[i])
+			);
+			this.applyMarkerPreview(previewing ? snapshot : null, t - length, t);
+		}
 		if (overlays.clickMarkers)
 			this.syncPool(this.clickPool, this.clickLayer, this.pressTimes, t, length, (i) => this.clickSprite(i));
+	}
+
+	/** overrides pooled marker positions from the preview (hidden frames go
+	 * invisible, moved frames follow their previewed positions) and draws
+	 * markers for pending boundary frames. a null snapshot restores the pool
+	 * to authoritative positions -- once, flagged, since restoring is only
+	 * needed after a preview actually touched them */
+	private applyMarkerPreview(snapshot: PreviewSnapshot | null, windowStart: number, windowEnd: number): void {
+		if (snapshot === null) {
+			if (this.markersPreviewed) {
+				this.markersPreviewed = false;
+				for (const [index, sprite] of this.framePool) {
+					const frame = this.frames[index];
+					sprite.visible = true;
+					sprite.position.set(frame.x, frame.y);
+					this.applyMarkerStyle(sprite, frame.buttons);
+				}
+				this.clearInsertedMarkers();
+			}
+			return;
+		}
+		this.markersPreviewed = true;
+		for (const [index, sprite] of this.framePool) {
+			if (snapshot.hidden.has(index)) {
+				sprite.visible = false;
+				continue;
+			}
+			sprite.visible = true;
+			const override = snapshot.moved.get(index);
+			const frame = this.frames[index];
+			sprite.position.set(override?.x ?? frame.x, override?.y ?? frame.y);
+			this.applyMarkerStyle(sprite, snapshot.buttons.get(index) ?? frame.buttons);
+		}
+		// boundary frames are few (one per preserved press edge), so rebuilding
+		// their sprites each frame while a preview is live costs less than
+		// tracking staleness across epoch, window, and discard paths
+		this.clearInsertedMarkers();
+		for (const frame of snapshot.inserted) {
+			if (frame.time <= windowStart || frame.time > windowEnd) continue;
+			this.insertedLayer.addChild(this.markerSpriteFor(frame));
+		}
+	}
+
+	private clearInsertedMarkers(): void {
+		for (const sprite of this.insertedLayer.removeChildren()) sprite.destroy();
 	}
 
 	destroy(): void {
