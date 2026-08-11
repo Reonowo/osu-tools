@@ -52,6 +52,7 @@ export function StatusBar() {
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const snapToLattice = useViewerStore((s) => s.editing.snapToLattice);
+	const selectedFrames = useViewerStore((s) => s.editor?.frameSelection.length ?? 0);
 	const warnings = useViewerStore(selectWarnings);
 
 	const simulation = scene?.simulation;
@@ -126,6 +127,16 @@ export function StatusBar() {
 			))}
 
 			<div className="ml-auto flex items-center">
+				{selectedFrames > 0 && (
+					<>
+						{/* the frame selection's count -- cyan, the editor-state accent,
+						so a 300-frame marquee reads at a glance */}
+						<span className="text-[#66ccff]">
+							{selectedFrames} frame{selectedFrames === 1 ? "" : "s"} selected
+						</span>
+						<RunSeparator />
+					</>
+				)}
 				<span>snap {snapToLattice ? "on" : "off"}</span>
 				<RunSeparator />
 				<span>timeline {zoom.toFixed(1)}×</span>
