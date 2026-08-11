@@ -9,14 +9,13 @@ import { Eraser, Lasso, type LucideIcon, Magnet, Move, MousePointer2, Spline } f
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { frameEditGate } from "@/editor/gate";
 import { cursorStateAt } from "@/engine/interpolation";
 import { isOnLattice } from "@/lib/lattice";
 import { cn } from "@/lib/utils";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore, type ToolId } from "@/state/store";
-
-const TOOL_BLOCKER = "not wired yet — the cursor-path tools are the next milestone";
 
 const TOOLS: { id: ToolId; icon: LucideIcon; label: string }[] = [
 	{ id: "select", icon: MousePointer2, label: "select" },
@@ -47,12 +46,14 @@ function PaletteButton({
 	id,
 	icon: Icon,
 	label,
-	tooltip
+	tooltip,
+	disabled
 }: {
 	id: ToolId;
 	icon: LucideIcon;
 	label: string;
 	tooltip: string;
+	disabled: boolean;
 }) {
 	return (
 		<Tooltip>
@@ -60,7 +61,7 @@ function PaletteButton({
 			trigger is the wrapping span instead -- matches TopBar's disabled
 			export button */}
 			<TooltipTrigger render={<span />}>
-				<ToggleGroupItem value={id} disabled aria-label={label} className={ITEM_CLASS}>
+				<ToggleGroupItem value={id} disabled={disabled} aria-label={label} className={ITEM_CLASS}>
 					<Icon aria-hidden />
 				</ToggleGroupItem>
 			</TooltipTrigger>
@@ -72,29 +73,51 @@ function PaletteButton({
 export function ToolPalette() {
 	const tool = useViewerStore((s) => s.tool);
 	const setTool = useViewerStore((s) => s.setTool);
+	const scene = useViewerStore((s) => s.scene);
 	const snapToLattice = useViewerStore((s) => s.editing.snapToLattice);
 	const setEditing = useViewerStore((s) => s.setEditing);
 
+	// non-editable scenes disable the whole palette with the reason in each
+	// tooltip -- the same gate the panels mirror (editor/gate.ts)
+	const gate = scene !== null ? frameEditGate(scene) : null;
+	const blocked = gate !== null && !gate.editable ? gate.reason : null;
+
 	return (
-		<div className="absolute top-3 left-3 flex flex-col gap-1 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]">
+		<div
+			data-viewport-chrome=""
+			className="absolute top-3 left-3 flex flex-col gap-1 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]"
+		>
 			<ToggleGroup
 				orientation="vertical"
 				value={[tool]}
 				onValueChange={(next) => {
-					// base-ui's toggle-group value is array-valued even in single-select
-					// mode; every item here is disabled so this never actually fires,
-					// but setTool stays wired for when the tools do
+					// base-ui's toggle-group value is array-valued even in
+					// single-select mode
 					const chosen = next[0];
 					if (chosen !== undefined && TOOL_IDS.includes(chosen)) setTool(chosen as ToolId);
 				}}
 				className="gap-1"
 			>
 				{TOOLS.slice(0, 2).map(({ id, icon, label }) => (
-					<PaletteButton key={id} id={id} icon={icon} label={label} tooltip={`${label} ${TOOL_BLOCKER}`} />
+					<PaletteButton
+						key={id}
+						id={id}
+						icon={icon}
+						label={label}
+						disabled={blocked !== null}
+						tooltip={blocked === null ? label : `${label} — ${blocked}`}
+					/>
 				))}
 				<Separator className="my-0.5" />
 				{TOOLS.slice(2).map(({ id, icon, label }) => (
-					<PaletteButton key={id} id={id} icon={icon} label={label} tooltip={`${label} ${TOOL_BLOCKER}`} />
+					<PaletteButton
+						key={id}
+						id={id}
+						icon={icon}
+						label={label}
+						disabled={blocked !== null}
+						tooltip={blocked === null ? label : `${label} — ${blocked}`}
+					/>
 				))}
 			</ToggleGroup>
 			<Separator className="my-0.5" />
@@ -180,7 +203,10 @@ export function CoordinateReadout() {
 	if (scene === null || derived === null) return null;
 
 	return (
-		<div className="absolute right-3 bottom-3 flex items-center gap-2.5 rounded-lg border border-border bg-surface-panel/90 px-2.5 py-[5px] font-mono text-[10px] text-[#71717a] backdrop-blur-[8px]">
+		<div
+			data-viewport-chrome=""
+			className="absolute right-3 bottom-3 flex items-center gap-2.5 rounded-lg border border-border bg-surface-panel/90 px-2.5 py-[5px] font-mono text-[10px] text-[#71717a] backdrop-blur-[8px]"
+		>
 			<span>
 				x{" "}
 				<span ref={xRef} className="text-[#e4e4e7] tabular-nums">
