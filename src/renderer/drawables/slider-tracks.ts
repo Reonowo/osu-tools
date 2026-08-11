@@ -173,6 +173,10 @@ export function repeatHitScale(
 	return 1 + 0.5 * k;
 }
 
+/** framework Precision.cs's FLOAT_EPSILON, the per-component tolerance its
+ * AlmostEquals(Vector2, Vector2) compares against */
+const AIM_VERTEX_EPSILON = 1e-3;
+
 /** drawablesliderrepeat.cs:118-161's UpdateSnakingPosition: aims a repeat
  * at the currently-snaked curve end it sits on, unless it is hit and has
  * already been aimed once. `aimed` is the caller's own per-piece bookkeeping
@@ -181,9 +185,14 @@ export function repeatHitScale(
  * repeat's own hit time, unlike lazer's continuous simulation where
  * UpdateSnakingPosition always runs many frames before any repeat can be
  * hit, so source's own `if (IsHit) return;` guard never has to cover a
- * "hit but never aimed" case the way this port does. returns null when
- * nothing should change this frame (the duplicate-vertex search and the
- * 50ms rotation smoothing are both omitted) */
+ * "hit but never aimed" case the way this port does. the aim vector comes
+ * from source's own search (:137-149): walk inboard from the curve's end
+ * until a vertex differs from the arrow's position -- a fixed neighbouring
+ * vertex degenerates once a fully snaked path duplicates its endpoint
+ * vertices (pathToProgress always duplicates the p0 endpoint, and the p1
+ * endpoint whenever the snake lands exactly on a vertex), leaving atan2 of
+ * a zero vector. returns null when nothing should change this frame (the
+ * 50ms rotation smoothing and its ±180° unwrap remain omitted -- TODO.md) */
 export function repeatAim(
 	hit: boolean,
 	aimed: boolean,
@@ -197,9 +206,21 @@ export function repeatAim(
 	if (curve.length < 4) return null;
 	const atEnd = nested.spanIndex % 2 === 0;
 	const [px, py] = positionAt(geo, atEnd ? p1 : p0);
-	const n = curve.length;
-	const aimX = atEnd ? (curve[n - 4] ?? curve[0]) : (curve[2] ?? curve[n - 2]);
-	const aimY = atEnd ? (curve[n - 3] ?? curve[1]) : (curve[3] ?? curve[n - 1]);
+	// source seeds aimRotationVector at Vector2.Zero, so a curve of nothing
+	// but the arrow's own position aims at the origin exactly as lazer does
+	let aimX = 0;
+	let aimY = 0;
+	const count = curve.length / 2;
+	const direction = atEnd ? -1 : 1;
+	for (let i = atEnd ? count - 1 : 0; i >= 0 && i < count; i += direction) {
+		const x = curve[i * 2];
+		const y = curve[i * 2 + 1];
+		// Precision.AlmostEquals is per-component, not a distance
+		if (Math.abs(x - px) <= AIM_VERTEX_EPSILON && Math.abs(y - py) <= AIM_VERTEX_EPSILON) continue;
+		aimX = x;
+		aimY = y;
+		break;
+	}
 	return { position: [px, py], rotation: Math.atan2(aimY - py, aimX - px) };
 }
 

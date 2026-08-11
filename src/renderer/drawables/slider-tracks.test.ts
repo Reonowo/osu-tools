@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { FOLLOW_AREA } from "../../engine/argon";
+import { pathToProgress, positionAt } from "../../engine/slider-path";
 import { trackValueAt } from "../../engine/transforms";
-import type { FrameDto } from "../../lib/scene-types";
+import type { FrameDto, RenderPlan } from "../../lib/scene-types";
+import { loadFixture } from "../../test/fixtures";
 import {
 	ballTracks,
 	completionProgress,
@@ -197,6 +199,83 @@ describe("repeatAim (drawablesliderrepeat.cs:118-161 UpdateSnakingPosition)", ()
 
 	test("null for a curve too short to aim from (fewer than 2 vertices)", () => {
 		expect(repeatAim(false, false, { spanIndex: 0 }, [0, 0], 0, 1, geo)).toBeNull();
+	});
+});
+
+describe("repeatAim duplicate-vertex walk (drawablesliderrepeat.cs:137-149)", () => {
+	// a diagonal path so a degenerate atan2(0,0) = 0 cannot pass by luck --
+	// this curve is the shape pathToProgress emits for a fully snaked path:
+	// both endpoint vertices duplicated (the p0 endpoint always is; the p1
+	// endpoint is once the snake reaches a vertex exactly)
+	const geo = { vertices: [0, 0, 60, 80], cumulativeLengths: [0, 100], distance: 100 };
+	const snakedCurve = [0, 0, 0, 0, 60, 80, 60, 80];
+
+	test("end-side arrow walks inboard past the duplicated end vertex", () => {
+		const aim = repeatAim(false, false, { spanIndex: 0 }, snakedCurve, 0, 1, geo);
+		expect(aim).not.toBeNull();
+		expect(aim!.position).toEqual([60, 80]);
+		// back along the path, toward (0,0): atan2(0-80, 0-60)
+		expect(aim!.rotation).toBeCloseTo(Math.atan2(-80, -60), 9);
+	});
+
+	test("start-side arrow walks forward past the duplicated start vertex", () => {
+		const aim = repeatAim(false, false, { spanIndex: 1 }, snakedCurve, 0, 1, geo);
+		expect(aim).not.toBeNull();
+		expect(aim!.position).toEqual([0, 0]);
+		// forward along the path, toward (60,80): atan2(80, 60)
+		expect(aim!.rotation).toBeCloseTo(Math.atan2(80, 60), 9);
+	});
+});
+
+// the smallest signed angle from b to a
+function angleDiff(a: number, b: number): number {
+	return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+}
+
+describe("repeatAim over fixture geometry (slider-zoo repeat sliders)", () => {
+	test("arrows point along the path's own tangent, and full snake-in never snaps the direction", async () => {
+		const plan = await loadFixture<RenderPlan>("render_plan", "slider-zoo-v14.json");
+		let endSide = 0;
+		let startSide = 0;
+		for (const obj of plan.objects) {
+			if (obj.kind.type !== "slider" || obj.kind.repeatCount === 0) continue;
+			const geo = obj.kind;
+			const fullySnaked = pathToProgress(geo, 0, 1);
+			const nearlySnaked = pathToProgress(geo, 0, 0.999);
+			const n = fullySnaked.length;
+			// precondition, so the case never silently weakens: the fully
+			// snaked curve really does duplicate both endpoint vertices
+			expect([fullySnaked[0], fullySnaked[1]]).toEqual([fullySnaked[2], fullySnaked[3]]);
+			expect([fullySnaked[n - 2], fullySnaked[n - 1]]).toEqual([fullySnaked[n - 4], fullySnaked[n - 3]]);
+			for (const nested of geo.nested) {
+				if (nested.kind !== "repeat") continue;
+				const atEnd = nested.spanIndex % 2 === 0;
+				if (atEnd) endSide++;
+				else startSide++;
+				const aim = repeatAim(false, false, nested, fullySnaked, 0, 1, geo);
+				expect(aim).not.toBeNull();
+				// the fixture-backed expectation: the arrow points along the
+				// path's tangent at its own end -- back along it from the tail,
+				// forward along it from the head. delta = half an osu!px of
+				// progress, small enough to stay in the endmost segments
+				const delta = 0.5 / geo.distance;
+				const [px, py] = positionAt(geo, atEnd ? 1 : 0);
+				const [tx, ty] = positionAt(geo, atEnd ? 1 - delta : delta);
+				const tangent = Math.atan2(ty - py, tx - px);
+				expect(Math.abs(angleDiff(aim!.rotation, tangent)), `span ${nested.spanIndex}`).toBeLessThan(0.2);
+				// and finishing the snake-in must not snap it: the aim over the
+				// nearly snaked curve agrees with the fully snaked one
+				const before = repeatAim(false, false, nested, nearlySnaked, 0, 0.999, geo);
+				expect(before).not.toBeNull();
+				expect(
+					Math.abs(angleDiff(aim!.rotation, before!.rotation)),
+					`span ${nested.spanIndex} continuity`
+				).toBeLessThan(0.2);
+			}
+		}
+		// both parities must actually have been exercised
+		expect(endSide).toBeGreaterThanOrEqual(2);
+		expect(startSide).toBeGreaterThanOrEqual(1);
 	});
 });
 
