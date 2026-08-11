@@ -1,6 +1,9 @@
-// the app-wide frame selection: an exact index that survives a duplicate-time
-// run without collapsing it, on top of whatever "current frame" the clock's
-// raw time would otherwise derive. FramedReplayInputHandler.SetFrameFromTime
+// the app-wide frame cursor: the single exact current-frame index, surviving
+// a duplicate-time run without collapsing it, on top of whatever "current
+// frame" the clock's raw time would otherwise derive. distinct from the frame
+// selection (the sorted index set the cursor-path tools operate on, which
+// lives on the editor slice): selecting never seeks, while the cursor is
+// exactly what seeking moves. FramedReplayInputHandler.SetFrameFromTime
 // (osu.Game/Replays/Legacy) advances currentFrameIndex by one per call, so
 // index-based stepping through a tied run is what lazer itself does; a pure
 // time search like countAtOrBefore crosses the whole run in a single step
