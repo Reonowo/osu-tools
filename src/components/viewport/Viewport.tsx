@@ -1,9 +1,10 @@
 // the docked viewport: hosts the pixi playfield plus every viewport-scoped
-// overlay -- watch mode's hud, the zoom cluster, and edit mode's (inert) tool
+// overlay -- watch mode's hud, the zoom cluster, and edit mode's tool
 // palette and coordinate readout. the overlays implement themselves; what
 // this file owns beyond composition is the framing gestures, because they are
 // the only thing that needs the host box in css pixels. all of their maths is
-// pure and lives in renderer/playfield.ts -- this is the dom half
+// pure and lives in renderer/playfield.ts -- this is the dom half (the edit
+// tools' dom half lives next door in use-edit-tools.ts)
 
 import { useEffect, useRef } from "react";
 import { PlayerView } from "@/components/PlayerView";
@@ -19,12 +20,18 @@ import {
 } from "@/renderer/playfield";
 import { useViewerStore, viewerStore } from "@/state/store";
 import { CoordinateReadout, ToolPalette } from "./ToolPalette";
+import { useEditTools } from "./use-edit-tools";
 import { WatchHud } from "./WatchHud";
 import { ZoomControls } from "./ZoomControls";
 
 export function Viewport() {
 	const mode = useViewerStore((s) => s.mode);
 	const containerRef = useRef<HTMLDivElement>(null);
+
+	// the cursor-path tools: pointer capture and event translation only; the
+	// decisions live in editor/gesture-controller.ts. left-drags reach it only
+	// while space is not arming a pan, so navigating and editing never fight
+	useEditTools(containerRef);
 
 	useEffect(() => {
 		const container = containerRef.current;
@@ -62,7 +69,7 @@ export function Viewport() {
 		const onPointerDown = (e: PointerEvent) => {
 			if (dragPointer !== null) return;
 			// middle-drag always pans; left-drag only while space arms it, so an
-			// ordinary left-click stays available to the (future) edit tools
+			// ordinary left-click stays available to the edit tools
 			if (e.button !== 1 && !(e.button === 0 && spacePan.armed)) return;
 			// suppresses the text selection a drag would otherwise start, and the
 			// middle-click autoscroll the compatibility mouse events would
