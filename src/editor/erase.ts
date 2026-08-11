@@ -8,11 +8,20 @@
 // signature the source itself lacked), other keys' hold state inherited from
 // the deleted frame's own pattern, which is the ground truth at that ms.
 // a batch whose rewrites would collapse a press to zero or negative length
-// is rejected whole, before any ipc
+// is rejected whole, before any ipc. the edge machinery itself -- the
+// tolerance, boundary construction, pairing rules, and rejections -- is the
+// shared press-operations module (press-ops.ts), which the press operations
+// consume through the same seam
 
-import { isM1, isM2, K1, K2, M1, M2, PHYSICAL_BUTTONS, type PhysicalButton, type PhysicalKey } from "../engine/buttons";
-import { cursorStateAt } from "../engine/interpolation";
-import { snapToLatticePoint } from "./ops";
+import { PHYSICAL_BUTTONS, type PhysicalButton } from "../engine/buttons";
+import {
+	boundaryFrame,
+	collapseRejection,
+	EDGE_TOLERANCE_MS,
+	pressCollapsed,
+	releasePattern,
+	repressRejection
+} from "./press-ops";
 import { remapIndex } from "./splice";
 import type { Lattice } from "../lib/lattice";
 import type { EditOp, FrameChanges, FrameDto } from "../lib/scene-types";
@@ -35,23 +44,6 @@ export function remapEraseTargets(targets: readonly EraseTarget[], changes: Fram
 		const index = remapIndex(target.index, changes);
 		return index === null ? [] : [{ index, time: target.time }];
 	});
-}
-
-/** clears one physical key's press contribution from a raw pattern. a K key
- * rides with its paired mouse bit, so releasing K1 clears M1 too -- unless
- * the deleted release frame shows the mouse hold genuinely continuing, in
- * which case its bit is inherited. an M key clears only its own bit */
-function releasePattern(buttons: number, key: PhysicalKey, releasedButtons: number): number {
-	switch (key) {
-		case "K1":
-			return (buttons & ~(K1 | M1)) | (isM1(releasedButtons) ? M1 : 0);
-		case "K2":
-			return (buttons & ~(K2 | M2)) | (isM2(releasedButtons) ? M2 : 0);
-		case "M1":
-			return buttons & ~M1;
-		case "M2":
-			return buttons & ~M2;
-	}
 }
 
 export function expandErase(
@@ -106,7 +98,7 @@ export function expandErase(
 					break;
 				}
 			}
-			if (anchor >= 0 && frames[anchor].time - riseTime <= 1) {
+			if (anchor >= 0 && frames[anchor].time - riseTime <= EDGE_TOLERANCE_MS) {
 				realizedStart = frames[anchor].time;
 			} else {
 				boundarySources.add(rise);
@@ -128,7 +120,7 @@ export function expandErase(
 				}
 			}
 			const nextHeld = next >= 0 && button.is(frames[next].buttons);
-			if (next >= 0 && !nextHeld && frames[next].time - fallTime <= 1) {
+			if (next >= 0 && !nextHeld && frames[next].time - fallTime <= EDGE_TOLERANCE_MS) {
 				realizedEnd = frames[next].time;
 			} else {
 				// the press's direction from a falling edge is backward: the
@@ -140,7 +132,7 @@ export function expandErase(
 						break;
 					}
 				}
-				if (last >= 0 && fallTime - frames[last].time <= 1) {
+				if (last >= 0 && fallTime - frames[last].time <= EDGE_TOLERANCE_MS) {
 					const current = rewrites.get(last) ?? frames[last].buttons;
 					rewrites.set(last, releasePattern(current, key, frames[fall].buttons));
 					realizedEnd = frames[last].time;
@@ -149,7 +141,7 @@ export function expandErase(
 					// boundary release here would land behind the surviving
 					// same-millisecond re-press and turn it off -- an order the
 					// wire format cannot express, so the batch refuses
-					rejection = `erasing these frames would land a ${key} release behind its re-press at ${fallTime} ms`;
+					rejection = repressRejection("erasing these frames", key, fallTime);
 					return;
 				} else {
 					boundarySources.add(fall);
@@ -158,8 +150,8 @@ export function expandErase(
 		}
 		// the guard applies on every path that moved an edge; a press whose
 		// edges both survive keeps whatever length it had
-		if ((deleteSet.has(rise) || deleteSet.has(fall)) && realizedEnd <= realizedStart) {
-			rejection = `erasing these frames would collapse a ${key} press at ${riseTime} ms to zero length`;
+		if ((deleteSet.has(rise) || deleteSet.has(fall)) && pressCollapsed(realizedStart, realizedEnd)) {
+			rejection = collapseRejection("erasing these frames", key, riseTime);
 		}
 	};
 
@@ -205,14 +197,7 @@ export function expandErase(
 		.sort((a, b) => a - b)
 		.map((sourceIndex) => {
 			const source = frames[sourceIndex];
-			const sample = cursorStateAt(survivors, source.time);
-			let x = sample?.x ?? source.x;
-			let y = sample?.y ?? source.y;
-			if (lattice !== null) {
-				x = snapToLatticePoint(x, lattice.step);
-				y = snapToLatticePoint(y, lattice.step);
-			}
-			return { time: source.time, x: Math.fround(x), y: Math.fround(y), buttons: source.buttons };
+			return boundaryFrame(survivors, source.time, source.buttons, lattice, { x: source.x, y: source.y });
 		});
 	if (inserted.length > 0) ops.push({ kind: "insertFrames", frames: inserted });
 
