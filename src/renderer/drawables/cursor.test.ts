@@ -146,13 +146,15 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 			renderer: {} as unknown as Renderer,
 			getOverlays: () => DEFAULT_OVERLAYS,
 			getEffects,
+			getEditChrome: () => null,
 			layers: {
 				followPoints: new Container(),
 				objects: new Container(),
 				approach: new RenderLayer(),
 				judgements: new Container(),
 				analysis: new Container(),
-				cursor: new Container()
+				cursor: new Container(),
+				editChrome: new Container()
 			}
 		};
 	}

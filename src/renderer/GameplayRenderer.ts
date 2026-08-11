@@ -5,6 +5,7 @@
 import { Application, Container, RenderLayer, type Renderer } from "pixi.js";
 import { fromBytes, type Rgba } from "../engine/color";
 import { HIT_FADE_OUT_TIME } from "../engine/argon";
+import type { BrushRing, ChromeShape, PreviewSnapshot } from "../editor/preview";
 import type { DerivedScene } from "../lib/derive";
 import type { LoadedScene } from "../lib/scene-types";
 import type { EffectSettings, OverlaySettings } from "../state/store";
@@ -16,6 +17,7 @@ import { JudgementsDrawable } from "./drawables/judgements";
 import { SliderDrawable } from "./drawables/slider";
 import { SpinnerDrawable } from "./drawables/spinner";
 import { AnalysisDrawable } from "./overlays/analysis";
+import { EditChromeDrawable } from "./overlays/edit-chrome";
 import {
 	ActiveSetTracker,
 	clampViewportPan,
@@ -51,6 +53,19 @@ export type TextureBaker = Pick<
 	| "approachCircleTexture"
 >;
 
+/** live getters into the edit-mode chrome state: the frame selection from
+ * the store, the gesture preview and shapes from the imperative preview
+ * module. getters rather than values for the same reason getOverlays is --
+ * every one changes mid-playback without a scene rebuild. null in watch
+ * mode, which is what makes the chrome edit-mode-only */
+export interface EditChromeSources {
+	/** authoritative frame indices, ascending */
+	selection(): readonly number[];
+	preview(): PreviewSnapshot;
+	shape(): ChromeShape | null;
+	brush(): BrushRing | null;
+}
+
 export interface RenderContext {
 	scene: LoadedScene;
 	derived: DerivedScene;
@@ -70,6 +85,8 @@ export interface RenderContext {
 	 * precomputed timelines, so it is read at drawable construction and
 	 * setEffects rebuilds the scene when it flips */
 	getEffects(): EffectSettings;
+	/** the edit-mode chrome sources, read live; null in watch mode */
+	getEditChrome(): EditChromeSources | null;
 	layers: {
 		followPoints: Container;
 		objects: Container;
@@ -81,6 +98,9 @@ export interface RenderContext {
 		judgements: Container;
 		analysis: Container;
 		cursor: Container;
+		/** edit chrome sits above everything gameplay draws -- selection
+		 * outline and shapes must never hide under the cursor or markers */
+		editChrome: Container;
 	};
 }
 
@@ -107,7 +127,8 @@ function createSceneDrawables(ctx: RenderContext): ObjectDrawable[] {
 		// are attached to their own dedicated ctx.layers container, already
 		// positioned analysis-then-cursor in the root's child list)
 		new AnalysisDrawable(ctx),
-		new CursorDrawable(ctx)
+		new CursorDrawable(ctx),
+		new EditChromeDrawable(ctx)
 	];
 }
 
@@ -179,7 +200,8 @@ export class GameplayRenderer {
 		approach: new RenderLayer(),
 		judgements: new Container(),
 		analysis: new Container(),
-		cursor: new Container()
+		cursor: new Container(),
+		editChrome: new Container()
 	};
 	private ctx: RenderContext | null = null;
 	private zoom = DEFAULT_VIEWPORT_ZOOM;
@@ -187,6 +209,8 @@ export class GameplayRenderer {
 	private overlays: OverlaySettings | null = null;
 	/** master already folded in; null until the first setEffects */
 	private effects: EffectSettings | null = null;
+	/** null in watch mode; set by PlayerView on mode changes */
+	private editChromeSources: EditChromeSources | null = null;
 	private tracker: ActiveSetTracker | null = null;
 	private drawables = new Map<number, ObjectDrawable>();
 	private sceneDrawables: ObjectDrawable[] = [];
@@ -219,7 +243,8 @@ export class GameplayRenderer {
 			renderer.layers.approach,
 			renderer.layers.judgements,
 			renderer.layers.analysis,
-			renderer.layers.cursor
+			renderer.layers.cursor,
+			renderer.layers.editChrome
 		]) {
 			renderer.root.addChild(layer);
 		}
@@ -318,6 +343,7 @@ export class GameplayRenderer {
 			renderer: this.app.renderer,
 			getOverlays: () => this.overlays ?? DEFAULT_OVERLAYS,
 			getEffects: () => this.effects ?? DEFAULT_EFFECTS,
+			getEditChrome: () => this.editChromeSources,
 			layers: this.layers
 		};
 		this.tracker = new ActiveSetTracker(
@@ -331,6 +357,13 @@ export class GameplayRenderer {
 	setOverlays(overlays: OverlaySettings): void {
 		this.overlays = overlays;
 		this.layers.cursor.visible = !overlays.hideCursor;
+	}
+
+	/** wires (or unwires, with null) the edit-mode chrome. sources are live
+	 * getters, so this is called on mode changes only -- per-frame reads go
+	 * through them on the next update() */
+	setEditChromeSources(sources: EditChromeSources | null): void {
+		this.editChromeSources = sources;
 	}
 
 	/** the four live effects reach their drawables through ctx.getEffects() on

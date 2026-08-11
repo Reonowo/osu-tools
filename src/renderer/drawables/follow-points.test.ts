@@ -105,13 +105,15 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 			displayLength: 800
 		}),
 		getEffects: () => effects,
+		getEditChrome: () => null,
 		layers: {
 			followPoints: new Container(),
 			objects: new Container(),
 			approach: new RenderLayer(),
 			judgements: new Container(),
 			analysis: new Container(),
-			cursor: new Container()
+			cursor: new Container(),
+			editChrome: new Container()
 		}
 	};
 }
