@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import type { EditDelta, EditOp, FrameDto, IpcError, LoadedScene, RecentReplay, Settings } from "../lib/scene-types";
+import { GesturePreview } from "../editor/preview";
+import type {
+	EditDelta,
+	EditOp,
+	FrameChanges,
+	FrameDto,
+	IpcError,
+	LoadedScene,
+	RecentReplay,
+	Settings
+} from "../lib/scene-types";
 import { testScene } from "../test/scene";
 import { VIEWPORT_ZOOM_MAX, VIEWPORT_ZOOM_MIN } from "../renderer/playfield";
 import {
@@ -1064,6 +1074,24 @@ describe("shell state", () => {
 		expect(store.getState().panelOpen).toBe(true);
 	});
 
+	test("feather and strength are session tool parameters with clamps, never persisted", () => {
+		const store = createViewerStore(deps());
+		expect(store.getState().featherMs).toBe(40);
+		expect(store.getState().smoothStrength).toBe(100);
+		store.getState().setFeatherMs(120.6);
+		expect(store.getState().featherMs).toBe(121);
+		store.getState().setFeatherMs(-5);
+		expect(store.getState().featherMs).toBe(0);
+		store.getState().setFeatherMs(Number.NaN);
+		expect(store.getState().featherMs).toBe(0);
+		store.getState().setSmoothStrength(55.4);
+		expect(store.getState().smoothStrength).toBe(55);
+		store.getState().setSmoothStrength(300);
+		expect(store.getState().smoothStrength).toBe(100);
+		store.getState().setSmoothStrength(Number.NaN);
+		expect(store.getState().smoothStrength).toBe(100);
+	});
+
 	test("the detail span is clamped to the allowed range", () => {
 		const store = createViewerStore(deps());
 		store.getState().setDetailSpan(10);
@@ -1271,6 +1299,98 @@ describe("editor slice and edit queue", () => {
 		expect(dispatched[1]).toEqual([{ kind: "moveFrames", moves: [{ index: 1, x: 5, y: 5 }] }]);
 	});
 
+	test("a queued intent's remap hook carries its identities through a landing delta", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		const dispatched: EditOp[][] = [];
+		const seen: FrameChanges[] = [];
+		const removalDelta: EditDelta = {
+			...moveDelta(1, 0, { time: 0, x: 0, y: 0, buttons: 0 }, "a"),
+			frames: { updated: [], inserted: [], removed: [0] }
+		};
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, baseRevision, ops) => {
+					dispatched.push(ops);
+					if (baseRevision === 0)
+						return new Promise<EditDelta>((resolve) => {
+							resolveFirst = resolve;
+						});
+					return moveDelta(2, 1, { time: 32, x: 5, y: 5, buttons: 0 }, "b");
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const first = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "deleteFrames", indices: [0] }] }
+		});
+		let target = 2;
+		const second = store.getState().commitEdit({
+			label: "b",
+			payload: {
+				kind: "intent",
+				remap: (changes) => {
+					seen.push(changes);
+					if (!("fullFrames" in changes)) target -= changes.removed.filter((r) => r < target).length;
+					return true;
+				},
+				expand: () => [{ kind: "moveFrames", moves: [{ index: target, x: 5, y: 5 }] }]
+			}
+		});
+		await Promise.resolve();
+		resolveFirst(removalDelta);
+		await Promise.all([first, second]);
+		expect(seen).toEqual([{ updated: [], inserted: [], removed: [0] }]);
+		// the intent dispatched against the identity the splice shifted to
+		expect(dispatched[1]).toEqual([{ kind: "moveFrames", moves: [{ index: 1, x: 5, y: 5 }] }]);
+	});
+
+	test("a queued intent whose remap reports nothing left cancels without dispatching", async () => {
+		let resolveFirst!: (d: EditDelta) => void;
+		let applyCalls = 0;
+		let expanded = false;
+		const outcomes: string[] = [];
+		const removalDelta: EditDelta = {
+			...moveDelta(1, 0, { time: 0, x: 0, y: 0, buttons: 0 }, "a"),
+			frames: { updated: [], inserted: [], removed: [0] }
+		};
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => {
+					applyCalls += 1;
+					return new Promise<EditDelta>((resolve) => {
+						resolveFirst = resolve;
+					});
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const first = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: [{ kind: "deleteFrames", indices: [0] }] }
+		});
+		const second = store.getState().commitEdit({
+			label: "b",
+			payload: {
+				kind: "intent",
+				remap: () => false,
+				expand: () => {
+					expanded = true;
+					return null;
+				}
+			},
+			onSettled: (outcome) => outcomes.push(outcome)
+		});
+		await Promise.resolve();
+		resolveFirst(removalDelta);
+		await Promise.all([first, second]);
+		expect(outcomes).toEqual(["cancelled"]);
+		expect(expanded).toBe(false);
+		expect(applyCalls).toBe(1);
+	});
+
 	test("a fullFrames delta cancels the queue and clears the selection", async () => {
 		let resolveFirst!: (d: EditDelta) => void;
 		let applyCalls = 0;
@@ -1305,6 +1425,245 @@ describe("editor slice and edit queue", () => {
 		expect(applyCalls).toBe(1);
 		expect(store.getState().editor!.frameSelection).toEqual([]);
 		expect(store.getState().scene!.frames).toHaveLength(39);
+	});
+
+	test("preview-equals-commit: the ops crossing ipc are the frozen preview entry's, byte-equal", async () => {
+		const preview = new GesturePreview();
+		const dispatched: EditOp[][] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, _r, ops) => {
+					// what is on screen at this moment is the frozen entry; the
+					// payload must be exactly it
+					const shown = preview.snapshot().moved;
+					for (const op of ops) {
+						if (op.kind !== "moveFrames") continue;
+						for (const move of op.moves) {
+							expect(shown.get(move.index)).toEqual({ x: move.x, y: move.y });
+						}
+					}
+					dispatched.push(ops);
+					return moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move 1 frame");
+				}
+			}),
+			{ onSplice: (changes) => preview.applySplice(changes) }
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const ops: EditOp[] = [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }];
+		preview.setLive(ops);
+		const id = preview.freezeLive();
+		const outcomes: string[] = [];
+		await store.getState().commitEdit({
+			label: (sent) => `move ${sent.length} frame`,
+			payload: { kind: "ops", ops },
+			onSettled: (outcome) => {
+				outcomes.push(outcome);
+				preview.settle(id, outcome);
+			}
+		});
+		expect(dispatched).toEqual([ops]);
+		expect(outcomes).toEqual(["landed"]);
+		// landed, not yet rendered: the preview still shows the edit until the
+		// renderer is re-fed, then drops with the swap
+		expect(preview.snapshot().moved.size).toBe(1);
+		preview.settleRendered();
+		expect(preview.snapshot().moved.size).toBe(0);
+	});
+
+	test("a label function resolves at dispatch against the ops actually sent", async () => {
+		const labels: string[] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, _r, _ops, label) => {
+					labels.push(label);
+					return moveDelta(1, 1, { time: 16, x: 1, y: 1, buttons: 0 }, label);
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().commitEdit({
+			label: (ops) => `move ${ops.length === 1 && ops[0].kind === "moveFrames" ? ops[0].moves.length : 0} frames`,
+			payload: {
+				kind: "ops",
+				ops: [
+					{
+						kind: "moveFrames",
+						moves: [
+							{ index: 1, x: 1, y: 1 },
+							{ index: 2, x: 2, y: 2 }
+						]
+					}
+				]
+			}
+		});
+		expect(labels).toEqual(["move 2 frames"]);
+	});
+
+	test("an intent expanding to identity settles as skipped and dispatches nothing", async () => {
+		let applyCalls = 0;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => {
+					applyCalls += 1;
+					return identityDelta;
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const outcomes: string[] = [];
+		await store.getState().commitEdit({
+			label: "noop",
+			payload: { kind: "intent", expand: () => null },
+			onSettled: (outcome) => outcomes.push(outcome)
+		});
+		expect(applyCalls).toBe(0);
+		expect(outcomes).toEqual(["skipped"]);
+	});
+
+	test("a failing dispatch settles as failed, which is the preview's snap-back", async () => {
+		const preview = new GesturePreview();
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => {
+					throw { kind: "invalidEdit", message: "no" };
+				}
+			}),
+			{ onSplice: (changes) => preview.applySplice(changes) }
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const ops: EditOp[] = [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }];
+		preview.setLive(ops);
+		const id = preview.freezeLive();
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops },
+			onSettled: (outcome) => preview.settle(id, outcome)
+		});
+		expect(preview.snapshot().moved.size).toBe(0);
+		expect(store.getState().lastError?.error.kind).toBe("invalidEdit");
+	});
+
+	test("a fullFrames delta cancels queued commits and discards their previews through the splice hook", async () => {
+		const preview = new GesturePreview();
+		let resolveFirst!: (d: EditDelta) => void;
+		let applyCalls = 0;
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => {
+					applyCalls += 1;
+					return new Promise<EditDelta>((resolve) => {
+						resolveFirst = resolve;
+					});
+				}
+			}),
+			{ onSplice: (changes) => preview.applySplice(changes) }
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		const firstOps: EditOp[] = [{ kind: "deleteFrames", indices: [0] }];
+		preview.setLive(firstOps);
+		const firstId = preview.freezeLive();
+		const first = store.getState().commitEdit({
+			label: "a",
+			payload: { kind: "ops", ops: firstOps },
+			onSettled: (outcome) => preview.settle(firstId, outcome)
+		});
+		const secondOps: EditOp[] = [{ kind: "moveFrames", moves: [{ index: 2, x: 5, y: 5 }] }];
+		preview.setLive(secondOps);
+		const secondId = preview.freezeLive();
+		const secondOutcomes: string[] = [];
+		const second = store.getState().commitEdit({
+			label: "b",
+			payload: { kind: "ops", ops: secondOps },
+			onSettled: (outcome) => {
+				secondOutcomes.push(outcome);
+				preview.settle(secondId, outcome);
+			}
+		});
+		await Promise.resolve();
+		resolveFirst({
+			...moveDelta(1, 0, { time: 0, x: 0, y: 0, buttons: 0 }, "a"),
+			frames: { fullFrames: latticeScene().frames.slice(1) }
+		});
+		await Promise.all([first, second]);
+		expect(applyCalls).toBe(1);
+		expect(secondOutcomes).toEqual(["cancelled"]);
+		// the queued commit's preview died with it; the landed one holds until
+		// the renderer swap
+		expect(preview.snapshot().moved.size).toBe(0);
+		expect(preview.snapshot().hidden).toEqual(new Set([0]));
+		preview.settleRendered();
+		expect(preview.snapshot().hidden.size).toBe(0);
+	});
+
+	test("an intent's re-expansion regenerates its preview entry with the dispatch payload itself", async () => {
+		// the erase pipeline's shape: the expand closure rewrites the frozen
+		// entry with the ops it returns, so what is displayed when the payload
+		// crosses ipc is the payload -- byte-equal across the re-expansion
+		const preview = new GesturePreview();
+		const dispatched: EditOp[][] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, _r, ops) => {
+					const shown = preview.snapshot();
+					for (const op of ops) {
+						if (op.kind === "deleteFrames") {
+							for (const index of op.indices) expect(shown.hidden.has(index)).toBe(true);
+						}
+					}
+					dispatched.push(ops);
+					return {
+						...moveDelta(1, 0, { time: 0, x: 0, y: 0, buttons: 0 }, "erase 1 frame"),
+						frames: { updated: [], inserted: [], removed: [3] }
+					};
+				}
+			}),
+			{ onSplice: (changes) => preview.applySplice(changes) }
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		preview.setLive([{ kind: "deleteFrames", indices: [3] }]);
+		const id = preview.freezeLive();
+		await store.getState().commitEdit({
+			label: "erase 1 frame",
+			payload: {
+				kind: "intent",
+				expand: (frames) => {
+					// the re-expansion reads the then-current frames and rewrites
+					// the entry from the concrete dispatch payload
+					expect(frames).toHaveLength(40);
+					const ops: EditOp[] = [{ kind: "deleteFrames", indices: [3] }];
+					preview.update(id, ops);
+					return ops;
+				}
+			},
+			onSettled: (outcome) => preview.settle(id, outcome)
+		});
+		expect(dispatched).toHaveLength(1);
+	});
+
+	test("a landed deletion drops erased frames from the selection and shifts the rest", async () => {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => ({
+					...moveDelta(1, 0, { time: 0, x: 0, y: 0, buttons: 0 }, "erase 2 frames"),
+					frames: { updated: [], inserted: [], removed: [1, 2] }
+				})
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		store.getState().setFrameSelection([0, 2, 5]);
+		await store.getState().commitEdit({
+			label: "erase 2 frames",
+			payload: { kind: "ops", ops: [{ kind: "deleteFrames", indices: [1, 2] }] }
+		});
+		// 2 was deleted; 5 shifted down past the two removals; 0 stays
+		expect(store.getState().editor!.frameSelection).toEqual([0, 3]);
 	});
 
 	test("a response tagged with a replaced epoch is dropped", async () => {

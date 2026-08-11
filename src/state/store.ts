@@ -2,6 +2,7 @@
 // ipc goes through an injected deps object so bun tests script it
 
 import { createStore, useStore, type StoreApi } from "zustand";
+import { gesturePreview } from "../editor/preview";
 import { applyFrameChanges, isFullFrames, remapQueuedOps, remapSelection } from "../editor/splice";
 import {
 	invokeApplyEdit,
@@ -37,11 +38,15 @@ import { clampViewportZoom, DEFAULT_VIEWPORT_ZOOM, NO_VIEWPORT_PAN, type Viewpor
 import {
 	clampDetailSpan,
 	clampDisplayLength,
+	clampFeather,
+	clampStrength,
 	clampVolume,
 	DEFAULT_DETAIL_SPAN,
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
+	DEFAULT_FEATHER_MS,
 	DEFAULT_OVERLAYS,
+	DEFAULT_SMOOTH_STRENGTH,
 	DEFAULT_VOLUME
 } from "./defaults";
 import { describeIpcError } from "./errors";
@@ -85,15 +90,42 @@ export interface EditorState {
 	history: { labels: string[]; cursor: number };
 	/** inferred once at install and frozen for the session's life */
 	lattice: Lattice | null;
-	/** sorted frame indices; the selection tools (plan 2) populate it */
+	/** the frame selection: sorted frame indices the cursor-path tools operate
+	 * on. independent of the frame cursor -- selecting never seeks */
 	frameSelection: number[];
 }
 
+export type CommitOutcome = "landed" | "skipped" | "cancelled" | "failed";
+
 export interface EditCommit {
-	label: string;
+	/** the history label; a function is resolved at dispatch against the ops
+	 * actually sent, which is what lets labels carry counts ("move 12
+	 * frames") that survive a queued payload shrinking through a remap */
+	label: string | ((ops: EditOp[]) => string);
 	payload:
 		| { kind: "ops"; ops: EditOp[] }
-		| { kind: "intent"; expand: (frames: readonly FrameDto[], editor: EditorState) => EditOp[] | null };
+		| {
+				kind: "intent";
+				expand: (frames: readonly FrameDto[], editor: EditorState) => EditOp[] | null;
+				/** carries the intent's frame identities through a landed splice,
+				 * mirroring the remap computed payloads get -- without it a queued
+				 * intent expands against indices the splice shifted. false means
+				 * nothing the intent named survives; the commit cancels */
+				remap?: (changes: FrameChanges) => boolean;
+		  };
+	/** called exactly once when the commit reaches a terminal state: its delta
+	 * installed ("landed"), its expansion reduced to identity ("skipped"), it
+	 * was dropped by a cancellation path ("cancelled"), or its dispatch threw
+	 * ("failed"). the gesture preview ties its pending entries to this */
+	onSettled?: (outcome: CommitOutcome) => void;
+}
+
+/** injected side-channels for state the store does not own: the gesture
+ * preview module keeps its pending entries in the authoritative index space
+ * by observing every landed splice. injected (with a no-op default) so store
+ * tests can run without the singleton and assert against spies */
+export interface StoreHooks {
+	onSplice?(changes: FrameChanges): void;
 }
 
 export interface ViewerState {
@@ -141,6 +173,10 @@ export interface ViewerState {
 	panelOpen: boolean;
 	panelTab: PanelTab;
 	tool: ToolId;
+	/** ms; the move tool's feather window. session-only, never persisted */
+	featherMs: number;
+	/** percent 0-100; the smooth tool's original->smoothed blend. session-only */
+	smoothStrength: number;
 	/** ms; the detail tier's visible timeline span */
 	detailSpanMs: number;
 	/** the viewport's framing, session-only: it belongs to the replay being
@@ -178,6 +214,8 @@ export interface ViewerState {
 	togglePanel(): void;
 	setPanelTab(tab: PanelTab): void;
 	setTool(tool: ToolId): void;
+	setFeatherMs(ms: number): void;
+	setSmoothStrength(value: number): void;
 	setDetailSpan(spanMs: number): void;
 	/** zoom and pan move together or not at all: a pointer-anchored zoom shifts
 	 * the pan by construction, and writing them separately would paint a frame
@@ -206,7 +244,7 @@ export interface ViewerState {
 	setFrameSelection(indices: number[]): void;
 }
 
-export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
+export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreApi<ViewerState> {
 	return createStore<ViewerState>((set, get) => {
 		// bumped at the start of every load; a load whose seq is no longer
 		// current was superseded by a newer user action (the drop handler
@@ -234,6 +272,15 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 		let editQueue: PendingEdit[] = [];
 		let editPumping = false;
 
+		/** settles every queued commit as cancelled and empties the queue --
+		 * the shape of every "this state is gone" path */
+		function cancelQueued(): void {
+			for (const pending of editQueue) {
+				if (pending.kind === "commit") pending.commit.onSettled?.("cancelled");
+			}
+			editQueue = [];
+		}
+
 		function installDelta(delta: EditDelta, epochTag: number): void {
 			const { scene, editor } = get();
 			if (scene === null || editor === null || editor.epoch !== epochTag) return;
@@ -253,7 +300,7 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 				if (isFullFrames(delta.frames)) {
 					// the queued ops' base state no longer exists in any mappable
 					// sense; selections' referents likewise
-					editQueue = [];
+					cancelQueued();
 					frameSelection = [];
 				} else {
 					frameSelection = remapSelection(frameSelection, delta.frames);
@@ -281,13 +328,25 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 					frameSelection
 				}
 			});
+			// after the state write: a hook that reads the store back must see
+			// the post-splice truth it is being told about
+			if (delta.frames !== null) hooks.onSplice?.(delta.frames);
 		}
 
 		function remapQueuedPayloads(changes: FrameChanges): void {
-			editQueue = editQueue.flatMap((pending) => {
-				if (pending.kind !== "commit" || pending.commit.payload.kind !== "ops") return [pending];
-				const ops = remapQueuedOps(pending.commit.payload.ops, changes);
-				if (ops === null) return [];
+			editQueue = editQueue.flatMap((pending): PendingEdit[] => {
+				if (pending.kind !== "commit") return [pending];
+				const payload = pending.commit.payload;
+				if (payload.kind === "intent") {
+					if (payload.remap === undefined || payload.remap(changes)) return [pending];
+					pending.commit.onSettled?.("cancelled");
+					return [];
+				}
+				const ops = remapQueuedOps(payload.ops, changes);
+				if (ops === null) {
+					pending.commit.onSettled?.("cancelled");
+					return [];
+				}
 				return [
 					{ kind: "commit" as const, commit: { ...pending.commit, payload: { kind: "ops" as const, ops } } }
 				];
@@ -312,7 +371,8 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 					if (pending === undefined) return;
 					const { scene, editor } = get();
 					if (scene === null || editor === null) {
-						editQueue = [];
+						if (pending.kind === "commit") pending.commit.onSettled?.("cancelled");
+						cancelQueued();
 						return;
 					}
 					const epochTag = editor.epoch;
@@ -333,11 +393,25 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 							// mismatch unreachable short of a bug
 							const payload = pending.commit.payload;
 							const ops = payload.kind === "ops" ? payload.ops : payload.expand(scene.frames, editor);
-							if (ops === null || ops.length === 0) continue;
-							delta = await deps.applyEdit(epochTag, editor.revision, ops, pending.commit.label);
+							if (ops === null || ops.length === 0) {
+								pending.commit.onSettled?.("skipped");
+								continue;
+							}
+							// resolved against the dispatched ops, after any remap or
+							// expansion, so a counted label names what actually happened
+							const label =
+								typeof pending.commit.label === "function"
+									? pending.commit.label(ops)
+									: pending.commit.label;
+							delta = await deps.applyEdit(epochTag, editor.revision, ops, label);
 						}
+						// landed before installDelta: the splice hook must be able to
+						// tell this commit's own entry apart from the still-pending
+						// ones it remaps
+						if (pending.kind === "commit") pending.commit.onSettled?.("landed");
 						installDelta(delta, epochTag);
 					} catch (e) {
+						if (pending.kind === "commit") pending.commit.onSettled?.("failed");
 						// a response for a replaced session is dropped outright: the
 						// install already reset the slice and cleared the queue
 						if (get().editor?.epoch !== epochTag) continue;
@@ -385,7 +459,7 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 			// a fresh session invalidates every command queued against the
 			// previous one -- the epoch check in installDelta would drop their
 			// responses anyway, but there is no reason to let them dispatch
-			editQueue = [];
+			cancelQueued();
 			set({
 				scene,
 				derived: deriveScene(scene),
@@ -502,6 +576,8 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 			panelOpen: false,
 			panelTab: "replay",
 			tool: "select",
+			featherMs: DEFAULT_FEATHER_MS,
+			smoothStrength: DEFAULT_SMOOTH_STRENGTH,
 			detailSpanMs: DEFAULT_DETAIL_SPAN,
 			viewportZoom: DEFAULT_VIEWPORT_ZOOM,
 			viewportPan: NO_VIEWPORT_PAN,
@@ -556,6 +632,16 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 			// a rail click is also a request to see the panel
 			setPanelTab: (panelTab) => set({ panelTab, panelOpen: true }),
 			setTool: (tool) => set({ tool }),
+			// a blank number field arrives as NaN and must leave the last good
+			// value alone, matching setOverlay's displayLength rule
+			setFeatherMs: (ms) => {
+				if (!Number.isFinite(ms)) return;
+				set({ featherMs: clampFeather(ms) });
+			},
+			setSmoothStrength: (value) => {
+				if (!Number.isFinite(value)) return;
+				set({ smoothStrength: clampStrength(value) });
+			},
 			setDetailSpan: (spanMs) => set({ detailSpanMs: clampDetailSpan(spanMs) }),
 			setViewportZoom: (zoom, pan) => set({ viewportZoom: clampViewportZoom(zoom), viewportPan: pan }),
 			panViewport: (pan) => set({ viewportPan: pan }),
@@ -695,20 +781,25 @@ export function createViewerStore(deps: IpcDeps): StoreApi<ViewerState> {
 	});
 }
 
-export const viewerStore = createViewerStore({
-	loadReplay: invokeLoadReplay,
-	loadReplayWithBeatmap: invokeLoadReplayWithBeatmap,
-	loadRecentReplay: invokeLoadRecentReplay,
-	getSettings: invokeGetSettings,
-	setOsuStablePath: invokeSetOsuStablePath,
-	setViewerPrefs: invokeSetViewerPrefs,
-	clearRecents: invokeClearRecents,
-	applyEdit: invokeApplyEdit,
-	undo: invokeUndo,
-	redo: invokeRedo,
-	revertAll: invokeRevertAll,
-	resync: invokeResync
-});
+export const viewerStore = createViewerStore(
+	{
+		loadReplay: invokeLoadReplay,
+		loadReplayWithBeatmap: invokeLoadReplayWithBeatmap,
+		loadRecentReplay: invokeLoadRecentReplay,
+		getSettings: invokeGetSettings,
+		setOsuStablePath: invokeSetOsuStablePath,
+		setViewerPrefs: invokeSetViewerPrefs,
+		clearRecents: invokeClearRecents,
+		applyEdit: invokeApplyEdit,
+		undo: invokeUndo,
+		redo: invokeRedo,
+		revertAll: invokeRevertAll,
+		resync: invokeResync
+	},
+	// every landed splice keeps the gesture preview's pending entries in the
+	// authoritative index space (editor/preview.ts)
+	{ onSplice: (changes) => gesturePreview.applySplice(changes) }
+);
 
 export function useViewerStore<T>(selector: (state: ViewerState) => T): T {
 	return useStore(viewerStore, selector);
