@@ -80,6 +80,36 @@ export function snapDevicePixels(px: number, dpr: number): number {
 	return Math.round(px * ratio) / ratio;
 }
 
+/** the detail tier's lane-layer geometry, exactly as its draw loop computes
+ * it: the layer's css width and the snapped offset its transform applies.
+ * hit-testing inverts pointer positions through these same numbers -- the
+ * live offset is written imperatively per tick and never stored as state,
+ * so a click must recompute it from the same inputs the draw did */
+export interface LaneTransform {
+	layerPx: number;
+	viewStartInLayer: number;
+}
+
+export function laneTransform(
+	neighbourhood: TimeWindow,
+	view: TimeWindow,
+	trackPx: number,
+	dpr: number
+): LaneTransform | null {
+	const viewSpan = view.end - view.start;
+	if (viewSpan <= 0) return null;
+	const layerPx = ((neighbourhood.end - neighbourhood.start) / viewSpan) * trackPx;
+	return { layerPx, viewStartInLayer: snapDevicePixels(timeToPixels(neighbourhood, view.start, layerPx), dpr) };
+}
+
+/** a pointer's track-relative css x -> lane time, through the transform the
+ * pixels on screen were actually drawn with */
+export function laneTimeAtPixel(neighbourhood: TimeWindow, transform: LaneTransform, xPx: number): number {
+	if (transform.layerPx <= 0) return neighbourhood.start;
+	const fraction = (xPx + transform.viewStartInLayer) / transform.layerPx;
+	return neighbourhood.start + fraction * (neighbourhood.end - neighbourhood.start);
+}
+
 /** 1-2-5 decade steps, the intervals a time ruler reads naturally in */
 const NICE_STEPS = [100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000];
 

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	clampSpan,
 	detailSpanForWheel,
+	laneTimeAtPixel,
+	laneTransform,
 	rulerTicks,
 	snapDevicePixels,
 	timeToPixels,
@@ -211,5 +213,50 @@ describe("snapped timeline geometry", () => {
 		}
 		// a zero-length span collapses to exactly nothing; nothing narrower
 		expect(narrowest).toBe(0);
+	});
+});
+
+describe("lane hit inversion", () => {
+	// the draw loop's placement of a mark at time t: neighbourhood-relative
+	// fraction of the layer width, shifted by the snapped layer transform
+	function drawnPixel(
+		neighbourhood: { start: number; end: number },
+		transform: { layerPx: number; viewStartInLayer: number },
+		t: number
+	): number {
+		return windowFraction(neighbourhood, t) * transform.layerPx - transform.viewStartInLayer;
+	}
+
+	test("laneTimeAtPixel round-trips the draw loop's own geometry", () => {
+		const neighbourhood = { start: 10_000, end: 70_000 };
+		const view = { start: 30_000, end: 50_000 };
+		for (const dpr of [1, 1.25, 2]) {
+			const transform = laneTransform(neighbourhood, view, 800, dpr);
+			expect(transform).not.toBeNull();
+			for (const t of [30_000, 31_337, 40_000, 49_999]) {
+				const x = drawnPixel(neighbourhood, transform!, t);
+				expect(laneTimeAtPixel(neighbourhood, transform!, x)).toBeCloseTo(t, 6);
+			}
+		}
+	});
+
+	test("the inversion carries the snapped transform, not the ideal one", () => {
+		// with a fractional dpr the snap shifts the layer by a sub-pixel; an
+		// inversion using the unsnapped offset would disagree with the drawn
+		// pixels by that same sub-pixel
+		const neighbourhood = { start: 0, end: 60_000 };
+		const view = { start: 20_123, end: 40_123 };
+		const transform = laneTransform(neighbourhood, view, 777, 1.25)!;
+		const ideal = timeToPixels(neighbourhood, view.start, transform.layerPx);
+		expect(transform.viewStartInLayer).toBe(snapDevicePixels(ideal, 1.25));
+		// the window's left edge inverts to view.start through the snapped
+		// offset exactly when x = 0 means "at the drawn left edge"
+		const atLeftEdge = laneTimeAtPixel(neighbourhood, transform, 0);
+		const drawnLeft = windowFraction(neighbourhood, atLeftEdge) * transform.layerPx - transform.viewStartInLayer;
+		expect(drawnLeft).toBeCloseTo(0, 6);
+	});
+
+	test("a degenerate view yields no transform", () => {
+		expect(laneTransform({ start: 0, end: 100 }, { start: 50, end: 50 }, 800, 1)).toBeNull();
 	});
 });
