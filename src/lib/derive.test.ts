@@ -51,6 +51,67 @@ describe("deriveScene", () => {
 	});
 });
 
+describe("deriveScene replay stats", () => {
+	test("simulated totals are primary, with the header value riding along as the reference", () => {
+		// the default scene's header says 1×300 (SS) while its simulation says
+		// 1×100 -- exactly the drift an edit produces
+		const { stats } = deriveScene(testScene());
+		expect(stats.simulated).toBe(true);
+		expect(stats.count300).toEqual({ value: 0, header: 1 });
+		expect(stats.count100).toEqual({ value: 1, header: 0 });
+		expect(stats.count50).toEqual({ value: 0, header: 0 });
+		expect(stats.countMiss).toEqual({ value: 0, header: 0 });
+		expect(stats.accuracy.value).toBeCloseTo(1 / 3, 9);
+		expect(stats.accuracy.header).toBe(1);
+		expect(stats.grade).toEqual({ value: "D", header: "SS" });
+		expect(stats.maxCombo).toEqual({ value: 1, header: 1 });
+	});
+
+	test("without simulated totals every row falls back to the header value", () => {
+		const { stats } = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+		expect(stats.simulated).toBe(false);
+		expect(stats.count300).toEqual({ value: 1, header: 1 });
+		expect(stats.count100).toEqual({ value: 0, header: 0 });
+		expect(stats.countMiss).toEqual({ value: 0, header: 0 });
+		expect(stats.accuracy).toEqual({ value: 1, header: 1 });
+		expect(stats.grade).toEqual({ value: "SS", header: "SS" });
+		expect(stats.maxCombo).toEqual({ value: 1, header: 1 });
+	});
+
+	test("score and geki/katu are never simulated and stay header-valued", () => {
+		const { stats } = deriveScene(testScene());
+		expect(stats.totalScore).toBe(300);
+		expect(stats.countGeki).toBe(0);
+		expect(stats.countKatsu).toBe(0);
+	});
+
+	test("a miss always costs at least S, whatever the count-share accuracy says", () => {
+		const scene = testScene();
+		const { stats } = deriveScene(
+			testScene({
+				replay: { ...scene.replay, count300: 97, countMiss: 3 },
+				simulation: { status: "notSimulated", reason: "unsupportedMods" }
+			})
+		);
+		// 97×300 over 100 judged = 0.97, which clears the 0.95 S threshold --
+		// the misses still demote to A
+		expect(stats.accuracy.value).toBeCloseTo(0.97, 9);
+		expect(stats.grade.value).toBe("A");
+	});
+
+	test("zero judged hits read as zero accuracy, not NaN", () => {
+		const scene = testScene();
+		const { stats } = deriveScene(
+			testScene({
+				replay: { ...scene.replay, count300: 0, maxCombo: 0 },
+				simulation: { status: "notSimulated", reason: "unsupportedMods" }
+			})
+		);
+		expect(stats.accuracy.value).toBe(0);
+		expect(stats.grade.value).toBe("D");
+	});
+});
+
 describe("deriveScene analysis", () => {
 	test("carries the per-scene analysis alongside the existing derived data", () => {
 		const scene = testScene({
