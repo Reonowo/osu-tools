@@ -60,3 +60,19 @@ Three layers with a strict dependency direction: engine → Tauri app crate → 
 - Commit messages are scope-prefixed lowercase: `viewer/settings: replace the display length slider with a number field`, `engine/formats: ...`.
 - rustfmt `max_width = 110`.
 - `fixtures/path/slider_path.json` intentionally contains the JSON string literals `"Infinity"` and `"NaN"` in float positions; readers must accept them.
+
+## Agent skills
+
+These three files are gitignored local scaffolding, as are the `.scratch/`, `CONTEXT.md`, and `docs/adr/` paths they describe — never stage or commit them.
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, each label string equal to its name, recorded as a `Status:` line per issue file. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

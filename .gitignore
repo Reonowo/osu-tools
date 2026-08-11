@@ -26,4 +26,11 @@ dist-ssr
 docs/superpowers
 TODO.md
 
+# agent skill scaffolding, local only as to not dirty the tree
+.scratch/
+docs/agents/
+docs/adr/
+CONTEXT.md
+CONTEXT-MAP.md
+
 fixtures/replays/local/
