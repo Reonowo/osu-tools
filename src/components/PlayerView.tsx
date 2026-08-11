@@ -1,12 +1,25 @@
 import { useEffect, useRef } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { gesturePreview } from "@/editor/preview";
 import { isFullFrames, remapIndex } from "@/editor/splice";
 import { audioExtendedBounds } from "@/lib/timeline";
 import { htmlAudioAdapter } from "@/playback/clock";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
-import { GameplayRenderer } from "@/renderer/GameplayRenderer";
+import { GameplayRenderer, type EditChromeSources } from "@/renderer/GameplayRenderer";
+import { effectiveOverlays } from "@/state/defaults";
 import { useViewerStore, viewerStore } from "@/state/store";
+
+// the one wiring of the renderer's edit-chrome getters: selection straight
+// off the store, preview and shapes off the imperative gesture module. a
+// module const because both attach points (renderer creation and the mode
+// effect) must hand over the identical sources
+const editChromeSources: EditChromeSources = {
+	selection: () => viewerStore.getState().editor?.frameSelection ?? [],
+	preview: () => gesturePreview.snapshot(),
+	shape: () => gesturePreview.shape,
+	brush: () => gesturePreview.brush
+};
 
 export function PlayerView() {
 	const hostRef = useRef<HTMLDivElement>(null);
@@ -14,6 +27,7 @@ export function PlayerView() {
 	const sceneId = useViewerStore((s) => s.sceneId);
 	const editRevision = useViewerStore((s) => s.editRevision);
 	const overlays = useViewerStore((s) => s.overlays);
+	const mode = useViewerStore((s) => s.mode);
 	const effects = useViewerStore((s) => s.effects);
 	const viewportZoom = useViewerStore((s) => s.viewportZoom);
 	const viewportPan = useViewerStore((s) => s.viewportPan);
@@ -35,8 +49,9 @@ export function PlayerView() {
 			// uses the persisted value instead of rebuilding to reach it
 			renderer.setEffects(state.effects);
 			renderer.setScene(state.scene, state.derived);
-			renderer.setOverlays(state.overlays);
+			renderer.setOverlays(effectiveOverlays(state.overlays, state.mode));
 			renderer.setViewport(state.viewportZoom, state.viewportPan);
+			if (state.mode === "edit") renderer.setEditChromeSources(editChromeSources);
 			const loop = () => {
 				const t = playbackClock.tick();
 				renderer.render(t);
@@ -61,6 +76,9 @@ export function PlayerView() {
 	// attaches and releases it if the component itself unmounts
 	useEffect(() => {
 		const { scene, derived } = viewerStore.getState();
+		// nothing pending can outlive its session (install() already settled
+		// the queued commits as cancelled)
+		gesturePreview.discardAll();
 		rendererRef.current?.setScene(scene, derived);
 		if (scene === null || derived === null) return;
 
@@ -113,6 +131,10 @@ export function PlayerView() {
 		if (scene === null || derived === null) return;
 		const selected = frameCursor.selectedIndex();
 		rendererRef.current?.setScene(scene, derived);
+		// only after the renderer holds the post-delta frames: dropping a
+		// landed preview any earlier would flash the pre-edit state between
+		// the store install and this re-feed
+		gesturePreview.settleRendered();
 		const bounds = audioExtendedBounds(derived.bounds, audioDurationMs);
 		playbackClock.setBounds(bounds.minTime, bounds.maxTime);
 		frameCursor.setFrames(scene.frames.map((f) => f.time));
@@ -140,9 +162,20 @@ export function PlayerView() {
 		});
 	}, []);
 
+	// the fold, not the stored preferences: edit mode force-draws the cursor
+	// path and frame markers (state/defaults.ts effectiveOverlays), and the
+	// stored object is never rewritten, so leaving edit mode restores exactly
+	// the configured view
 	useEffect(() => {
-		rendererRef.current?.setOverlays(overlays);
-	}, [overlays]);
+		rendererRef.current?.setOverlays(effectiveOverlays(overlays, mode));
+	}, [overlays, mode]);
+
+	// the edit chrome exists only in edit mode: watch wires the sources to
+	// null and every chrome visual vanishes without a scene rebuild. the
+	// getters read live, so this effect runs on mode changes only
+	useEffect(() => {
+		rendererRef.current?.setEditChromeSources(mode === "edit" ? editChromeSources : null);
+	}, [mode]);
 
 	useEffect(() => {
 		rendererRef.current?.setEffects(effects);
