@@ -13,6 +13,7 @@ import {
 	reconcileActiveDrawables,
 	steppedViewportZoom,
 	textureDensity,
+	viewportPointToPlayfield,
 	viewportTransform,
 	VIEWPORT_ZOOM_MAX,
 	VIEWPORT_ZOOM_MIN,
@@ -354,6 +355,59 @@ describe("viewportTransform", () => {
 			expect(panned.y - base.y).toBe(91);
 			expect(panned.scale).toBe(base.scale);
 		}
+	});
+});
+
+describe("screen point <-> playfield point inversion", () => {
+	// the forward transform, local to the test: production only needs the
+	// inverse (pointer -> osu!px); pixi applies the forward one when drawing
+	function playfieldPointToViewport(
+		w: number,
+		h: number,
+		zoom: number,
+		pan: { x: number; y: number },
+		point: { x: number; y: number }
+	) {
+		const t = viewportTransform(w, h, zoom, pan);
+		return { x: t.x + point.x * t.scale, y: t.y + point.y * t.scale };
+	}
+
+	const CASES = [
+		{ w: 1280, h: 720, zoom: 1, pan: NO_VIEWPORT_PAN },
+		{ w: 1280, h: 720, zoom: 2.5, pan: { x: -80, y: 45 } },
+		{ w: 1024, h: 768, zoom: 4, pan: { x: 300, y: -200 } },
+		{ w: 640, h: 900, zoom: 0.5, pan: NO_VIEWPORT_PAN }
+	];
+
+	test("round-trips under zoom and pan, both directions", () => {
+		for (const { w, h, zoom, pan } of CASES) {
+			for (const point of [
+				{ x: 0, y: 0 },
+				{ x: 256, y: 192 },
+				{ x: 512, y: 384 },
+				{ x: 123.456, y: 77.7 }
+			]) {
+				const screen = playfieldPointToViewport(w, h, zoom, pan, point);
+				const back = viewportPointToPlayfield(w, h, zoom, pan, screen)!;
+				expect(back.x).toBeCloseTo(point.x, 9);
+				expect(back.y).toBeCloseTo(point.y, 9);
+			}
+			const screenPoint = { x: 100, y: 200 };
+			const world = viewportPointToPlayfield(w, h, zoom, pan, screenPoint)!;
+			const forward = playfieldPointToViewport(w, h, zoom, pan, world);
+			expect(forward.x).toBeCloseTo(screenPoint.x, 9);
+			expect(forward.y).toBeCloseTo(screenPoint.y, 9);
+		}
+	});
+
+	test("the playfield centre sits under the host centre plus the pan", () => {
+		const world = viewportPointToPlayfield(1280, 720, 2, { x: -50, y: 30 }, { x: 1280 / 2 - 50, y: 720 / 2 + 30 })!;
+		expect(world.x).toBeCloseTo(256, 9);
+		expect(world.y).toBeCloseTo(192, 9);
+	});
+
+	test("a zero-size host has no world point under any pixel", () => {
+		expect(viewportPointToPlayfield(0, 0, 1, NO_VIEWPORT_PAN, { x: 0, y: 0 })).toBeNull();
 	});
 });
 

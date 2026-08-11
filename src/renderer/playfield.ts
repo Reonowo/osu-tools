@@ -77,6 +77,23 @@ export function viewportTransform(hostW: number, hostH: number, zoom: number, pa
 	};
 }
 
+/** the playfield point under a host css pixel: the inverse of
+ * viewportTransform for a single point, which is what turns a pointer event
+ * into osu!px for the edit tools. null when the host has no size -- a
+ * zero-scale transform maps every world point to one pixel and admits no
+ * inverse */
+export function viewportPointToPlayfield(
+	hostW: number,
+	hostH: number,
+	zoom: number,
+	pan: ViewportPan,
+	point: { x: number; y: number }
+): { x: number; y: number } | null {
+	const t = viewportTransform(hostW, hostH, zoom, pan);
+	if (t.scale === 0) return null;
+	return { x: (point.x - t.x) / t.scale, y: (point.y - t.y) / t.scale };
+}
+
 /** how far each axis may pan before the pannable area's edge would come
  * inside the viewport's. zero on both axes until the area outgrows the host,
  * which the 0.8 fit means cannot happen at zoom 1 -- so the playfield stays
