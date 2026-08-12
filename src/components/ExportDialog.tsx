@@ -40,6 +40,7 @@ type Phase =
 
 export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
 	const osrPath = useViewerStore((s) => s.osrPath);
+	const incompleteness = useViewerStore((s) => s.scene?.incompleteness ?? null);
 	// the session identity, not the path: reloading the same .osr installs a
 	// new scene under an unchanged osrPath, and that still has to reset the
 	// dialog and retire any request belonging to the session it replaced
@@ -119,7 +120,7 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 			<DialogContent className="sm:max-w-[452px]">
 				<DialogHeader>
 					<DialogTitle>export replay</DialogTitle>
-					<DialogDescription>{expectationCopy(pathKind)}</DialogDescription>
+					<DialogDescription>{expectationCopy(pathKind, incompleteness !== null)}</DialogDescription>
 				</DialogHeader>
 
 				{phase.step === "done" ? (

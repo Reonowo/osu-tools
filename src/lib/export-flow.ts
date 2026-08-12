@@ -14,11 +14,19 @@ export function exportPathKind(framesDirty: boolean, metadataDirty: boolean): Ex
 	return "passthrough";
 }
 
-/** what the user should expect BEFORE the file exists, per path */
-export function expectationCopy(kind: ExportPathKind): string {
+/** what the user should expect BEFORE the file exists, per path. an
+ * incomplete play's regenerating export is honest-by-construction: the
+ * derived fields describe the exported frames' full-map simulation, decayed
+ * tail included, and the copy says so before the user commits */
+export function expectationCopy(kind: ExportPathKind, incomplete = false): string {
 	switch (kind) {
-		case "regenerating":
-			return "frames were edited: every derived header field is regenerated from the re-simulated timeline, the life bar is written empty, and the replay hash is recomputed";
+		case "regenerating": {
+			const base =
+				"frames were edited: every derived header field is regenerated from the re-simulated timeline, the life bar is written empty, and the replay hash is recomputed";
+			const endedEarly =
+				". this play ended early, so the regenerated fields describe the exported frames simulated over the whole map — every object past the end of the frames counts as a miss";
+			return incomplete ? base + endedEarly : base;
+		}
 		case "carried":
 			return "only metadata changed: the frame payload is carried byte-for-byte under the edited header, with the replay hash recomputed and the life bar written empty";
 		case "passthrough":

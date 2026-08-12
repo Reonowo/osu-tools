@@ -27,6 +27,17 @@ describe("exportPathKind", () => {
 		expect(expectationCopy("passthrough")).toContain("byte-identically");
 		expect(expectationCopy("regenerating")).toContain("regenerated");
 	});
+
+	test("an incomplete play's regenerating copy states the honest-by-construction behaviour", () => {
+		const copy = expectationCopy("regenerating", true);
+		expect(copy).toContain("ended early");
+		expect(copy).toContain("counts as a miss");
+		// the base regenerating expectations still lead the sentence
+		expect(copy).toContain("regenerated");
+		// the marker changes nothing for the paths that regenerate nothing
+		expect(expectationCopy("carried", true)).toBe(expectationCopy("carried"));
+		expect(expectationCopy("passthrough", true)).toBe(expectationCopy("passthrough"));
+	});
 });
 
 describe("defaultExportPath", () => {
