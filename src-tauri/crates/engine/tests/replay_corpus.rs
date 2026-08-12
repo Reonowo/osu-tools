@@ -4,6 +4,7 @@ use engine::beatmap::process_beatmap;
 use engine::formats::beatmap::decode_beatmap_path;
 use engine::formats::osr::decode_osr;
 use engine::replay::frames::convert_frames;
+use engine::score::{peppy_stars, section_tally, total_score, ScoreContext, NOMOD_SCORE_MULTIPLIER};
 use engine::simulation::simulate;
 
 /// spec parity rule 2: the .osr header's counts and max combo are the oracle.
@@ -65,6 +66,29 @@ fn local_nomod_replays_self_verify() {
             ),
             "{name}: simulated totals diverge from the .osr header"
         );
+
+        // the derived fields the export regenerates, against the same oracle.
+        // this is the only oracle geki/katu have (the pinned lazer encoder
+        // writes zeros for osu!), and the first observable check on achieved
+        // scorev1 -- a mismatch that implicates simulation itself (e.g.
+        // spinner bonus-spin counts) is a simulation finding to file, never
+        // something to patch silently inside the score module
+        let tally = section_tally(&processed, &timeline);
+        let stars =
+            peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap_or_else(|e| panic!("{name}: stars: {e}"));
+        assert_eq!(
+            (
+                tally.count_geki,
+                tally.count_katsu,
+                total_score(&timeline, stars, NOMOD_SCORE_MULTIPLIER),
+            ),
+            (
+                u32::from(osr.header.count_geki),
+                u32::from(osr.header.count_katsu),
+                u64::from(osr.header.total_score),
+            ),
+            "{name}: derived geki/katu/total score diverge from the .osr header"
+        );
         checked += 1;
     }
     eprintln!("corpus: verified {checked} replays");
@@ -123,6 +147,31 @@ fn synthetic_full_combo_on_the_fixture_map() {
         })
         .sum();
     assert_eq!(timeline.totals.max_combo, expected_max_combo);
+
+    // a full combo of nothing but greats makes every section geki, so the
+    // committed path also exercises the corpus's derived-field assertions
+    let tally = section_tally(&processed, &timeline);
+    assert_eq!(
+        (tally.count_geki, tally.count_katsu, tally.sections_with_miss),
+        (tally.sections, 0, 0),
+        "an all-great full combo is all geki"
+    );
+
+    // and the achieved total on this spinner-free full combo is exactly the
+    // theoretical maximum lazer's own simulator dumped for the map
+    let dump: fixture_util::LegacyScoreAttributesDump =
+        fixture_util::load_json("score/legacy_score_attributes.json");
+    let attributes = dump
+        .maps
+        .iter()
+        .find(|m| m.name == "slider-zoo-v14")
+        .expect("the score dump family covers the fixture maps");
+    let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap();
+    assert_eq!(
+        total_score(&timeline, stars, NOMOD_SCORE_MULTIPLIER),
+        attributes.accuracy_score + attributes.combo_score,
+        "simulated full-combo total matches lazer's dumped attributes"
+    );
 }
 
 /// shared test-only frame builder for the synthetic full-combo test above
