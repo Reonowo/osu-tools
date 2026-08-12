@@ -4,6 +4,7 @@ import type {
 	EditingSettings,
 	EditOp,
 	EffectSettings,
+	ExportResult,
 	IpcError,
 	LoadedScene,
 	OverlaySettings,
@@ -22,7 +23,9 @@ const IPC_ERROR_KINDS = new Set([
 	"internal",
 	"invalidEdit",
 	"staleSession",
-	"notEditable"
+	"notEditable",
+	"fileExists",
+	"exportOverflow"
 ]);
 
 export function isIpcError(e: unknown): e is IpcError {
@@ -93,4 +96,8 @@ export function invokeRevertAll(epoch: number): Promise<EditDelta> {
 
 export function invokeResync(epoch: number): Promise<EditDelta> {
 	return invoke<EditDelta>("resync", { epoch });
+}
+
+export function invokeExportReplay(epoch: number, destPath: string, overwrite: boolean): Promise<ExportResult> {
+	return invoke<ExportResult>("export_replay", { epoch, destPath, overwrite });
 }

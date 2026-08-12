@@ -86,7 +86,9 @@ describe("scene contract mirror", () => {
 			{ kind: "unsupportedMode", mode: "Taiko" },
 			{ kind: "resourceLimit", cap: "MAX_OSZ_ENTRIES", limit: 1, actual: 2 },
 			{ kind: "io", message: "denied" },
-			{ kind: "internal", message: "x" }
+			{ kind: "internal", message: "x" },
+			{ kind: "fileExists", path: "C:\\out.osr" },
+			{ kind: "exportOverflow", field: "maxCombo" }
 		];
 		for (const e of errors) expect(isIpcError(e)).toBe(true);
 		expect(isIpcError(new Error("nope"))).toBe(false);

@@ -59,5 +59,17 @@ export function describeIpcError(e: IpcError): { title: string; detail: string; 
 			};
 		case "notEditable":
 			return { title: "this replay can't be frame-edited", detail: e.reason, recovery: null };
+		case "fileExists":
+			return {
+				title: "file already exists",
+				detail: `${e.path} already exists; confirm the overwrite or pick another destination`,
+				recovery: null
+			};
+		case "exportOverflow":
+			return {
+				title: "a derived value doesn't fit the header",
+				detail: `${e.field} exceeds its on-disk width; the file can't claim it honestly`,
+				recovery: null
+			};
 	}
 }

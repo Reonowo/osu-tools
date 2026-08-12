@@ -13,6 +13,30 @@ export interface LoadedScene {
 	audioPath: string | null;
 	backgroundPath: string | null;
 	warnings: LoadedSceneWarning[];
+	/// shipped only for pre-lazer authoritative scenes; always describes the
+	/// loaded file, never in-session edits
+	integrity: IntegrityReport | null;
+}
+
+export interface IntegrityReport {
+	rows: IntegrityRow[];
+	crossCheck: {
+		sections: number;
+		gekiKatsu: number;
+		/// sections − (geki + katu): signed, so an impossible header reads as
+		/// the inconsistency it is
+		sectionsWithMiss: number;
+		countMiss: number;
+	};
+	lifeBarPresent: boolean;
+}
+
+/// one compared field; `perfect` rides as 0/1 under the shared shape
+export interface IntegrityRow {
+	field: string;
+	header: number;
+	simulated: number;
+	match: boolean;
 }
 
 export interface BeatmapMeta {
@@ -71,6 +95,26 @@ export interface IndexedFrame {
 	frame: FrameDto;
 }
 
+/// export_replay's answer: where the file landed, its size, and -- for
+/// regenerating exports only -- the nine values the written header claims
+export interface ExportResult {
+	path: string;
+	bytes: number;
+	regenerated: RegeneratedFields | null;
+}
+
+export interface RegeneratedFields {
+	count300: number;
+	count100: number;
+	count50: number;
+	countGeki: number;
+	countKatsu: number;
+	countMiss: number;
+	maxCombo: number;
+	perfect: boolean;
+	totalScore: number;
+}
+
 export type FrameChanges =
 	| { updated: IndexedFrame[]; inserted: IndexedFrame[]; removed: number[] }
 	| { fullFrames: FrameDto[] };
@@ -80,7 +124,12 @@ export interface EditDelta {
 	frames: FrameChanges | null;
 	playerName: string | null;
 	timestampTicks: string;
+	/// the union of the two split flags, kept for the dirty chip
 	dirty: boolean;
+	/// the document's dirty split: the export dialog keys its path
+	/// expectation off which kind of dirty the session is
+	framesDirty: boolean;
+	metadataDirty: boolean;
 	canUndo: boolean;
 	canRedo: boolean;
 	history: { labels: string[]; cursor: number };
@@ -195,7 +244,9 @@ export type IpcError =
 	| { kind: "internal"; message: string }
 	| { kind: "invalidEdit"; message: string }
 	| { kind: "staleSession" }
-	| { kind: "notEditable"; reason: string };
+	| { kind: "notEditable"; reason: string }
+	| { kind: "fileExists"; path: string }
+	| { kind: "exportOverflow"; field: string };
 
 /** mirrors settings.rs OverlayPrefs */
 export interface OverlaySettings {
