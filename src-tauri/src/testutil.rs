@@ -57,6 +57,17 @@ pub fn osr_bytes(
     osr_bytes_versioned(beatmap_md5, mods, actions, 20151228)
 }
 
+/// osr_bytes with a header mutation applied before encoding -- the
+/// incompleteness tests need judged counts summing to the map's object count
+pub fn osr_bytes_with(
+    beatmap_md5: &str,
+    mods: u32,
+    actions: Option<Vec<engine::formats::osr::ReplayAction>>,
+    mutate: impl FnOnce(&mut engine::formats::osr::OsrHeader),
+) -> Vec<u8> {
+    osr_bytes_inner(beatmap_md5, mods, actions, 20151228, mutate)
+}
+
 /// osr_bytes with an explicit header version -- the lazer-native gating
 /// tests need version >= formats::osr::FIRST_LAZER_VERSION
 pub fn osr_bytes_versioned(
@@ -64,6 +75,16 @@ pub fn osr_bytes_versioned(
     mods: u32,
     actions: Option<Vec<engine::formats::osr::ReplayAction>>,
     version: u32,
+) -> Vec<u8> {
+    osr_bytes_inner(beatmap_md5, mods, actions, version, |_| {})
+}
+
+fn osr_bytes_inner(
+    beatmap_md5: &str,
+    mods: u32,
+    actions: Option<Vec<engine::formats::osr::ReplayAction>>,
+    version: u32,
+    mutate: impl FnOnce(&mut engine::formats::osr::OsrHeader),
 ) -> Vec<u8> {
     use engine::formats::osr::{encode_osr, EncodeOptions, OsrFile, PayloadSource, ReplayAction};
     let actions = actions.unwrap_or_else(|| {
@@ -90,6 +111,7 @@ pub fn osr_bytes_versioned(
     });
     let mut header = test_header(beatmap_md5, mods);
     header.version = version;
+    mutate(&mut header);
     let file = OsrFile {
         header,
         actions,

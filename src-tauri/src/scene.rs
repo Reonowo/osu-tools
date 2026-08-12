@@ -39,6 +39,24 @@ pub struct LoadedScene {
     /// authoritative scenes; always describes the loaded file, never
     /// in-session edits
     pub integrity: Option<IntegrityDto>,
+    /// present when the play ended early: the header judged fewer objects
+    /// than the map has (the corpus admission identity, computed at load
+    /// from the header counts alone). the report keeps its rows but the
+    /// panel stops rendering differences as verdicts, and the export
+    /// dialog states what a regenerating export of such a play contains.
+    /// withheld on a consented beatmap mismatch, where the object count
+    /// describes the wrong map
+    pub incompleteness: Option<IncompletenessDto>,
+}
+
+/// judged-vs-total identity carried on the wire; `judged < total` by
+/// construction (a header claiming more than the map has is not "ended
+/// early" and keeps the ordinary mismatch verdicts)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncompletenessDto {
+    pub judged: u32,
+    pub total: u32,
 }
 
 /// the integrity report (spec, integrity report section): per-field
@@ -66,18 +84,21 @@ pub struct IntegrityRowDto {
 }
 
 /// TODO.md's identity stated outright: `sections - (geki + katsu)` is the
-/// number of sections the header claims contained a miss. `geki_katsu` reads
-/// the header's own fields (the analyst's view of the loaded file), and the
-/// implied count is signed so a header claiming more geki+katu than the map
-/// has sections reads as the inconsistency it is
+/// number of sections the header claims ended without a burst -- stable
+/// awards neither geki nor katu to a section containing a miss OR a 50.
+/// `geki_katsu` reads the header's own fields (the analyst's view of the
+/// loaded file), and the implied count is signed so a header claiming more
+/// geki+katu than the map has sections reads as the inconsistency it is
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CrossCheckDto {
     pub sections: u32,
     pub geki_katsu: u32,
-    pub sections_with_miss: i64,
-    /// the header's miss count, restated beside the implication it checks
+    pub sections_without_burst: i64,
+    /// the header's miss and 50 counts, restated beside the implication
+    /// they bound: each burst-free section holds at least one of them
     pub count_miss: u16,
+    pub count_50: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,8 +354,9 @@ impl IntegrityDto {
             cross_check: CrossCheckDto {
                 sections: derived.sections,
                 geki_katsu,
-                sections_with_miss: i64::from(derived.sections) - i64::from(geki_katsu),
+                sections_without_burst: i64::from(derived.sections) - i64::from(geki_katsu),
                 count_miss: header.count_miss,
+                count_50: header.count_50,
             },
             // an empty life graph carries no information either way, so
             // "present" means non-empty
@@ -355,6 +377,7 @@ pub fn assemble_scene(
     background_path: Option<PathBuf>,
     warnings: Vec<Warning>,
     integrity: Option<IntegrityDto>,
+    incompleteness: Option<IncompletenessDto>,
 ) -> LoadedScene {
     LoadedScene {
         epoch: 0,
@@ -397,6 +420,7 @@ pub fn assemble_scene(
         background_path: background_path.map(|p| p.to_string_lossy().into_owned()),
         warnings,
         integrity,
+        incompleteness,
     }
 }
 
@@ -452,6 +476,7 @@ mod tests {
                 count_miss: 0,
                 max_combo: 1,
             },
+            spinner_scoring: Vec::new(),
         };
         let v = serde_json::to_value(SimulationDto::authoritative(&timeline)).unwrap();
         assert_eq!(v["status"], "authoritative");
@@ -509,6 +534,7 @@ mod tests {
             None,
             vec![crate::error::Warning::AudioMissing],
             None,
+            None,
         );
         let v = serde_json::to_value(&scene).unwrap();
 
@@ -530,6 +556,17 @@ mod tests {
         assert_eq!(v["backgroundPath"], serde_json::Value::Null);
         assert_eq!(v["warnings"][0]["kind"], "audioMissing");
         assert_eq!(v["integrity"], serde_json::Value::Null);
+        assert_eq!(v["incompleteness"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn incompleteness_serializes_with_the_frozen_wire_field_names() {
+        let v = serde_json::to_value(IncompletenessDto {
+            judged: 480,
+            total: 1544,
+        })
+        .unwrap();
+        assert_eq!(v, json!({ "judged": 480, "total": 1544 }));
     }
 
     #[test]
@@ -550,7 +587,7 @@ mod tests {
             perfect: true,
             total_score: 300,
             sections: 105,
-            sections_with_miss: 2,
+            sections_without_burst: 2,
         };
         let report = IntegrityDto::compare(&header, &derived);
         let v = serde_json::to_value(&report).unwrap();
@@ -591,7 +628,7 @@ mod tests {
 
         assert_eq!(
             v["crossCheck"],
-            serde_json::json!({ "sections": 105, "gekiKatsu": 103, "sectionsWithMiss": 2, "countMiss": 2 })
+            serde_json::json!({ "sections": 105, "gekiKatsu": 103, "sectionsWithoutBurst": 2, "countMiss": 2, "count50": 0 })
         );
         assert_eq!(v["lifeBarPresent"], true);
 

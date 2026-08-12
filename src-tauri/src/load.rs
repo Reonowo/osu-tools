@@ -117,6 +117,18 @@ pub(crate) struct BeatmapSource {
     pub origin_path: PathBuf,
 }
 
+/// the judged-count identity vs the map's object count, from the header's
+/// own fields. `judged < total` marks the play ended early; an object-free
+/// map (nothing to judge) never marks
+fn incompleteness_marker(
+    header: &engine::formats::osr::OsrHeader,
+    object_count: i32,
+) -> Option<crate::scene::IncompletenessDto> {
+    let judged = header.judged_count();
+    let total = u32::try_from(object_count).ok()?;
+    (total > 0 && judged < total).then_some(crate::scene::IncompletenessDto { judged, total })
+}
+
 pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadOutcome, IpcError> {
     let document = ReplayDocument::new(osr, source.map.format_version);
     let header = document.header().clone();
@@ -139,6 +151,17 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     }
 
     let score_context = ScoreContext::from_beatmap(&source.map);
+
+    // the corpus admission identity, read off the header alone: a play
+    // whose judged count falls short of the map's object count ended early.
+    // withheld on a consented mismatch (the object count describes the
+    // wrong map); a header claiming MORE than the map has is not "ended
+    // early" and keeps the ordinary mismatch verdicts
+    let incompleteness = if source.mismatch {
+        None
+    } else {
+        incompleteness_marker(&header, score_context.object_count)
+    };
 
     // mismatch wins as the reason: the geometry may be wrong, so even a
     // nomod timeline would be fiction. unsupported mods still render with
@@ -204,6 +227,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         background_path,
         warnings,
         integrity,
+        incompleteness,
     );
     Ok(LoadOutcome {
         scene,
@@ -683,6 +707,84 @@ mod tests {
         let (_dir2, osr_path, osu_path, _md5) = fixture_setup(16);
         let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
         assert!(outcome.scene.integrity.is_none());
+    }
+
+    #[test]
+    fn incomplete_plays_carry_the_marker_and_complete_plays_do_not() {
+        // the synthetic header judges exactly 1 object; the fixture map has
+        // more, so the play reads as ended early
+        let (_dir, osr_path, osu_path, md5) = fixture_setup(0);
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        let marker = outcome
+            .scene
+            .incompleteness
+            .expect("a header judging 1 of many objects marks incomplete");
+        assert_eq!(marker.judged, 1);
+        assert_eq!(marker.total as usize, outcome.scene.render_plan.objects.len());
+
+        // a header whose judged counts sum to the object count is complete,
+        // however the judgements split across the fields
+        let dir = tempfile::tempdir().unwrap();
+        let total = marker.total;
+        let osr_path = dir.path().join("complete.osr");
+        std::fs::write(
+            &osr_path,
+            crate::testutil::osr_bytes_with(&md5, 0, None, |header| {
+                header.count_300 = 1;
+                header.count_100 = 1;
+                header.count_miss = (total - 2) as u16;
+            }),
+        )
+        .unwrap();
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert!(outcome.scene.incompleteness.is_none());
+
+        // a header claiming MORE judgements than the map has is not "ended
+        // early": it keeps the ordinary mismatch verdicts instead
+        let osr_path = dir.path().join("overcounting.osr");
+        std::fs::write(
+            &osr_path,
+            crate::testutil::osr_bytes_with(&md5, 0, None, |header| {
+                header.count_300 = (total + 5) as u16;
+            }),
+        )
+        .unwrap();
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert!(outcome.scene.incompleteness.is_none());
+    }
+
+    #[test]
+    fn a_consented_mismatch_withholds_the_incompleteness_marker() {
+        // the object count would describe the wrong map, so the identity is
+        // fiction there -- withheld like everything else simulation-derived
+        let (_dir, osr_path, _osu_path, _md5) = fixture_setup(0);
+        let other_dir = tempfile::tempdir().unwrap();
+        let other_osu = other_dir.path().join("other.osu");
+        std::fs::copy(
+            fixtures_dir().join("beatmaps").join("slider-zoo-v14.osu"),
+            &other_osu,
+        )
+        .unwrap();
+        let outcome = load_with_osu_file(&osr_path, &other_osu, true).unwrap();
+        assert!(matches!(
+            outcome.scene.simulation,
+            SimulationDto::NotSimulated {
+                reason: NotSimulatedReason::BeatmapMismatch,
+            }
+        ));
+        assert!(outcome.scene.incompleteness.is_none());
+    }
+
+    #[test]
+    fn the_incompleteness_identity_handles_degenerate_inputs() {
+        let header = crate::testutil::test_header("abc", 0);
+        // judged 1 < total 7: marks
+        let marker = incompleteness_marker(&header, 7).expect("short play marks");
+        assert_eq!((marker.judged, marker.total), (1, 7));
+        // judged == total, judged > total, empty map, negative count: never
+        assert!(incompleteness_marker(&header, 1).is_none());
+        assert!(incompleteness_marker(&header, 0).is_none());
+        assert!(incompleteness_marker(&header, -1).is_none());
     }
 
     #[test]

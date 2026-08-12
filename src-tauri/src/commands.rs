@@ -2108,7 +2108,7 @@ mod tests {
             perfect: false,
             total_score: 0,
             sections: 1,
-            sections_with_miss: 0,
+            sections_without_burst: 0,
         })
         .unwrap_err();
         let mapped = IpcError::ExportOverflow {
