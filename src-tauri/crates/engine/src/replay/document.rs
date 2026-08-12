@@ -1,13 +1,16 @@
 //! the editable replay document. holds the decoded file plus its converted
 //! playback frames, applies mutations through an invertible-op undo/redo
-//! stack, and keys export on the dirty marker per the spec's round-trip
-//! rules: pristine -> verbatim payload + trailer passthrough; dirty ->
-//! reserialize frames, strip the unparsed lazer trailer.
+//! stack, and keys export on its own dirty split: pristine -> verbatim
+//! payload + trailer passthrough; metadata-only dirty -> the frame payload
+//! carried verbatim under the edited header; frames dirty -> reserialize
+//! with caller-supplied derived fields overlaid. every dirty export --
+//! carried included -- recomputes the replay hash, writes the life bar
+//! empty, and strips the unparsed lazer trailer.
 //!
 //! derived header fields (hit counts, max combo, total score) are not
 //! editable here: the tauri layer regenerates them from the recomputed
-//! judgement timeline at export (spec, tauri commands section) and refuses
-//! derived-field export while that derivation is unavailable
+//! judgement timeline via `score::derive_score` and passes the narrowed
+//! result to [`ReplayDocument::export_with_derived`]
 
 use crate::error::{resource_limit, EngineError, Result};
 use crate::formats::beatmap::EARLY_VERSION_TIMING_OFFSET;
@@ -18,6 +21,7 @@ use crate::formats::osr::{
 use crate::limits;
 use crate::math::Vec2;
 use crate::replay::frames::{convert_frames, Buttons, ReplayFrame};
+use crate::score::{replay_hash, DerivedFields};
 
 /// a finite position can still be un-exportable: `formats::osr`'s decoder
 /// (mirroring lazer's `Parsing.ParseFloat`) rejects coordinates outside
@@ -453,7 +457,26 @@ impl ReplayDocument {
         self.redo_stack.len()
     }
 
-    pub fn export(&self) -> Result<Vec<u8>> {
+    /// the three-path export, branching on the document's own dirty split.
+    ///
+    /// - **pristine** -> the original bytes re-emitted identically, trailer
+    ///   included; `derived` is ignored entirely.
+    /// - **metadata-only dirty** -> the compressed frame payload carried
+    ///   verbatim under the edited header, so "frames are untouched" is
+    ///   literally true of the bytes; `derived` is ignored (the original
+    ///   simulation-derived fields still describe the play).
+    /// - **frames dirty** -> the action list reserialized from the edited
+    ///   frames with `derived` overlaid onto the header; refusing (typed)
+    ///   when `derived` is absent, since a frame-dirty header without
+    ///   regenerated fields would describe a different play.
+    ///
+    /// every dirty export -- carried included -- recomputes the replay hash
+    /// from the (possibly edited) player name and timestamp, writes the life
+    /// bar empty (never a stale health graph), and strips the unparsed lazer
+    /// trailer per the final-state passthrough rule. a revert-all'd document
+    /// is content-equal to baseline but marker-dirty, and deliberately takes
+    /// this conservative dirty path rather than passthrough
+    pub fn export_with_derived(&self, derived: Option<&DerivedFields>) -> Result<Vec<u8>> {
         if !self.dirty() {
             return encode_osr(
                 &self.file,
@@ -464,7 +487,43 @@ impl ReplayDocument {
             );
         }
 
-        // dirty: rebuild the action list from the edited frames. deltas are
+        // the dirty-header overlay shared by both dirty paths: recomputed
+        // hash (its inputs include the two editable metadata fields), empty
+        // life bar written as lazer writes it (present-empty string,
+        // legacyscoreencoder.cs:117/202-206)
+        let mut header = self.file.header.clone();
+        header.replay_md5 = Some(replay_hash(
+            header.player_name.as_deref().unwrap_or(""),
+            header.timestamp_ticks,
+        )?);
+        header.life_graph = Some(String::new());
+
+        if !self.frames_dirty() {
+            // carried: the retained compressed payload rides along verbatim
+            let carried = OsrFile {
+                header,
+                actions: Vec::new(),
+                compressed_payload: self.file.compressed_payload.clone(),
+                decompressed_payload: Vec::new(),
+                trailer: Vec::new(),
+            };
+            return encode_osr(
+                &carried,
+                &EncodeOptions {
+                    payload: PayloadSource::VerbatimCompressed,
+                    include_trailer: false,
+                },
+            );
+        }
+
+        let Some(derived) = derived else {
+            return Err(EngineError::InvalidArgument(
+                "a frame-dirty export requires regenerated derived fields".into(),
+            ));
+        };
+        derived.overlay_onto(&mut header);
+
+        // rebuild the action list from the edited frames. deltas are
         // exact because frame times are integral by construction (conversion
         // sums integer deltas; insert_frame enforces integral times). frames
         // the conversion dropped (intro frames, backwards-time frames) do not
@@ -506,7 +565,7 @@ impl ReplayDocument {
         }
 
         let rebuilt = OsrFile {
-            header: self.file.header.clone(),
+            header,
             actions,
             compressed_payload: Vec::new(),
             decompressed_payload: Vec::new(),
@@ -918,6 +977,23 @@ mod tests {
         (bytes, decoded)
     }
 
+    /// arbitrary regenerated fields for tests that exercise the export
+    /// mechanics rather than the derivation (the derivation itself is
+    /// covered by score's own tests and the fixture goldens)
+    fn derived() -> DerivedFields {
+        DerivedFields {
+            count_300: 42,
+            count_100: 7,
+            count_50: 3,
+            count_geki: 11,
+            count_katsu: 5,
+            count_miss: 1,
+            max_combo: 99,
+            perfect: false,
+            total_score: 123_456,
+        }
+    }
+
     /// same header shape as `synthetic_file`, but with a caller-supplied action
     /// list -- used for cases that need actions synthetic_file's fixed list
     /// can't express, like the i64-extreme deltas below
@@ -955,7 +1031,7 @@ mod tests {
         let (bytes, decoded) = canonical_roundtrip(20240101, Vec::new());
         let doc = ReplayDocument::new(decoded, 14);
         assert!(!doc.dirty());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -985,7 +1061,7 @@ mod tests {
         // export keeps the verbatim payload + trailer passthrough
         assert!(!doc.dirty());
         assert!(doc.undo().is_none());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1001,7 +1077,7 @@ mod tests {
         assert!(!doc.dirty());
         assert_eq!(doc.frames()[1].pos, Vec2::new(11.0, 21.0));
         // undone back to the pristine baseline: byte-identical export again
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
 
         assert!(doc.redo().is_some());
         assert!(doc.dirty());
@@ -1029,7 +1105,7 @@ mod tests {
         assert_eq!(doc.header().player_name.as_deref(), Some("edited"));
         doc.undo();
         assert_eq!(doc.header().player_name.as_deref(), Some("someone"));
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1105,7 +1181,7 @@ mod tests {
         assert!(!doc.dirty());
 
         doc.move_frame(0, Vec2::new(131_072.0, -131_072.0)).unwrap();
-        let reopened = decode_osr(&doc.export().unwrap()).unwrap();
+        let reopened = decode_osr(&doc.export_with_derived(Some(&derived())).unwrap()).unwrap();
         assert_eq!(reopened.actions[0].x, 131_072.0);
         assert_eq!(reopened.actions[0].y, -131_072.0);
     }
@@ -1115,7 +1191,7 @@ mod tests {
         let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
         let mut doc = ReplayDocument::new(decoded, 14);
         doc.move_frame(2, Vec2::new(200.0, 210.0)).unwrap();
-        let exported = doc.export().unwrap();
+        let exported = doc.export_with_derived(Some(&derived())).unwrap();
 
         let re = decode_osr(&exported).unwrap();
         // the edited motion survived
@@ -1138,11 +1214,11 @@ mod tests {
         let (bytes, decoded) = canonical_roundtrip(30000001, trailer.clone());
         let mut doc = ReplayDocument::new(decoded, 14);
 
-        assert!(doc.export().unwrap().ends_with(&trailer));
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert!(doc.export_with_derived(None).unwrap().ends_with(&trailer));
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
 
         doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
-        let exported = doc.export().unwrap();
+        let exported = doc.export_with_derived(Some(&derived())).unwrap();
         let re = decode_osr(&exported).unwrap();
         assert_eq!(re.trailer, 0i32.to_le_bytes());
     }
@@ -1168,7 +1244,7 @@ mod tests {
 
         // every rejected call left the document exactly as it started
         assert!(!doc.dirty());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1218,11 +1294,14 @@ mod tests {
         .unwrap();
         let decoded = decode_osr(&bytes).unwrap();
         let mut doc = ReplayDocument::new(decoded, 14);
-        doc.set_player_name(Some("edited".into()));
+        // a frame edit, so the export takes the regenerating path -- the
+        // only one that rebuilds deltas (a metadata edit would carry the
+        // payload verbatim and never reach the subtraction)
+        doc.move_frame(0, Vec2::new(5.0, 5.0)).unwrap();
 
         // must not panic (this is the profile the unguarded subtraction
         // panicked in) and must not return an error
-        assert!(doc.export().is_ok());
+        assert!(doc.export_with_derived(Some(&derived())).is_ok());
     }
 
     #[test]
@@ -1267,7 +1346,7 @@ mod tests {
         assert!(doc.undo().is_some());
         assert_eq!(doc.undo_depth(), 0);
         assert!(!doc.dirty());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1319,7 +1398,7 @@ mod tests {
         assert!(!doc.dirty());
         assert_eq!(doc.undo_depth(), 0);
         assert!(doc.redo().is_none());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1346,7 +1425,7 @@ mod tests {
             .unwrap();
         assert!(report.is_none());
         assert!(!doc.dirty());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1415,7 +1494,7 @@ mod tests {
             EditMember::DeleteFrame { index: 1 },
         ]);
         assert!(matches!(err, Err(EngineError::InvalidArgument(_))));
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1551,7 +1630,7 @@ mod tests {
         assert_eq!(doc.undo_depth(), 0);
         assert!(doc.frames_dirty());
         assert!(doc.dirty());
-        assert_ne!(doc.export().unwrap(), bytes);
+        assert_ne!(doc.export_with_derived(Some(&derived())).unwrap(), bytes);
     }
 
     #[test]
@@ -1585,7 +1664,7 @@ mod tests {
         let mut doc = ReplayDocument::new(decoded, 14);
         assert!(doc.revert_all().is_none());
         assert!(!doc.dirty());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
 
         // an edit undone back to baseline is also at the baseline
         doc.move_frame(0, Vec2::new(5.0, 5.0)).unwrap();
@@ -1621,7 +1700,7 @@ mod tests {
         assert!(!doc.dirty());
         assert_eq!(doc.undo_depth(), 0);
         assert!(doc.redo().is_none(), "a rolled-back step must not be redoable");
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1755,6 +1834,126 @@ mod tests {
         // the restored history still walks all the way back to pristine
         while doc.undo().is_some() {}
         assert!(!doc.dirty());
-        assert_eq!(doc.export().unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_carried_export_reuses_the_compressed_payload_byte_range_verbatim() {
+        let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let payload = decoded.compressed_payload.clone();
+        assert!(!payload.is_empty());
+        let mut doc = ReplayDocument::new(decoded, 14);
+
+        doc.set_player_name(Some("renamed".into()));
+        assert!(doc.metadata_dirty() && !doc.frames_dirty());
+        let exported = doc.export_with_derived(None).unwrap();
+
+        // the source's compressed payload appears as a contiguous byte range
+        // of the output -- carried, not re-compressed
+        assert!(
+            exported.windows(payload.len()).any(|w| w == payload.as_slice()),
+            "the verbatim compressed payload must appear in the carried export"
+        );
+
+        let re = decode_osr(&exported).unwrap();
+        assert_eq!(re.compressed_payload, payload);
+        assert_eq!(re.header.player_name.as_deref(), Some("renamed"));
+        // the original simulation-derived fields still describe the play
+        assert_eq!(re.header.count_300, 10);
+        assert_eq!(re.header.total_score, 123_456);
+        // and the frames decode to the same motion the source carried
+        assert_eq!(re.actions.len(), 4);
+        assert_eq!(re.actions[1].x, 11.0);
+    }
+
+    #[test]
+    fn every_dirty_export_recomputes_the_hash_and_empties_the_life_bar() {
+        // carried: hash covers the edited name and the untouched ticks
+        let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.set_player_name(Some("renamed".into()));
+        let re = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
+        assert_eq!(
+            re.header.replay_md5.as_deref(),
+            Some(crate::score::replay_hash("renamed", 638_712_000_000_000_000).unwrap().as_str())
+        );
+        assert_eq!(re.header.life_graph.as_deref(), Some(""));
+
+        // regenerating: same overlay on the frame-dirty path
+        let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+        let re = decode_osr(&doc.export_with_derived(Some(&derived())).unwrap()).unwrap();
+        assert_eq!(
+            re.header.replay_md5.as_deref(),
+            Some(crate::score::replay_hash("someone", 638_712_000_000_000_000).unwrap().as_str())
+        );
+        assert_eq!(re.header.life_graph.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_carried_export_strips_the_lazer_trailer() {
+        let trailer = vec![0x04, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef];
+        let (_, decoded) = canonical_roundtrip(30000001, trailer);
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.set_timestamp_ticks(638_000_000_000_000_000);
+        let re = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
+        // the framed empty score-info array replaces the stripped blob
+        assert_eq!(re.trailer, 0i32.to_le_bytes());
+    }
+
+    #[test]
+    fn a_regenerating_export_overlays_the_derived_fields() {
+        let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+
+        let fields = derived();
+        let re = decode_osr(&doc.export_with_derived(Some(&fields)).unwrap()).unwrap();
+        assert_eq!(re.header.count_300, fields.count_300);
+        assert_eq!(re.header.count_100, fields.count_100);
+        assert_eq!(re.header.count_50, fields.count_50);
+        assert_eq!(re.header.count_geki, fields.count_geki);
+        assert_eq!(re.header.count_katsu, fields.count_katsu);
+        assert_eq!(re.header.count_miss, fields.count_miss);
+        assert_eq!(re.header.max_combo, fields.max_combo);
+        assert_eq!(re.header.perfect, fields.perfect);
+        assert_eq!(re.header.total_score, fields.total_score);
+    }
+
+    #[test]
+    fn a_frame_dirty_export_without_derived_fields_fails_typed() {
+        let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+        assert!(matches!(
+            doc.export_with_derived(None),
+            Err(EngineError::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
+    fn a_reverted_document_exports_through_the_regenerating_path() {
+        // TODO.md's revert-all corner: content-equal to baseline but
+        // marker-dirty on both kinds, so export deliberately reserializes
+        // (hash recomputed, life bar emptied, trailer stripped) instead of
+        // passing the original bytes through
+        let (bytes, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.set_player_name(Some("renamed".into()));
+        doc.revert_all().unwrap();
+        assert!(doc.frames_dirty() && doc.metadata_dirty());
+
+        // the marker-dirty document refuses a derived-free export like any
+        // frame-dirty one
+        assert!(doc.export_with_derived(None).is_err());
+
+        let exported = doc.export_with_derived(Some(&derived())).unwrap();
+        assert_ne!(exported, bytes, "revert-all must not silently passthrough");
+        let re = decode_osr(&exported).unwrap();
+        // baseline content under a conservative dirty header
+        assert_eq!(re.header.player_name.as_deref(), Some("someone"));
+        assert_eq!(re.header.life_graph.as_deref(), Some(""));
+        assert_eq!(re.actions.len(), 4);
     }
 }
