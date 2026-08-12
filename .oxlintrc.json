@@ -8,5 +8,5 @@
 	"env": {
 		"builtin": true
 	},
-	"ignorePatterns": ["src-tauri/"]
+	"ignorePatterns": ["src-tauri/", "fixtures/", ".claude/"]
 }

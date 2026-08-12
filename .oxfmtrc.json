@@ -6,5 +6,5 @@
 	"singleQuote": false,
 	"trailingComma": "none",
 	"printWidth": 120,
-	"ignorePatterns": ["src-tauri/"]
+	"ignorePatterns": ["src-tauri/", "fixtures/", "bun.lock", ".claude/"]
 }
