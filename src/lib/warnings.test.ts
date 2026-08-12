@@ -20,6 +20,8 @@ const identityDelta: EditDelta = {
 	playerName: "p",
 	timestampTicks: "0",
 	dirty: false,
+	framesDirty: false,
+	metadataDirty: false,
 	canUndo: false,
 	canRedo: false,
 	history: { labels: [], cursor: 0 },
@@ -44,7 +46,8 @@ describe("selectWarnings identity stability", () => {
 		undo: async () => identityDelta,
 		redo: async () => identityDelta,
 		revertAll: async () => identityDelta,
-		resync: async () => identityDelta
+		resync: async () => identityDelta,
+		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null })
 	};
 
 	test("returns a referentially stable value with no scene loaded", () => {

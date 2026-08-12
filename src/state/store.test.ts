@@ -70,6 +70,7 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 		redo: async () => identityDelta,
 		revertAll: async () => identityDelta,
 		resync: async () => identityDelta,
+		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null }),
 		...overrides
 	};
 }
@@ -84,6 +85,8 @@ const identityDelta: EditDelta = {
 	playerName: "p",
 	timestampTicks: "0",
 	dirty: false,
+	framesDirty: false,
+	metadataDirty: false,
 	canUndo: false,
 	canRedo: false,
 	history: { labels: [], cursor: 0 },
@@ -108,6 +111,8 @@ function moveDelta(revision: number, index: number, frame: FrameDto, label: stri
 		playerName: "p",
 		timestampTicks: "0",
 		dirty: true,
+		framesDirty: true,
+		metadataDirty: false,
 		canUndo: true,
 		canRedo: false,
 		history: { labels: [label], cursor: 1 },
@@ -1168,6 +1173,128 @@ describe("editor slice and edit queue", () => {
 		expect(editor.revision).toBe(0);
 		expect(editor.lattice?.scale).toBe(2);
 		expect(store.getState().editRevision).toBe(0);
+		expect(editor.framesDirty).toBe(false);
+		expect(editor.metadataDirty).toBe(false);
+	});
+
+	test("exportReplay dispatches against the session epoch and rethrows typed failures", async () => {
+		const calls: { epoch: number; destPath: string; overwrite: boolean }[] = [];
+		const store = createViewerStore(
+			deps({
+				exportReplay: async (epoch, destPath, overwrite) => {
+					calls.push({ epoch, destPath, overwrite });
+					if (overwrite) return { path: destPath, bytes: 42, regenerated: null };
+					throw { kind: "fileExists", path: destPath } satisfies IpcError;
+				}
+			})
+		);
+		// without a session there is nothing to export
+		await expect(store.getState().exportReplay("C:\\out.osr", false)).rejects.toMatchObject({
+			kind: "staleSession"
+		});
+
+		await store.getState().openReplay("C:\\r.osr");
+		await expect(store.getState().exportReplay("C:\\out.osr", false)).rejects.toMatchObject({
+			kind: "fileExists"
+		});
+		const result = await store.getState().exportReplay("C:\\out.osr", true);
+		expect(result.bytes).toBe(42);
+		expect(calls).toEqual([
+			{ epoch: 1, destPath: "C:\\out.osr", overwrite: false },
+			{ epoch: 1, destPath: "C:\\out.osr", overwrite: true }
+		]);
+	});
+
+	test("the integrity report describes the loaded file across edits", async () => {
+		const integrity = {
+			rows: [{ field: "count300", header: 1, simulated: 1, match: true }],
+			crossCheck: { sections: 1, gekiKatsu: 1, sectionsWithMiss: 0, countMiss: 0 },
+			lifeBarPresent: false
+		};
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => ({ ...latticeScene(), integrity }),
+				applyEdit: async () => moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move")
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		// the landed delta replaced the scene object, but never the report:
+		// it stays the loaded file's, by reference
+		expect(store.getState().scene!.integrity).toBe(integrity);
+	});
+
+	test("the dirty split mirrors off every delta", async () => {
+		const metadataDelta: EditDelta = {
+			...identityDelta,
+			revision: 1,
+			dirty: true,
+			framesDirty: false,
+			metadataDirty: true,
+			canUndo: true,
+			history: { labels: ["rename"], cursor: 1 }
+		};
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async (_e, _r, ops) =>
+					ops[0]!.kind === "setPlayerName"
+						? metadataDelta
+						: moveDelta(2, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move")
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+
+		await store.getState().commitEdit({
+			label: "rename",
+			payload: { kind: "ops", ops: [{ kind: "setPlayerName", name: "renamed" }] }
+		});
+		let editor = store.getState().editor!;
+		expect(editor.metadataDirty).toBe(true);
+		expect(editor.framesDirty).toBe(false);
+		expect(editor.dirty).toBe(true);
+
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		editor = store.getState().editor!;
+		expect(editor.framesDirty).toBe(true);
+		expect(editor.metadataDirty).toBe(false);
+	});
+
+	test("the dirty split mirrors through resync recovery", async () => {
+		const fullDelta: EditDelta = {
+			...identityDelta,
+			revision: 3,
+			frames: { fullFrames: [{ time: 0, x: 1, y: 2, buttons: 0 }] },
+			dirty: true,
+			framesDirty: true,
+			metadataDirty: true,
+			canUndo: true,
+			history: { labels: ["x"], cursor: 1 }
+		};
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => {
+					throw { kind: "staleSession" } satisfies IpcError;
+				},
+				resync: async () => fullDelta
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		const editor = store.getState().editor!;
+		expect(editor.revision).toBe(3);
+		expect(editor.framesDirty).toBe(true);
+		expect(editor.metadataDirty).toBe(true);
 	});
 
 	test("a commit dispatches against the current revision and splices the delta", async () => {
@@ -1766,11 +1893,18 @@ describe("editor slice and edit queue", () => {
 		);
 		await store.getState().openReplay("C:\\r.osr");
 		const before = store.getState().editor!.lattice;
+		const summaryBefore = store.getState().editor!.offLattice;
+		expect(summaryBefore).not.toBeNull();
+		expect(summaryBefore!.runCount).toBe(0);
 		await store.getState().commitEdit({
 			label: "off-grid",
 			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 0.1234567, y: 0.7654321 }] }] }
 		});
 		expect(store.getState().editor!.lattice).toBe(before);
+		// the off-lattice summary is frozen with it: the landed off-grid edit
+		// must not appear as a run, because the summary describes the loaded
+		// file rather than the edited document
+		expect(store.getState().editor!.offLattice).toBe(summaryBefore);
 	});
 
 	test("undoEdit gates on canUndo and dispatches through the queue", async () => {
@@ -1864,6 +1998,8 @@ describe("press selection", () => {
 					playerName: "p",
 					timestampTicks: "0",
 					dirty: true,
+					framesDirty: true,
+					metadataDirty: false,
 					canUndo: true,
 					canRedo: false,
 					history: { labels: ["x"], cursor: 1 },

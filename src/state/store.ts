@@ -9,6 +9,7 @@ import { applyFrameChanges, isFullFrames, remapQueuedOps, remapSelection } from 
 import {
 	invokeApplyEdit,
 	invokeClearRecents,
+	invokeExportReplay,
 	invokeGetSettings,
 	invokeLoadRecentReplay,
 	invokeLoadReplay,
@@ -21,12 +22,13 @@ import {
 	invokeUndo,
 	isIpcError
 } from "../lib/ipc";
-import { inferLattice, type Lattice } from "../lib/lattice";
+import { inferLattice, summarizeOffLattice, type Lattice, type OffLatticeSummary } from "../lib/lattice";
 import type {
 	EditDelta,
 	EditingSettings,
 	EditOp,
 	EffectSettings,
+	ExportResult,
 	FrameChanges,
 	FrameDto,
 	IpcError,
@@ -81,17 +83,28 @@ export interface IpcDeps {
 	redo(epoch: number): Promise<EditDelta>;
 	revertAll(epoch: number): Promise<EditDelta>;
 	resync(epoch: number): Promise<EditDelta>;
+	exportReplay(epoch: number, destPath: string, overwrite: boolean): Promise<ExportResult>;
 }
 
 export interface EditorState {
 	epoch: number;
 	revision: number;
+	/** the union of the two split flags, kept for the dirty chip */
 	dirty: boolean;
+	/** the document's dirty split: the export dialog keys its path
+	 * expectation off which kind of dirty the session is */
+	framesDirty: boolean;
+	metadataDirty: boolean;
 	canUndo: boolean;
 	canRedo: boolean;
 	history: { labels: string[]; cursor: number };
 	/** inferred once at install and frozen for the session's life */
 	lattice: Lattice | null;
+	/** the loaded file's off-lattice run summary, computed once at install
+	 * beside the frozen lattice and never recomputed per edit -- like the
+	 * integrity report, it always describes the loaded file. null when no
+	 * lattice was inferred (unanalysable, not clean) */
+	offLattice: OffLatticeSummary | null;
 	/** the frame selection: sorted frame indices the cursor-path tools operate
 	 * on. independent of the frame cursor -- selecting never seeks */
 	frameSelection: number[];
@@ -260,6 +273,11 @@ export interface ViewerState {
 	setFrameSelection(indices: number[]): void;
 	setPressSelection(selection: PressSelection | null): void;
 	setArmedKey(key: PhysicalKey | null): void;
+	/** writes the current document to destPath through the backend's atomic
+	 * write protocol. throws the typed IpcError on failure rather than
+	 * routing through lastError -- export failures render inside the dialog,
+	 * never as vanishing toasts */
+	exportReplay(destPath: string, overwrite: boolean): Promise<ExportResult>;
 }
 
 export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreApi<ViewerState> {
@@ -288,7 +306,10 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			| { kind: "redo" }
 			| { kind: "revertAll" };
 		let editQueue: PendingEdit[] = [];
-		let editPumping = false;
+		/** the in-flight drain, exposed so a caller that must observe the
+		 * settled document -- export -- can wait the queue out rather than
+		 * racing it */
+		let activePump: Promise<void> | null = null;
 
 		/** settles every queued commit as cancelled and empties the queue --
 		 * the shape of every "this state is gone" path */
@@ -376,6 +397,8 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					...editor,
 					revision: delta.revision,
 					dirty: delta.dirty,
+					framesDirty: delta.framesDirty,
+					metadataDirty: delta.metadataDirty,
 					canUndo: delta.canUndo,
 					canRedo: delta.canRedo,
 					history: delta.history,
@@ -417,70 +440,84 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			}
 		}
 
-		async function pumpEdits(): Promise<void> {
-			if (editPumping) return;
-			editPumping = true;
-			try {
-				for (;;) {
-					const pending = editQueue.shift();
-					if (pending === undefined) return;
-					const { scene, editor } = get();
-					if (scene === null || editor === null) {
-						if (pending.kind === "commit") pending.commit.onSettled?.("cancelled");
-						cancelQueued();
-						return;
-					}
-					const epochTag = editor.epoch;
-					// re-check history steps against the authoritative state at
-					// dispatch: the enqueue-time gate can pass while the step that
-					// will consume the last entry is still in flight
-					if (pending.kind === "undo" && !editor.canUndo) continue;
-					if (pending.kind === "redo" && !editor.canRedo) continue;
-					try {
-						let delta: EditDelta;
-						if (pending.kind === "undo") delta = await deps.undo(epochTag);
-						else if (pending.kind === "redo") delta = await deps.redo(epochTag);
-						else if (pending.kind === "revertAll") delta = await deps.revertAll(epochTag);
-						else {
-							// dispatch-time expansion: intents read the then-current
-							// frames, and base_revision is assigned here -- after any
-							// remap or expansion -- which is what makes a same-epoch
-							// mismatch unreachable short of a bug
-							const payload = pending.commit.payload;
-							const ops = payload.kind === "ops" ? payload.ops : payload.expand(scene.frames, editor);
-							if (ops === null || ops.length === 0) {
-								pending.commit.onSettled?.("skipped");
-								continue;
-							}
-							// resolved against the dispatched ops, after any remap or
-							// expansion, so a counted label names what actually happened
-							const label =
-								typeof pending.commit.label === "function"
-									? pending.commit.label(ops)
-									: pending.commit.label;
-							delta = await deps.applyEdit(epochTag, editor.revision, ops, label);
-						}
-						// landed before installDelta: the splice hook must be able to
-						// tell this commit's own entry apart from the still-pending
-						// ones it remaps
-						if (pending.kind === "commit") pending.commit.onSettled?.("landed");
-						installDelta(
-							delta,
-							epochTag,
-							pending.kind === "commit" ? pending.commit.pressOutcome : undefined
-						);
-					} catch (e) {
-						if (pending.kind === "commit") pending.commit.onSettled?.("failed");
-						// a response for a replaced session is dropped outright: the
-						// install already reset the slice and cleared the queue
-						if (get().editor?.epoch !== epochTag) continue;
-						const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
-						set({ lastError: { error, osrPath: "" } });
-						if (error.kind === "staleSession") await resyncNow(epochTag);
-					}
+		/** a second caller joins the active run rather than returning while its
+		 * own item is still queued. joining is not by itself a guarantee that
+		 * the item landed -- see the restart below -- so a caller that must
+		 * observe a drained queue loops on `queueIsQuiet` instead */
+		function pumpEdits(): Promise<void> {
+			if (activePump === null) {
+				activePump = drainEdits().finally(() => {
+					activePump = null;
+					// `activePump` is cleared in a reaction, so it stays non-null
+					// for a microtask after the drain emptied the queue. an item
+					// enqueued in that window joins a pump that has already
+					// settled and would sit here unattended until the next
+					// mutation happened along; restarting is what closes that
+					if (editQueue.length > 0) void pumpEdits();
+				});
+			}
+			return activePump;
+		}
+
+		/** true once nothing is queued and no drain is in flight */
+		function queueIsQuiet(): boolean {
+			return editQueue.length === 0 && activePump === null;
+		}
+
+		async function drainEdits(): Promise<void> {
+			for (;;) {
+				const pending = editQueue.shift();
+				if (pending === undefined) return;
+				const { scene, editor } = get();
+				if (scene === null || editor === null) {
+					if (pending.kind === "commit") pending.commit.onSettled?.("cancelled");
+					cancelQueued();
+					return;
 				}
-			} finally {
-				editPumping = false;
+				const epochTag = editor.epoch;
+				// re-check history steps against the authoritative state at
+				// dispatch: the enqueue-time gate can pass while the step that
+				// will consume the last entry is still in flight
+				if (pending.kind === "undo" && !editor.canUndo) continue;
+				if (pending.kind === "redo" && !editor.canRedo) continue;
+				try {
+					let delta: EditDelta;
+					if (pending.kind === "undo") delta = await deps.undo(epochTag);
+					else if (pending.kind === "redo") delta = await deps.redo(epochTag);
+					else if (pending.kind === "revertAll") delta = await deps.revertAll(epochTag);
+					else {
+						// dispatch-time expansion: intents read the then-current
+						// frames, and base_revision is assigned here -- after any
+						// remap or expansion -- which is what makes a same-epoch
+						// mismatch unreachable short of a bug
+						const payload = pending.commit.payload;
+						const ops = payload.kind === "ops" ? payload.ops : payload.expand(scene.frames, editor);
+						if (ops === null || ops.length === 0) {
+							pending.commit.onSettled?.("skipped");
+							continue;
+						}
+						// resolved against the dispatched ops, after any remap or
+						// expansion, so a counted label names what actually happened
+						const label =
+							typeof pending.commit.label === "function"
+								? pending.commit.label(ops)
+								: pending.commit.label;
+						delta = await deps.applyEdit(epochTag, editor.revision, ops, label);
+					}
+					// landed before installDelta: the splice hook must be able to
+					// tell this commit's own entry apart from the still-pending
+					// ones it remaps
+					if (pending.kind === "commit") pending.commit.onSettled?.("landed");
+					installDelta(delta, epochTag, pending.kind === "commit" ? pending.commit.pressOutcome : undefined);
+				} catch (e) {
+					if (pending.kind === "commit") pending.commit.onSettled?.("failed");
+					// a response for a replaced session is dropped outright: the
+					// install already reset the slice and cleared the queue
+					if (get().editor?.epoch !== epochTag) continue;
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					set({ lastError: { error, osrPath: "" } });
+					if (error.kind === "staleSession") await resyncNow(epochTag);
+				}
 			}
 		}
 
@@ -519,6 +556,12 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			// previous one -- the epoch check in installDelta would drop their
 			// responses anyway, but there is no reason to let them dispatch
 			cancelQueued();
+			// inferred once here and frozen: the lattice comes from the
+			// source's own untouched frames, and edits must never shift it.
+			// the off-lattice summary rides beside it under the same rule --
+			// it describes the loaded file, not the edited document
+			const lattice = inferLattice(scene.frames);
+			const offLattice = summarizeOffLattice(scene.frames, lattice);
 			set({
 				scene,
 				derived: deriveScene(scene),
@@ -537,12 +580,13 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					epoch: scene.epoch,
 					revision: 0,
 					dirty: false,
+					framesDirty: false,
+					metadataDirty: false,
 					canUndo: false,
 					canRedo: false,
 					history: { labels: [], cursor: 0 },
-					// inferred once here and frozen: the lattice comes from the
-					// source's own untouched frames, and edits must never shift it
-					lattice: inferLattice(scene.frames),
+					lattice,
+					offLattice,
 					frameSelection: [],
 					pressSelection: null
 				},
@@ -846,7 +890,33 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				if (editor === null) return;
 				set({ editor: { ...editor, pressSelection: selection } });
 			},
-			setArmedKey: (key) => set({ armedKey: key })
+			setArmedKey: (key) => set({ armedKey: key }),
+			exportReplay: async (destPath, overwrite) => {
+				// the session the user asked to export, pinned before the wait:
+				// the destination they picked and the path expectation they were
+				// shown both belong to it, so a scene installed while we drain
+				// makes this request stale rather than silently retargeting the
+				// write at a different replay
+				const requested = get().editor;
+				if (requested === null) {
+					throw { kind: "staleSession" } satisfies IpcError;
+				}
+				const epochTag = requested.epoch;
+				// export has to describe the document the user is looking at, so
+				// it waits the edit queue out first. dispatching straight past it
+				// would hand the backend a document those edits had not reached
+				// yet -- and the backend would answer consistently for that older
+				// state, so the write would silently omit the pending edit and
+				// still report success. looping rather than awaiting once: a join
+				// can resolve early against a pump that was already settling
+				while (!queueIsQuiet()) {
+					await pumpEdits();
+				}
+				if (get().editor?.epoch !== epochTag) {
+					throw { kind: "staleSession" } satisfies IpcError;
+				}
+				return deps.exportReplay(epochTag, destPath, overwrite);
+			}
 		};
 	});
 }
@@ -864,7 +934,8 @@ export const viewerStore = createViewerStore(
 		undo: invokeUndo,
 		redo: invokeRedo,
 		revertAll: invokeRevertAll,
-		resync: invokeResync
+		resync: invokeResync,
+		exportReplay: invokeExportReplay
 	},
 	// every landed splice keeps the gesture preview's pending entries in the
 	// authoritative index space (editor/preview.ts)
