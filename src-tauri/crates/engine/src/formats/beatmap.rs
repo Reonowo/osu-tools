@@ -32,6 +32,18 @@ pub struct DifficultyPoint {
     pub generate_ticks: bool,
 }
 
+/// a break section, unfiltered: entries shorter than lazer's 650 ms
+/// "has effect" threshold are kept because the legacy drain-length
+/// computation (score::ScoreContext) subtracts every declared break
+/// (osulegacyscoresimulator.cs:62 reads Breaks unfiltered)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BreakPeriod {
+    pub start_time: f64,
+    /// clamped to >= start_time at parse, matching
+    /// legacybeatmapdecoder.cs (Math.Max(start, end))
+    pub end_time: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Beatmap {
     pub format_version: i32,
@@ -53,6 +65,7 @@ pub struct Beatmap {
     pub slider_multiplier: f64,
     pub slider_tick_rate: f64,
     pub combo_colors: Vec<[u8; 4]>,
+    pub breaks: Vec<BreakPeriod>,
     pub timing_points: Vec<TimingPoint>,
     pub difficulty_points: Vec<DifficultyPoint>,
     pub hit_objects: Vec<HitObject>,
@@ -531,6 +544,17 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         hit_objects.push(converted);
     }
 
+    // the early-version offset applies to break times exactly as it does to
+    // objects and control points (legacybeatmapdecoder.cs handleEvent routes
+    // break endpoints through getOffsetTime); rosu-map stores them raw
+    let breaks = raw
+        .breaks
+        .iter()
+        .map(|b| BreakPeriod {
+            start_time: b.start_time + offset,
+            end_time: b.end_time + offset,
+        })
+        .collect();
     let timing_points = raw
         .control_points
         .timing_points
@@ -577,6 +601,7 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         slider_multiplier: raw.slider_multiplier,
         slider_tick_rate: raw.slider_tick_rate,
         combo_colors: raw.custom_combo_colors.iter().map(|c| c.0).collect(),
+        breaks,
         timing_points,
         difficulty_points,
         hit_objects,
@@ -1409,5 +1434,60 @@ SliderTickRate:1
 
         let v14 = decode_beatmap_bytes(MINIMAL_OSU.as_bytes()).unwrap();
         assert_eq!(v14.hit_objects[0].start_time, 1000.0);
+    }
+
+    fn with_events(events: &str) -> String {
+        MINIMAL_OSU.replace("[TimingPoints]", &format!("[Events]\n{events}\n\n[TimingPoints]"))
+    }
+
+    #[test]
+    fn decodes_break_periods() {
+        let map = decode_beatmap_bytes(with_events("2,1200,1700").as_bytes()).unwrap();
+        assert_eq!(
+            map.breaks,
+            vec![BreakPeriod {
+                start_time: 1200.0,
+                end_time: 1700.0,
+            }]
+        );
+
+        let plain = decode_beatmap_bytes(MINIMAL_OSU.as_bytes()).unwrap();
+        assert!(plain.breaks.is_empty());
+    }
+
+    #[test]
+    fn breaks_stay_unfiltered_and_end_clamps_to_start() {
+        // both quirks come from the parse layer and matter to drain length:
+        // a break below lazer's 650ms effect threshold still subtracts, and a
+        // backwards break collapses (Math.Max) rather than going negative
+        let map = decode_beatmap_bytes(with_events("2,1200,1600\n2,3000,2500").as_bytes()).unwrap();
+        assert_eq!(
+            map.breaks,
+            vec![
+                BreakPeriod {
+                    start_time: 1200.0,
+                    end_time: 1600.0,
+                },
+                BreakPeriod {
+                    start_time: 3000.0,
+                    end_time: 3000.0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn early_format_versions_shift_break_times_by_24ms() {
+        // legacybeatmapdecoder.cs routes break endpoints through
+        // getOffsetTime like every other event time
+        let v4 = with_events("2,1200,1700").replace("osu file format v14", "osu file format v4");
+        let map = decode_beatmap_bytes(v4.as_bytes()).unwrap();
+        assert_eq!(
+            map.breaks,
+            vec![BreakPeriod {
+                start_time: 1224.0,
+                end_time: 1724.0,
+            }]
+        );
     }
 }

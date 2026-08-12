@@ -468,6 +468,7 @@ pub(crate) mod test_support {
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
             combo_colors: Vec::new(),
+            breaks: Vec::new(),
             timing_points: vec![TimingPoint {
                 time: 0.0,
                 beat_len: 500.0,
