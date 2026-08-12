@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 lzma-rs = "0.3"
+# score::peppy needs a 96-bit base-10 decimal with the same layout and
+# banker's rounding as .net's System.Decimal
+rust_decimal = { version = "1", default-features = false, features = ["std"] }
+md-5 = "0.10"
 rosu-map = "0.2"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
