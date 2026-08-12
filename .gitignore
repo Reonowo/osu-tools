@@ -34,3 +34,6 @@ CONTEXT.md
 CONTEXT-MAP.md
 
 fixtures/replays/local/
+
+# osu-framework headless host storage, dropped by fixture-gen's judgement-dump runs
+headless/

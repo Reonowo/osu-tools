@@ -7,11 +7,27 @@ const string osuPin = "83b8a64bec19e1463353645c2d6d10c75e275b43";
 const string frameworkPin = "2026.731.0";
 
 string outDir = "fixtures";
+// --family <name>: regenerate a single dump family while iterating on it
+// (judgement-dump scenarios boot a game host each, so the full run is slow).
+// a fixture diff that lands in the tree must still come from a full run
+string? onlyFamily = null;
+// --judgement-scenario <name> --scenario-out <file>: internal subprocess
+// mode used by the judgement family -- one scenario, one fresh game host
+// per process (see JudgementDumps.Run)
+string? judgementScenario = null;
+string? scenarioOut = null;
 for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--out")
         outDir = args[i + 1];
+    if (args[i] == "--family")
+        onlyFamily = args[i + 1];
+    if (args[i] == "--judgement-scenario")
+        judgementScenario = args[i + 1];
+    if (args[i] == "--scenario-out")
+        scenarioOut = args[i + 1];
 }
+bool runFamily(string name) => onlyFamily == null || onlyFamily == name;
 
 Directory.CreateDirectory(outDir);
 Directory.CreateDirectory(Path.Combine(outDir, "path"));
@@ -67,6 +83,17 @@ var namedFloatLiteralJsonOptions = new JsonSerializerOptions
     NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
 };
 
+if (judgementScenario != null)
+{
+    if (scenarioOut == null)
+    {
+        Console.Error.WriteLine("--judgement-scenario requires --scenario-out");
+        Environment.Exit(2);
+    }
+    FixtureGen.JudgementDumps.RunSingleScenario(outDir, judgementScenario, scenarioOut, jsonOptions);
+    return;
+}
+
 void Dump(string relativePath, object payload) =>
     File.WriteAllText(Path.Combine(outDir, relativePath), JsonSerializer.Serialize(payload, jsonOptions));
 
@@ -109,13 +136,20 @@ if (workingTree != "clean")
         $"warning: reference checkout working tree is {workingTree}; fixtures generated now are NOT " +
         $"attributable to {actualHead} alone");
 
-Dump("meta.json", new
-{
+if (onlyFamily == null)
+    Dump("meta.json", new
+    {
     OsuPin = osuPin,
     FrameworkPin = frameworkPin,
     CheckoutHead = actualHead,
     CheckoutWorkingTree = workingTree,
-    Tolerances = new { Position = 1e-4, Distance = 1e-3, Ratio = 1e-6 },
+    // the 2026-08-12 tolerance audit zeroed every recorded tolerance: with
+    // the slider duration chain's double rounding reproduced at its source,
+    // the whole golden surface compares bit-exact (both sides are ieee-754
+    // f32/f64 with matched operation order). a nonzero value here would be
+    // a regression to justify, not noise to absorb; the named-float-literal
+    // handling below is contract, not tolerance
+    Tolerances = new { Position = 0.0, Distance = 0.0, Ratio = 0.0 },
     Notes = new[]
     {
         "path/approximator_circular_arc.json's arc-huge-radius-zero-acos case is reproducible only " +
@@ -151,6 +185,19 @@ Dump("meta.json", new
         "approximator_circular_arc.json, replays/float_format.json) is still written with strict " +
         "number handling, so an accidental non-finite value in one of those would still throw at " +
         "generation time.",
+
+        "judgement/*.json is the scenario judgement-dump family: lazer gameplay itself (a headless " +
+        "ReplayPlayer under the Classic mod, the legacy rules path the engine ports) judges the " +
+        "hand-built replays recorded in each dump's frames array over the committed minimal maps in " +
+        "judgement/maps/, and the events array records the per-element judgement timeline in " +
+        "application order. events carry result kind, hit flag, and running combo -- all " +
+        "compared exact -- and deliberately omit raw judgement times and spinner rotation, which " +
+        "sample at update-loop instants and are render-loop artifacts rather than mechanisms " +
+        "(see JudgementDumps.cs). each scenario is generated twice in fresh processes and must " +
+        "dump byte-identically or generation fails. note the events record lazer's own combo " +
+        "semantics: the classic slider tail (SmallTickHit) does not increment combo there, while " +
+        "the engine deliberately follows stable (the documented tail divergence), so engine-side " +
+        "consumers compare combo around that rule, never through it.",
     },
 });
 
@@ -159,6 +206,7 @@ Dump("meta.json", new
 // away-from-zero tie-break diverges from. this is exactly the formatting
 // LegacyScoreEncoder.replayStringContent uses for every replay frame
 // coordinate: FormattableString.Invariant($"{legacyFrame.MouseX ?? 0}")
+if (runFamily("replays"))
 {
     Directory.CreateDirectory(Path.Combine(outDir, "replays"));
 
@@ -244,7 +292,13 @@ Dump("meta.json", new
     Dump(Path.Combine("replays", "float_format.json"), entries);
 }
 
-DumpBsplineFixtures();
+if (runFamily("path"))
+{
+    DumpBsplineFixtures();
+    DumpCatmullFixtures();
+    DumpArcFixtures();
+    DumpSliderPathFixtures();
+}
 
 void DumpBsplineFixtures()
 {
@@ -264,8 +318,6 @@ void DumpBsplineFixtures()
     }).ToArray();
     Dump(Path.Combine("path", "approximator_bspline.json"), new { Cases = cases });
 }
-
-DumpCatmullFixtures();
 
 void DumpCatmullFixtures()
 {
@@ -290,8 +342,6 @@ void DumpCatmullFixtures()
             .ToArray(),
     });
 }
-
-DumpArcFixtures();
 
 void DumpArcFixtures()
 {
@@ -318,8 +368,6 @@ void DumpArcFixtures()
     }).ToArray();
     Dump(Path.Combine("path", "approximator_circular_arc.json"), new { Cases = cases });
 }
-
-DumpSliderPathFixtures();
 
 void DumpSliderPathFixtures()
 {
@@ -386,15 +434,22 @@ void DumpSliderPathFixtures()
 // same fix: the named-float-literal options, and readers accept a JSON
 // string in that field's position (see slider_path_fixtures.rs's
 // deserialize_lenient_f64_list for the established rust-side convention)
-DumpBeatmapFixtures();
+if (runFamily("beatmap"))
+    DumpBeatmapFixtures();
 
 void DumpBeatmapFixtures() => FixtureGen.BeatmapDumps.Run(outDir, namedFloatLiteralJsonOptions);
 
-FixtureGen.ReplayDumps.Run(outDir, jsonOptions);
+if (runFamily("replays"))
+    FixtureGen.ReplayDumps.Run(outDir, jsonOptions);
 
-FixtureGen.ScoreDumps.Run(outDir, jsonOptions);
+if (runFamily("score"))
+    FixtureGen.ScoreDumps.Run(outDir, jsonOptions);
 
-DumpEasingFixtures();
+if (runFamily("judgement"))
+    FixtureGen.JudgementDumps.Run(outDir, jsonOptions);
+
+if (runFamily("easing"))
+    DumpEasingFixtures();
 
 void DumpEasingFixtures()
 {

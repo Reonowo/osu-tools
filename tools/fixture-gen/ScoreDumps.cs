@@ -16,6 +16,11 @@ public static class ScoreDumps
         "slider-zoo-v14",
         "v7-tick-multiplier",
         "spinners-combos-od10",
+        // od0 makes the simulator's hardcoded minimum_rotations_per_second
+        // (the od-0 floor) exact rather than a worst-case bound, so an
+        // overspun clear of this map achieves the dumped maximum exactly --
+        // the committed oracle for the stable spinner tick model
+        "spinner-od0",
     };
 
     // adversarial difficulty triples for the peppy-stars port: floats whose
