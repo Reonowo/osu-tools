@@ -5,9 +5,10 @@
 //! outside taiko/mania, so `LegacyScoreEncoder.cs:109-110` writes 0). stable
 //! populates them per combo section, and a zeroed pair on an edited stable
 //! replay is exactly the naive-editor signature TODO.md's case study
-//! documents -- so this module implements the stable rule (geki = a section
-//! judged entirely 300s; katu = a section with no miss that was not all
-//! 300s), with the NoMod corpus as the only oracle.
+//! documents -- so this module implements the stable burst rule (geki = a
+//! section judged entirely 300s; katu = a section of only 300s and 100s
+//! with at least one 100; a section containing a miss OR a 50 earns
+//! neither), with the NoMod corpus as the only oracle.
 
 use crate::beatmap::difficulty::HitGrade;
 use crate::beatmap::{ProcessedBeatmap, ProcessedKind};
@@ -15,26 +16,33 @@ use crate::simulation::score::JudgementKind;
 use crate::simulation::{HitTotals, JudgementTimeline};
 
 /// the per-combo-section aggregates: TODO.md's worked example turns
-/// `sections - (geki + katsu) = sections containing a miss` into the header
-/// cross-check the integrity report states outright
+/// `sections - (geki + katsu) = sections that ended without a burst` (a
+/// miss or a 50 present) into the header cross-check the integrity report
+/// states outright
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SectionTally {
     pub sections: u32,
     pub count_geki: u32,
     pub count_katsu: u32,
-    pub sections_with_miss: u32,
+    /// sections earning neither geki nor katu: at least one miss or 50
+    pub sections_without_burst: u32,
 }
 
 #[derive(Clone, Copy)]
 struct SectionState {
     all_great: bool,
-    any_miss: bool,
+    any_miss_or_meh: bool,
 }
 
-/// folds each object's final grade into its combo section. sections come
-/// from the processed objects' `combo_index` (the new-combo groupings after
-/// lazer's enforcement pass), so spinners aggregate into the section they
-/// interrupt rather than forming their own
+/// folds each object's final grade into its combo section. circle and
+/// slider sections come from the processed objects' `combo_index` (the
+/// new-combo groupings after lazer's enforcement pass); every spinner is
+/// its own singleton section, because stable forces a new combo onto the
+/// spinner itself at load where lazer's enforcement leaves it on the
+/// previous combo for rendering. the stable rule is the one geki/katu are
+/// derived under (docs/adr/0001 -- the headers are the oracle): the
+/// 2026-08-12 sweep fit 824 of 825 spinner-map geki deltas exactly as the
+/// count of spinners sharing a lazer combo with earlier objects
 pub fn section_tally(processed: &ProcessedBeatmap, timeline: &JudgementTimeline) -> SectionTally {
     // an object's final grade is its one aggregate event; heads, ticks,
     // repeats, tails, and spins never grade a section
@@ -52,36 +60,49 @@ pub fn section_tally(processed: &ProcessedBeatmap, timeline: &JudgementTimeline)
     }
 
     // combo_index only ever steps by one, so a plain vec keyed by it holds
-    // every section; a leading spinner keeps index 0, everything else
-    // starts at 1
+    // every non-spinner section; a leading spinner keeps index 0, everything
+    // else starts at 1. spinner singletons accumulate separately -- a lazer
+    // combo emptied by removing its spinner contributes no section
     let mut states: Vec<Option<SectionState>> = Vec::new();
+    let mut spinner_sections: Vec<SectionState> = Vec::new();
     for (object, grade) in processed.objects.iter().zip(&grades) {
+        // an unjudged object cannot certify a 300; treat it as the miss it
+        // would have decayed into (unreachable through simulate, which
+        // judges every object)
+        let grade = grade.unwrap_or(HitGrade::Miss);
+
+        if matches!(object.kind, ProcessedKind::Spinner(_)) {
+            spinner_sections.push(SectionState {
+                all_great: grade == HitGrade::Great,
+                any_miss_or_meh: matches!(grade, HitGrade::Miss | HitGrade::Meh),
+            });
+            continue;
+        }
+
         let index = object.combo_index.max(0) as usize;
         if states.len() <= index {
             states.resize(index + 1, None);
         }
         let state = states[index].get_or_insert(SectionState {
             all_great: true,
-            any_miss: false,
+            any_miss_or_meh: false,
         });
-        // an unjudged object cannot certify a 300; treat it as the miss it
-        // would have decayed into (unreachable through simulate, which
-        // judges every object)
-        let grade = grade.unwrap_or(HitGrade::Miss);
         state.all_great &= grade == HitGrade::Great;
-        state.any_miss |= grade == HitGrade::Miss;
+        state.any_miss_or_meh |= matches!(grade, HitGrade::Miss | HitGrade::Meh);
     }
 
     let mut tally = SectionTally {
         sections: 0,
         count_geki: 0,
         count_katsu: 0,
-        sections_with_miss: 0,
+        sections_without_burst: 0,
     };
-    for state in states.into_iter().flatten() {
+    for state in states.into_iter().flatten().chain(spinner_sections) {
         tally.sections += 1;
-        if state.any_miss {
-            tally.sections_with_miss += 1;
+        // stable's burst rule: a 50 forfeits the section's burst exactly
+        // like a miss does -- katu is only-300s-and-100s, never "no miss"
+        if state.any_miss_or_meh {
+            tally.sections_without_burst += 1;
         } else if state.all_great {
             tally.count_geki += 1;
         } else {
@@ -213,14 +234,15 @@ mod tests {
                 })
                 .collect(),
             totals: HitTotals::default(),
+            spinner_scoring: Vec::new(),
         }
     }
 
     fn assert_identity(tally: &SectionTally) {
         assert_eq!(
             tally.sections - (tally.count_geki + tally.count_katsu),
-            tally.sections_with_miss,
-            "sections - (geki + katsu) must equal the sections containing a miss"
+            tally.sections_without_burst,
+            "sections - (geki + katsu) must equal the sections that ended without a burst"
         );
     }
 
@@ -247,14 +269,20 @@ mod tests {
                 sections: 3,
                 count_geki: 3,
                 count_katsu: 0,
-                sections_with_miss: 0,
+                sections_without_burst: 0,
             }
         );
         assert_identity(&tally);
     }
 
     #[test]
-    fn a_lesser_hit_demotes_its_section_to_katu_and_a_miss_to_neither() {
+    fn a_katu_needs_only_greats_and_oks_and_a_miss_or_meh_earns_neither() {
+        // stable's burst rule: geki = all 300s; katu = no misses AND no 50s
+        // (at least one 100, rest 300/100); a section containing a 50 --
+        // even miss-free -- earns neither. oracle: the 2026-08-12 sweep's
+        // katu deltas are overwhelmingly negative (we counted 50-carrying
+        // sections as katu where headers do not), at a rate independent of
+        // spinners
         let processed = map_of(vec![
             circle(1000.0, true),
             circle(1500.0, false),
@@ -272,13 +300,15 @@ mod tests {
                 (4, JudgementKind::Circle(HitGrade::Meh)),
             ]),
         );
+        // section 1 (300, 100) -> katu; section 2 (miss, 300) -> neither;
+        // section 3 (50) -> neither, despite carrying no miss
         assert_eq!(
             tally,
             SectionTally {
                 sections: 3,
                 count_geki: 0,
-                count_katsu: 2,
-                sections_with_miss: 1,
+                count_katsu: 1,
+                sections_without_burst: 2,
             }
         );
         assert_identity(&tally);
@@ -304,21 +334,29 @@ mod tests {
                 sections: 1,
                 count_geki: 0,
                 count_katsu: 1,
-                sections_with_miss: 0,
+                sections_without_burst: 0,
             }
         );
         assert_identity(&tally);
     }
 
     #[test]
-    fn spinners_aggregate_into_the_section_they_interrupt() {
-        // combo enforcement leaves a spinner on the previous combo_index and
-        // forces a new combo after it, so the spinner's grade folds into the
-        // first section
+    fn spinners_form_their_own_stable_section() {
+        // lazer's combo enforcement leaves the spinner on the previous
+        // combo_index (rendering semantics), but stable forces a new combo
+        // onto the spinner itself at load, so for geki/katu accounting the
+        // spinner is always a singleton section: the objects before it
+        // grade on their own, and the spinner's grade grades its own
+        // section. oracle: the 2026-08-12 sweep -- 824/825 spinner-map geki
+        // deltas equal exactly the count of spinners sharing a lazer combo
+        // with earlier objects
         let processed = map_of(vec![circle(1000.0, true), spinner(2000.0), circle(3000.0, false)]);
         assert_eq!(processed.objects[0].combo_index, processed.objects[1].combo_index);
         assert_ne!(processed.objects[0].combo_index, processed.objects[2].combo_index);
 
+        // a missed spinner no longer poisons the interrupted section: the
+        // circle before it keeps its geki, the spinner is its own
+        // miss-section
         let tally = section_tally(
             &processed,
             &timeline_of(&[
@@ -330,10 +368,30 @@ mod tests {
         assert_eq!(
             tally,
             SectionTally {
-                sections: 2,
-                count_geki: 1,
+                sections: 3,
+                count_geki: 2,
                 count_katsu: 0,
-                sections_with_miss: 1,
+                sections_without_burst: 1,
+            }
+        );
+        assert_identity(&tally);
+
+        // and a great spinner is its own geki
+        let tally = section_tally(
+            &processed,
+            &timeline_of(&[
+                (0, JudgementKind::Circle(HitGrade::Great)),
+                (1, JudgementKind::SpinnerFinal(HitGrade::Great)),
+                (2, JudgementKind::Circle(HitGrade::Great)),
+            ]),
+        );
+        assert_eq!(
+            tally,
+            SectionTally {
+                sections: 3,
+                count_geki: 3,
+                count_katsu: 0,
+                sections_without_burst: 0,
             }
         );
         assert_identity(&tally);
@@ -360,7 +418,7 @@ mod tests {
                 sections: 2,
                 count_geki: 1,
                 count_katsu: 1,
-                sections_with_miss: 0,
+                sections_without_burst: 0,
             }
         );
         assert_identity(&tally);
