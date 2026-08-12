@@ -46,7 +46,68 @@ pub(crate) struct SpinnerState {
     current_spin_max: f32,
     pub completed_spins: u32,
     pub finished: bool,
+    /// stable's own scoring physics, running beside the lazer mechanics
+    pub stable: StableSpinState,
 }
+
+/// stable's spinner disc physics, the model its live tick scoring counted:
+/// per replay frame, a theoretical angular velocity is read off the raw
+/// cursor angle, the disc velocity accelerates toward it under a
+/// duration-dependent acceleration cap and a hard 0.05 rad/ms clamp, and
+/// the disc's |rotation| accumulates in half-turns through a float32
+/// counter. the half-spin count feeds the achieved scorev1 fold
+/// (score::scorev1); the lazer-side spin/bonus mechanics above are
+/// untouched -- docs/adr/0001's split: mechanics follow lazer, end-value
+/// scoring follows stable.
+///
+/// ported from the stable behaviour as reproduced by danser-go's osu!
+/// ruleset (app/rulesets/osu/spinner.go, processStable -- the
+/// community-verified port of stable's disc), quirks preserved:
+///
+/// - on a regular frame cadence (smoothed variance <= 1000/60 * 1.04) the
+///   theoretical velocity divides by the fixed 1000/60 frame time, not the
+///   actual frame delta;
+/// - a zero angle delta decays the theoretical velocity to a third once,
+///   then to zero;
+/// - an unpressed frame zeroes the angle delta (the disc coasts down under
+///   the acceleration cap rather than stopping);
+/// - the half-turn counter is a float32 and the scoring count increments at
+///   most once per frame, even when a long frame gap crosses two half-turn
+///   boundaries;
+/// - only frames strictly inside (start_time, end_time) are processed
+#[derive(Debug)]
+pub(crate) struct StableSpinState {
+    last_angle: f64,
+    updated_before: bool,
+    theoretical_velocity: f64,
+    current_velocity: f64,
+    frame_variance: f64,
+    zero_count: u32,
+    rotation_count_f: f32,
+    last_rotation_count: i64,
+    pub scoring_rotation_count: i64,
+}
+
+impl Default for StableSpinState {
+    fn default() -> Self {
+        StableSpinState {
+            last_angle: 0.0,
+            updated_before: false,
+            theoretical_velocity: 0.0,
+            current_velocity: 0.0,
+            frame_variance: STABLE_FRAME_TIME,
+            zero_count: 0,
+            rotation_count_f: 0.0,
+            last_rotation_count: 0,
+            scoring_rotation_count: 0,
+        }
+    }
+}
+
+/// stable's assumed frame time (one 60fps frame, in ms)
+const STABLE_FRAME_TIME: f64 = 1000.0 / 60.0;
+/// the disc's hard velocity clamp, radians per ms (477 rpm)
+const STABLE_VELOCITY_CAP: f64 = 0.05;
 
 impl SpinnerState {
     /// spinnerspinhistory.cs:29
@@ -193,6 +254,127 @@ pub(crate) fn process_frame_segment(ctx: &mut Ctx<'_>, frame_index: usize) {
             continue;
         }
         accumulate_segment(ctx, index, seg_start, seg_end, held);
+    }
+}
+
+/// advances every in-window spinner's stable disc physics for one replay
+/// frame (see [`StableSpinState`]). called at phase 1 of frame instants,
+/// beside the lazer-mechanics segment sweep
+pub(crate) fn process_stable_scoring_frame(ctx: &mut Ctx<'_>, frame_index: usize) {
+    let frame = ctx.frames[frame_index];
+    let time = frame.time;
+    // stable's timeDiff is the previous replay frame regardless of the
+    // spinner window; its first-frame fallback is one 60fps frame
+    let time_diff = if frame_index == 0 {
+        STABLE_FRAME_TIME
+    } else {
+        time - ctx.frames[frame_index - 1].time
+    };
+    let held = frame.buttons.left() || frame.buttons.right();
+
+    advance_first_active(ctx);
+    for i in ctx.first_active_spinner..ctx.spinner_indices.len() {
+        let index = ctx.spinner_indices[i];
+        ctx.charge_sweep_step();
+        let obj = &ctx.beatmap.objects[index];
+        if obj.start_time >= time {
+            break;
+        }
+        // strictly inside the window, both ends
+        if time >= obj.end_time {
+            continue;
+        }
+        let (duration, position) = (obj.end_time - obj.start_time, obj.position);
+        let state = match &mut ctx.states[index] {
+            ObjectState::Spinner(s) => &mut s.stable,
+            _ => unreachable!("spinner_indices only holds spinner objects"),
+        };
+        stable_scoring_step(state, frame.pos, position, duration, time_diff, held);
+    }
+}
+
+/// one frame of the stable disc: danser-go spinner.go processStable,
+/// NoMod path (no rate modification, no relax/spun-out branches)
+fn stable_scoring_step(
+    state: &mut StableSpinState,
+    cursor: crate::math::Vec2,
+    centre: crate::math::Vec2,
+    duration: f64,
+    time_diff: f64,
+    held: bool,
+) {
+    // 0.00008 + max(0, (5000 - duration) / 1000 / 2000), rad/ms^2 -- short
+    // spinners spin up faster
+    let max_acceleration = 0.00008 + ((5000.0 - duration) / 1000.0 / 2000.0).max(0.0);
+    let max_accel_this_frame = max_acceleration * time_diff;
+
+    if state.theoretical_velocity > state.current_velocity {
+        state.current_velocity +=
+            (state.theoretical_velocity - state.current_velocity).min(max_accel_this_frame);
+    } else {
+        state.current_velocity +=
+            (state.theoretical_velocity - state.current_velocity).max(-max_accel_this_frame);
+    }
+    state.current_velocity = state.current_velocity.clamp(-STABLE_VELOCITY_CAP, STABLE_VELOCITY_CAP);
+
+    // danser's AngleR: atan2(dy, dx) on the raw frame position
+    let mouse_angle = f64::from(cursor.y - centre.y).atan2(f64::from(cursor.x - centre.x));
+
+    if !state.updated_before {
+        state.last_angle = mouse_angle;
+        state.updated_before = true;
+    }
+
+    let mut angle_diff = mouse_angle - state.last_angle;
+    if mouse_angle - state.last_angle < -std::f64::consts::PI {
+        angle_diff = 2.0 * std::f64::consts::PI + mouse_angle - state.last_angle;
+    } else if state.last_angle - mouse_angle < -std::f64::consts::PI {
+        angle_diff = -2.0 * std::f64::consts::PI - state.last_angle + mouse_angle;
+    }
+
+    let decay = 0.999f64.powf(time_diff);
+    state.frame_variance = decay * state.frame_variance + (1.0 - decay) * time_diff;
+
+    if angle_diff == 0.0 {
+        state.zero_count += 1;
+        if state.zero_count < 2 {
+            state.theoretical_velocity /= 3.0;
+        } else {
+            state.theoretical_velocity = 0.0;
+        }
+    } else {
+        state.zero_count = 0;
+        // an unpressed frame contributes no cursor motion; the strict
+        // window test already happened at the call site, so the time
+        // clauses of danser's condition are always false here
+        if !held {
+            angle_diff = 0.0;
+        }
+        if angle_diff.abs() < std::f64::consts::PI {
+            if state.frame_variance > STABLE_FRAME_TIME * 1.04 {
+                state.theoretical_velocity = if time_diff > 0.0 { angle_diff / time_diff } else { 0.0 };
+            } else {
+                state.theoretical_velocity = angle_diff / STABLE_FRAME_TIME;
+            }
+        } else {
+            state.theoretical_velocity = 0.0;
+        }
+    }
+
+    state.last_angle = mouse_angle;
+
+    let rotation_addition = state.current_velocity * time_diff;
+    // the float32 counter and the f32 cast of the addition are stable's own
+    // precision, kept bit-faithful
+    state.rotation_count_f +=
+        ((f64::from(rotation_addition as f32)).abs() / std::f64::consts::PI) as f32;
+
+    let rotation_count = state.rotation_count_f as i64;
+    if rotation_count != state.last_rotation_count {
+        // at most one scoring increment per frame, even when a long gap
+        // crosses two half-turn boundaries -- stable's own accounting
+        state.scoring_rotation_count += 1;
+        state.last_rotation_count = rotation_count;
     }
 }
 

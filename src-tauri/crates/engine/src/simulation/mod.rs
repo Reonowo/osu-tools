@@ -77,10 +77,23 @@ pub struct HitTotals {
     pub max_combo: u32,
 }
 
+/// one spinner's stable scoring-rotation count at the end of simulation --
+/// the half-spin tally stable's own disc physics produced (see
+/// `spinner::StableSpinState`). carried on the timeline so the achieved
+/// scorev1 fold can apply stable's tick model without disturbing the
+/// lazer-parity spin/bonus events
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpinnerScoring {
+    pub object_index: usize,
+    pub scoring_half_spins: i64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct JudgementTimeline {
     pub events: Vec<JudgementEvent>,
     pub totals: HitTotals,
+    /// one record per spinner object, in object order
+    pub spinner_scoring: Vec<SpinnerScoring>,
 }
 
 #[derive(Debug)]
@@ -341,6 +354,7 @@ fn simulate_with_sweep_budget(
                     press_cursor += 1;
                 }
                 spinner::process_frame_segment(&mut ctx, frame_index);
+                spinner::process_stable_scoring_frame(&mut ctx, frame_index);
                 slider::update_tracking_all_with_cursor(&mut ctx, time, sample);
                 slider::drain_pending(&mut ctx, time);
                 // checked per frame entry rather than per group: a group
@@ -428,9 +442,23 @@ fn simulate_with_sweep_budget(
         count_miss: ctx.score.count_miss,
         max_combo: ctx.score.max_combo,
     };
+    // spinner states persist to the end of the run, so the records read
+    // straight off the final states rather than being collected mid-loop
+    let spinner_scoring = ctx
+        .spinner_indices
+        .iter()
+        .map(|&index| SpinnerScoring {
+            object_index: index,
+            scoring_half_spins: match &ctx.states[index] {
+                ObjectState::Spinner(state) => state.stable.scoring_rotation_count,
+                _ => unreachable!("spinner_indices only holds spinner objects"),
+            },
+        })
+        .collect();
     Ok(JudgementTimeline {
         events: ctx.events,
         totals,
+        spinner_scoring,
     })
 }
 
