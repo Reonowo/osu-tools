@@ -302,6 +302,8 @@ fn assemble_delta(
         player_name: doc.header().player_name.clone(),
         timestamp_ticks: doc.header().timestamp_ticks.to_string(),
         dirty: doc.dirty(),
+        frames_dirty: doc.frames_dirty(),
+        metadata_dirty: doc.metadata_dirty(),
         can_undo: doc.undo_depth() > 0,
         can_redo: doc.redo_depth() > 0,
         history: HistoryDto {
@@ -575,6 +577,131 @@ pub fn resync(state: State<'_, AppState>, epoch: u64) -> Result<EditDelta, IpcEr
     ))
 }
 
+/// what phase 1 hands the rest of `export_replay`: a pristine or carried
+/// export encodes under the lock (both reuse the retained compressed
+/// payload, so encoding is cheap), while a frame-dirty document snapshots
+/// its inputs for the off-lock re-simulation
+enum PreparedExport {
+    Encoded(Vec<u8>),
+    Resimulate {
+        frames: Vec<engine::replay::frames::ReplayFrame>,
+        processed: Arc<engine::beatmap::ProcessedBeatmap>,
+        score_context: engine::score::ScoreContext,
+        revision: u64,
+    },
+}
+
+/// export works end to end here: the three-path branch on the document's
+/// dirty split, the derived-field regeneration for frame-dirty documents
+/// (same locking choreography as `apply_edit` -- gate under the lock,
+/// simulate off it, publish against an unchanged revision), and the atomic
+/// write protocol (`crate::export`)
+#[tauri::command]
+pub async fn export_replay(
+    state: State<'_, AppState>,
+    epoch: u64,
+    dest_path: String,
+    overwrite: bool,
+) -> Result<crate::scene::ExportResult, IpcError> {
+    // phase 1: gate and branch under the lock
+    let prepared = {
+        let mut guard = state.session.lock().expect("session lock");
+        let session = guard.as_mut().ok_or(IpcError::StaleSession)?;
+        if session.epoch != epoch {
+            return Err(IpcError::StaleSession);
+        }
+        if !session.document.frames_dirty() {
+            PreparedExport::Encoded(session.document.export_with_derived(None)?)
+        } else {
+            // a frame-dirty document normally implies the frame-edit gate
+            // passed; the one exception is revert_all's marker (Op::Restore
+            // dirties both kinds on any scene), where re-derivation is
+            // impossible without an authoritative simulation -- refuse typed
+            // rather than deriving from a non-authoritative timeline
+            frame_edit_gate(session)?;
+            PreparedExport::Resimulate {
+                frames: session.document.frames().to_vec(),
+                processed: Arc::clone(&session.processed),
+                score_context: session.score_context,
+                revision: session.revision,
+            }
+        }
+    };
+
+    let (bytes, regenerated) = match prepared {
+        PreparedExport::Encoded(bytes) => (bytes, None),
+        PreparedExport::Resimulate {
+            frames,
+            processed,
+            score_context,
+            revision,
+        } => {
+            // phase 2: re-simulate the final frames and derive every field
+            // off the lock
+            let sim_processed = Arc::clone(&processed);
+            let (derived_frames, derived) = tauri::async_runtime::spawn_blocking(move || {
+                let timeline = simulate(&sim_processed, &frames).map_err(|e| IpcError::InvalidEdit {
+                    message: format!("the edited replay exceeded simulation limits: {e}"),
+                })?;
+                let wide = engine::score::derive_score(&sim_processed, &timeline, &score_context)?;
+                let narrowed = engine::score::DerivedFields::narrow(&wide).map_err(|overflow| {
+                    IpcError::ExportOverflow {
+                        field: overflow.field.into(),
+                    }
+                })?;
+                Ok::<_, IpcError>((frames, narrowed))
+            })
+            .await
+            .map_err(|e| join_err("export derivation", e))??;
+
+            // phase 3: encode only against the exact frames the derivation
+            // described. the revision alone cannot certify that: a mutating
+            // command edits the document under its own phase-1 lock but bumps
+            // the revision only in phase 3, so there is a window where the
+            // revision still reads unchanged while the document already holds
+            // the newer frames. pairing those would write a header describing
+            // one play over a payload containing another -- precisely the
+            // inconsistency this phase exists to make impossible -- so the
+            // frames themselves are the gate, and a mismatch is a stale-session
+            // answer like any other lost race
+            let mut guard = state.session.lock().expect("session lock");
+            let session = guard.as_mut().ok_or(IpcError::StaleSession)?;
+            if session.epoch != epoch || session.revision != revision {
+                return Err(IpcError::StaleSession);
+            }
+            if session.document.frames() != derived_frames.as_slice() {
+                return Err(IpcError::StaleSession);
+            }
+            // the export path itself is part of what phase 1 decided, and it
+            // can flip without the frames moving a byte: undoing a revert_all
+            // that only ever covered metadata edits clears frames_dirty while
+            // leaving the frames identical, and `Op::Restore` always reports
+            // full_replace, so that undo defers its revision bump like any
+            // frame-changing step. `export_with_derived` would then quietly
+            // take the carried path and drop `derived`, while the result still
+            // advertised a regenerated summary the written header never got
+            if !session.document.frames_dirty() {
+                return Err(IpcError::StaleSession);
+            }
+            let bytes = session.document.export_with_derived(Some(&derived))?;
+            (bytes, Some(crate::scene::RegeneratedDto::from(&derived)))
+        }
+    };
+
+    // phase 4: the atomic write protocol, off the lock and off the runtime
+    let dest = PathBuf::from(&dest_path);
+    let byte_count = bytes.len() as u64;
+    tauri::async_runtime::spawn_blocking(move || crate::export::atomic_write(&dest, &bytes, overwrite))
+        .await
+        .map_err(|e| join_err("export write", e))??;
+
+    Ok(crate::scene::ExportResult {
+        path: dest_path,
+        bytes: byte_count,
+        regenerated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,7 +726,8 @@ mod tests {
                 undo,
                 redo,
                 revert_all,
-                resync
+                resync,
+                export_replay
             ])
             .manage(AppState::new(config_dir, cache_root))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -1310,6 +1438,42 @@ mod tests {
         assert!(delta.simulation.is_none());
         assert_eq!(delta.player_name.as_deref(), Some("renamed"));
         assert!(delta.dirty);
+        // the dirty split rides every delta: metadata-only leaves frames clean
+        assert!(delta.metadata_dirty && !delta.frames_dirty);
+    }
+
+    #[test]
+    fn the_delta_splits_dirtiness_by_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+
+        let frame_delta = tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![move_op(5, 200.0, 150.0)],
+            "move".into(),
+        ))
+        .unwrap();
+        assert!(frame_delta.frames_dirty && !frame_delta.metadata_dirty);
+        assert!(frame_delta.dirty, "dirty stays the union of the split");
+
+        let both = tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            1,
+            vec![crate::edit::EditOp::SetTimestamp {
+                ticks: "638712000000000001".into(),
+            }],
+            "timestamp".into(),
+        ))
+        .unwrap();
+        assert!(both.frames_dirty && both.metadata_dirty && both.dirty);
+
+        // undoing the metadata edit clears only its half of the split
+        let undone = tauri::async_runtime::block_on(undo(app.state(), scene.epoch)).unwrap();
+        assert!(undone.frames_dirty && !undone.metadata_dirty && undone.dirty);
     }
 
     #[test]
@@ -1692,5 +1856,267 @@ mod tests {
             delta.frames,
             Some(crate::edit::FrameChanges::Full { .. })
         ));
+    }
+
+    fn export_to(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        epoch: u64,
+        dest: &std::path::Path,
+        overwrite: bool,
+    ) -> Result<crate::scene::ExportResult, IpcError> {
+        tauri::async_runtime::block_on(export_replay(
+            app.state(),
+            epoch,
+            dest.display().to_string(),
+            overwrite,
+        ))
+    }
+
+    fn rename_op(name: &str) -> crate::edit::EditOp {
+        crate::edit::EditOp::SetPlayerName {
+            name: Some(name.into()),
+        }
+    }
+
+    #[test]
+    fn export_matrix_pristine_passthrough_is_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+        let source = std::fs::read(dir.path().join("replay.osr")).unwrap();
+
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none());
+        assert_eq!(result.bytes, source.len() as u64);
+        assert_eq!(result.path, dest.display().to_string());
+        assert_eq!(std::fs::read(&dest).unwrap(), source);
+    }
+
+    #[test]
+    fn export_matrix_carried_reuses_the_payload_under_the_edited_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+        let source = engine::formats::osr::decode_osr(&std::fs::read(dir.path().join("replay.osr")).unwrap())
+            .unwrap();
+
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![rename_op("renamed")],
+            "rename".into(),
+        ))
+        .unwrap();
+
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none(), "carried exports regenerate nothing");
+
+        let out = engine::formats::osr::decode_osr(&std::fs::read(&dest).unwrap()).unwrap();
+        assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
+        // "i only changed the player name" is literally true of the bytes
+        assert_eq!(out.compressed_payload, source.compressed_payload);
+        // and the dirty-header rules still applied
+        assert_eq!(out.header.life_graph.as_deref(), Some(""));
+        assert_eq!(
+            out.header.replay_md5,
+            Some(engine::score::replay_hash("renamed", out.header.timestamp_ticks).unwrap())
+        );
+        // the original simulation-derived fields still describe the play
+        assert_eq!(out.header.count_300, source.header.count_300);
+        assert_eq!(out.header.total_score, source.header.total_score);
+    }
+
+    #[test]
+    fn export_matrix_regenerating_is_self_consistent() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![move_op(5, 200.0, 150.0)],
+            "move".into(),
+        ))
+        .unwrap();
+
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        let reported = result.regenerated.expect("a frame-dirty export regenerates");
+
+        // the written header claims exactly what the command reported
+        let out = engine::formats::osr::decode_osr(&std::fs::read(&dest).unwrap()).unwrap();
+        assert_eq!(out.header.count_300, reported.count_300);
+        assert_eq!(out.header.count_100, reported.count_100);
+        assert_eq!(out.header.count_50, reported.count_50);
+        assert_eq!(out.header.count_geki, reported.count_geki);
+        assert_eq!(out.header.count_katsu, reported.count_katsu);
+        assert_eq!(out.header.count_miss, reported.count_miss);
+        assert_eq!(out.header.max_combo, reported.max_combo);
+        assert_eq!(out.header.perfect, reported.perfect);
+        assert_eq!(out.header.total_score, reported.total_score);
+        assert_eq!(out.header.life_graph.as_deref(), Some(""));
+
+        // the self-consistency property: decode the exported file, simulate
+        // it from scratch, and the header must equal the fresh derivation
+        let map = engine::formats::beatmap::decode_beatmap_path(&dir.path().join("map.osu")).unwrap();
+        let processed = engine::beatmap::process_beatmap(&map).unwrap();
+        let frames = engine::replay::frames::convert_frames(&out.actions, map.format_version);
+        let timeline = engine::simulation::simulate(&processed, &frames).unwrap();
+        let wide = engine::score::derive_score(
+            &processed,
+            &timeline,
+            &engine::score::ScoreContext::from_beatmap(&map),
+        )
+        .unwrap();
+        let fresh = engine::score::DerivedFields::narrow(&wide).unwrap();
+        assert_eq!(out.header.count_300, fresh.count_300);
+        assert_eq!(out.header.count_100, fresh.count_100);
+        assert_eq!(out.header.count_50, fresh.count_50);
+        assert_eq!(out.header.count_geki, fresh.count_geki);
+        assert_eq!(out.header.count_katsu, fresh.count_katsu);
+        assert_eq!(out.header.count_miss, fresh.count_miss);
+        assert_eq!(out.header.max_combo, fresh.max_combo);
+        assert_eq!(out.header.perfect, fresh.perfect);
+        assert_eq!(out.header.total_score, fresh.total_score);
+    }
+
+    #[test]
+    fn export_matrix_revert_all_takes_the_regenerating_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+        let source = std::fs::read(dir.path().join("replay.osr")).unwrap();
+
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![move_op(5, 200.0, 150.0)],
+            "move".into(),
+        ))
+        .unwrap();
+        tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+
+        // content-equal to baseline but marker-dirty: deliberately the
+        // conservative reserialize, never a silent passthrough
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_some());
+        let bytes = std::fs::read(&dest).unwrap();
+        assert_ne!(bytes, source);
+        let out = engine::formats::osr::decode_osr(&bytes).unwrap();
+        assert_eq!(out.header.life_graph.as_deref(), Some(""));
+        assert_eq!(out.header.player_name.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn not_simulated_scenes_export_carried_but_refuse_the_reverted_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        // hard rock: loads fine, simulates as NotSimulated
+        let scene = editable_scene(&app, dir.path(), 16, 20151228);
+
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![rename_op("renamed")],
+            "rename".into(),
+        ))
+        .unwrap();
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none());
+        let out = engine::formats::osr::decode_osr(&std::fs::read(&dest).unwrap()).unwrap();
+        assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
+
+        // revert_all marks frames dirty on any scene; without an
+        // authoritative simulation the regenerating path cannot derive, so
+        // the export refuses typed instead of writing fiction
+        tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+        let err = export_to(&app, scene.epoch, &dir.path().join("out2.osr"), false).unwrap_err();
+        assert!(matches!(err, IpcError::NotEditable { .. }));
+    }
+
+    #[test]
+    fn lazer_native_scenes_export_carried_metadata_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 30000001);
+
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![rename_op("renamed")],
+            "rename".into(),
+        ))
+        .unwrap();
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none());
+        let out = engine::formats::osr::decode_osr(&std::fs::read(&dest).unwrap()).unwrap();
+        assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
+        // the lazer score-info framing replaced the stripped trailer
+        assert_eq!(out.trailer, 0i32.to_le_bytes());
+    }
+
+    #[test]
+    fn export_refuses_an_existing_destination_without_consent() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+
+        let dest = dir.path().join("out.osr");
+        export_to(&app, scene.epoch, &dest, false).unwrap();
+        let before = std::fs::read(&dest).unwrap();
+
+        let err = export_to(&app, scene.epoch, &dest, false).unwrap_err();
+        assert!(matches!(err, IpcError::FileExists { ref path } if path.contains("out.osr")));
+        assert_eq!(std::fs::read(&dest).unwrap(), before, "the destination stays untouched");
+
+        // consent overwrites
+        export_to(&app, scene.epoch, &dest, true).unwrap();
+    }
+
+    #[test]
+    fn export_rejects_a_stale_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+        let err = export_to(&app, scene.epoch + 1, &dir.path().join("out.osr"), false).unwrap_err();
+        assert!(matches!(err, IpcError::StaleSession));
+    }
+
+    #[test]
+    fn overflowing_derived_fields_surface_the_field_name() {
+        // the command-layer mapping from the engine's typed overflow; the
+        // narrowing boundaries themselves live in score's own tests
+        let overflow = engine::score::DerivedFields::narrow(&engine::score::DerivedScore {
+            count_300: 70_000,
+            count_100: 0,
+            count_50: 0,
+            count_geki: 0,
+            count_katsu: 0,
+            count_miss: 0,
+            max_combo: 1,
+            perfect: false,
+            total_score: 0,
+            sections: 1,
+            sections_with_miss: 0,
+        })
+        .unwrap_err();
+        let mapped = IpcError::ExportOverflow {
+            field: overflow.field.into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&mapped).unwrap(),
+            serde_json::json!({ "kind": "exportOverflow", "field": "count300" })
+        );
     }
 }

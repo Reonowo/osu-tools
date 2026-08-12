@@ -4,6 +4,7 @@ pub mod cache;
 pub mod commands;
 pub mod edit;
 pub mod error;
+pub mod export;
 pub mod limits;
 pub mod load;
 pub mod media;
@@ -51,7 +52,8 @@ pub fn run() {
             commands::undo,
             commands::redo,
             commands::revert_all,
-            commands::resync
+            commands::resync,
+            commands::export_replay
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

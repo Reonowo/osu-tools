@@ -48,7 +48,12 @@ pub struct EditDelta {
     pub player_name: Option<String>,
     /// decimal string, the ReplayMeta.timestampTicks convention
     pub timestamp_ticks: String,
+    /// the union of the two split flags, kept for the dirty chip
     pub dirty: bool,
+    /// the document's dirty split: the export dialog keys its path
+    /// expectation off which kind of dirty the session is
+    pub frames_dirty: bool,
+    pub metadata_dirty: bool,
     pub can_undo: bool,
     pub can_redo: bool,
     pub history: HistoryDto,
@@ -521,6 +526,8 @@ mod tests {
             player_name: Some("player".into()),
             timestamp_ticks: "638712000000000001".into(),
             dirty: true,
+            frames_dirty: true,
+            metadata_dirty: false,
             can_undo: true,
             can_redo: false,
             history: HistoryDto {
@@ -540,6 +547,8 @@ mod tests {
                 "playerName",
                 "timestampTicks",
                 "dirty",
+                "framesDirty",
+                "metadataDirty",
                 "canUndo",
                 "canRedo",
                 "history",

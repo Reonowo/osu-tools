@@ -52,6 +52,17 @@ pub enum IpcError {
     NotEditable {
         reason: String,
     },
+    /// export destination collision without overwrite consent -- also the
+    /// typed answer when a destination appears mid-write (the no-replace
+    /// rename closes the check-then-write race)
+    FileExists {
+        path: String,
+    },
+    /// a derived value exceeded its on-disk header width during export
+    /// narrowing; `field` is the wire spelling the dialog shows
+    ExportOverflow {
+        field: String,
+    },
 }
 
 impl From<EngineError> for IpcError {
@@ -220,6 +231,20 @@ mod tests {
         assert_eq!(v, serde_json::json!({ "kind": "staleSession" }));
         let v = serde_json::to_value(IpcError::NotEditable { reason: "why".into() }).unwrap();
         assert_eq!(v, serde_json::json!({ "kind": "notEditable", "reason": "why" }));
+    }
+
+    #[test]
+    fn export_error_kinds_serialize_camel_case() {
+        let v = serde_json::to_value(IpcError::FileExists {
+            path: r"C:\x.osr".into(),
+        })
+        .unwrap();
+        assert_eq!(v, serde_json::json!({ "kind": "fileExists", "path": r"C:\x.osr" }));
+        let v = serde_json::to_value(IpcError::ExportOverflow {
+            field: "maxCombo".into(),
+        })
+        .unwrap();
+        assert_eq!(v, serde_json::json!({ "kind": "exportOverflow", "field": "maxCombo" }));
     }
 
     #[test]
