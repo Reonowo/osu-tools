@@ -99,8 +99,10 @@ fn frame_conversion_matches_lazer_decoder() {
         assert_eq!(ours.len(), theirs.frames.len(), "{osr}: frame count");
         for (i, (a, b)) in ours.iter().zip(&theirs.frames).enumerate() {
             let ctx = format!("{osr} frame {i}");
+            // frame times are integral sums of integer deltas on both
+            // sides -- exact, per the tolerance audit's rule for times
             assert!(
-                (a.time - b.time).abs() <= 1e-3,
+                a.time == b.time,
                 "{ctx}: time {} vs {}",
                 a.time,
                 b.time
