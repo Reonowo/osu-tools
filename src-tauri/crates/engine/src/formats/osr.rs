@@ -37,6 +37,20 @@ pub struct OsrHeader {
     pub online_score_id: u64,
 }
 
+impl OsrHeader {
+    /// the header's judged-object total: `300 + 100 + 50 + miss`. this is
+    /// the quantity the corpus admission filter and the viewer's
+    /// incompleteness marker compare against the map's object count -- one
+    /// definition, so the two can never drift apart on what "complete"
+    /// means
+    pub fn judged_count(&self) -> u32 {
+        u32::from(self.count_300)
+            + u32::from(self.count_100)
+            + u32::from(self.count_50)
+            + u32::from(self.count_miss)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplayAction {
     pub delta: i64,
@@ -197,7 +211,7 @@ impl<'a> Reader<'a> {
                 // lossy, deliberately: a malformed header string must not fail
                 // the whole decode. the cost is that such a string does not
                 // survive a pristine byte round-trip, which is documented as a
-                // known deviation on PayloadSource::VerbatimCompressed
+                // deliberate divergence on PayloadSource::VerbatimCompressed
                 Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
             }
             other => Err(EngineError::ReplayParse(format!(
@@ -487,10 +501,10 @@ pub enum PayloadSource {
     /// was read. paired with [`EncodeOptions::include_trailer`] this is the
     /// "pristine" export: re-encoding a freshly decoded file reproduces the
     /// original file's bytes exactly for any canonically-written file; the two
-    /// deviations documented below are the ones specific to this variant, and
-    /// [`encode_osr`] lists the full set.
+    /// deliberate divergences documented below are the ones specific to this
+    /// variant, and [`encode_osr`] lists the full set.
     ///
-    /// # known deviation: header strings that are not valid utf-8
+    /// # deliberate divergence: header strings that are not valid utf-8
     ///
     /// `.osr` header strings are decoded with `String::from_utf8_lossy`, so a
     /// byte sequence that is not valid utf-8 is replaced by `U+FFFD` on the way
@@ -500,17 +514,17 @@ pub enum PayloadSource {
     /// `"pl\u{FFFD}ayer"` and re-encodes two bytes longer, and `encode_osr`
     /// returns `Ok` while doing it -- it does not detect or report the change.
     ///
-    /// this is a known deviation from the byte-identical round-trip, not a
-    /// guarantee that holds for all input. osu!(stable) and lazer both write
+    /// this is a deliberate divergence from the byte-identical round-trip, not
+    /// a guarantee that holds for all input. osu!(stable) and lazer both write
     /// these fields as utf-8, so it is unreachable for any file either of them
     /// produced; it is reachable for a hand-crafted or corrupted file. fixing it
     /// properly means [`OsrHeader`] keeping raw bytes rather than `String`,
-    /// which is a larger change than this deviation currently justifies. the
+    /// which is a larger change than this divergence currently justifies. the
     /// behaviour is pinned by
     /// `formats::osr::tests::non_utf8_header_string_breaks_the_pristine_byte_roundtrip`
     /// so it cannot drift unnoticed
     ///
-    /// # known deviation: the null compressed-payload sentinel
+    /// # deliberate divergence: the null compressed-payload sentinel
     ///
     /// `SerializationReader.ReadByteArray` (serializationreader.cs:37-43) spells
     /// "null array" as a *negative* declared length and "empty array" as a zero
@@ -1280,13 +1294,13 @@ mod tests {
 
     #[test]
     fn non_utf8_header_string_breaks_the_pristine_byte_roundtrip() {
-        // pins the known deviation documented on PayloadSource::VerbatimCompressed.
+        // pins the deliberate divergence documented on PayloadSource::VerbatimCompressed.
         // Reader::osu_string decodes header strings with String::from_utf8_lossy
         // and write_osu_string writes the *lossy* string's byte length, so a
         // header string carrying bytes that are not valid utf-8 comes back out
         // as different bytes -- and encode_osr returns Ok while doing it, rather
         // than detecting or reporting the change. this is asserted as it is,
-        // deviation and all, so that fixing it (which means OsrHeader holding
+        // divergence and all, so that fixing it (which means OsrHeader holding
         // raw bytes instead of String) is a deliberate, visible change rather
         // than something that quietly starts or stops happening
         let original = build_osr_with_player_name(20240101, b"pl\x80ayer", PAYLOAD.as_bytes(), &[]);
@@ -1297,11 +1311,11 @@ mod tests {
         assert_eq!(decoded.header.player_name.as_deref(), Some("pl\u{FFFD}ayer"));
 
         let encoded = encode_osr(&decoded, &full_opts()).expect("encode reports success despite the change");
-        assert_ne!(encoded, original, "the deviation is that these bytes differ");
+        assert_ne!(encoded, original, "the divergence is that these bytes differ");
         assert_eq!(encoded.len(), original.len() + 2);
 
         // for contrast, the identical file with a utf-8 player name does round
-        // trip byte for byte -- the deviation is specific to the invalid bytes
+        // trip byte for byte -- the divergence is specific to the invalid bytes
         let utf8 = build_osr_with_player_name(20240101, b"pl\xc3\xa5ayer", PAYLOAD.as_bytes(), &[]);
         let utf8_decoded = decode_osr(&utf8).unwrap();
         assert_eq!(encode_osr(&utf8_decoded, &full_opts()).unwrap(), utf8);
