@@ -23,6 +23,22 @@ pub fn load_json<T: DeserializeOwned>(relative: &str) -> T {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("bad fixture {path:?}: {e}"))
 }
 
+/// mirror of fixtures/score/legacy_score_attributes.json, shared by the
+/// score goldens and the corpus's synthetic full-combo cross-check
+#[derive(Deserialize)]
+pub struct LegacyScoreAttributesDump {
+    pub maps: Vec<LegacyScoreAttributesMap>,
+}
+
+#[derive(Deserialize)]
+pub struct LegacyScoreAttributesMap {
+    pub name: String,
+    pub accuracy_score: u64,
+    pub combo_score: u64,
+    pub bonus_score: u64,
+    pub max_combo: u32,
+}
+
 pub fn assert_vec2_close(actual: Vec2, expected: [f32; 2], ctx: &str) {
     assert!(
         (actual.x - expected[0]).abs() <= POSITION_TOL && (actual.y - expected[1]).abs() <= POSITION_TOL,

@@ -61,6 +61,7 @@
 //! | [`simulation`]`::*` | `legacyhitpolicy.cs` (classic note lock); `drawablehitcircle.cs`/`drawablesliderhead.cs`/`drawableslider.cs:293-315` (classic circle/slider-head/aggregate judgement); `sliderinputmanager.cs` (tracking state machine, key restriction, `postprocessheadjudgement`); `spinnerrotationtracker.cs`/`spinnerspinhistory.cs`/`drawablespinner.cs` (spinner rotation, ticks, final result); `hitresult.cs`/`osulegacyscoresimulator.cs` (combo/count semantics, with the one deliberate divergence noted below) |
 //! | [`mods`] | `osu.game/beatmaps/legacy/legacymods.cs` (flag values, mirroring the stable bitfield stored in `.osr` headers). the `ModPipeline` seam itself (`adjust_difficulty -> transform_geometry -> rate`) is new scaffolding rather than a lazer port; v1 ships [`mods::NoMod`] only, catalogued further in `TODO.md` |
 //! | [`render_plan`] | not a port: assembles the frontend package from `beatmap`/`path` outputs. its two cited constants are the argon combo palette (`argonskin.cs:51-71`, fallback used because beatmap skins refuse the legacy default palette, `legacybeatmapskin.cs:40`) and the playfield base size (`osuplayfield.cs:47`) |
+//! | [`score`] | derived-field regeneration for export: `legacyrulesetextensions.cs:61-94` (peppy stars, ported on a 96-bit decimal), `legacyscoreutils.cs:90-102` (drain length), `osulegacyscoresimulator.cs` (scorev1 base values and combo bonus), `legacyscoreencoder.cs:105-114` (replay hash, perfect rule). geki/katu is a deliberate divergence from the pinned encoder (which writes zeros for osu!), oracled by the NoMod corpus |
 //!
 //! [`limits`] documents every resource cap this crate enforces at a format
 //! boundary: what each one guards and where its boundary test lives.
@@ -104,6 +105,7 @@ pub mod mods;
 pub mod path;
 pub mod render_plan;
 pub mod replay;
+pub mod score;
 pub mod simulation;
 
 pub use error::{EngineError, Result};
