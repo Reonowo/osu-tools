@@ -3,7 +3,7 @@
 // header + scrolling body together, so SidePanel can mount this as a single
 // self-contained panel
 
-import { Check, X } from "lucide-react";
+import { Check, Minus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { PanelHeader } from "@/components/shell/SidePanel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -12,12 +12,14 @@ import { formatTime } from "@/lib/format";
 import {
 	crossCheckConsistent,
 	describeCrossCheck,
+	incompletenessNote,
 	integrityRowLabel,
 	integrityRowValue,
-	lifeBarNote
+	lifeBarNote,
+	rowVerdict
 } from "@/lib/integrity";
 import { formatLatticeStep, type Lattice, type OffLatticeSummary } from "@/lib/lattice";
-import type { IntegrityReport } from "@/lib/scene-types";
+import type { Incompleteness, IntegrityReport } from "@/lib/scene-types";
 import { useViewerStore } from "@/state/store";
 import { SectionLabel } from "./SectionLabel";
 
@@ -120,13 +122,28 @@ function Histogram({
 // the loaded file's header-vs-simulated comparison. rendered only when the
 // scene shipped a report (pre-lazer authoritative scenes), so an
 // inapplicable rules profile never raises false mismatch alarms. the report
-// describes the loaded file across every in-session edit
-function IntegritySection({ report }: { report: IntegrityReport }) {
-	const consistent = crossCheckConsistent(report.crossCheck);
+// describes the loaded file across every in-session edit. an incomplete
+// play keeps its rows but drops the verdict treatment: the header stops at
+// the fail point while simulation judges the whole map, so a differing row
+// is expected context there, never an accusation
+function IntegritySection({
+	report,
+	incompleteness
+}: {
+	report: IntegrityReport;
+	incompleteness: Incompleteness | null;
+}) {
+	const incomplete = incompleteness !== null;
+	const consistent = crossCheckConsistent(report.crossCheck, incompleteness);
 	return (
 		<div>
 			<SectionLabel>integrity</SectionLabel>
 			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+				{incomplete && (
+					<p className="mb-2.5 border-b border-border pb-2 text-[10.5px] leading-[1.55] text-[#fbbf24]">
+						{incompletenessNote(incompleteness)}
+					</p>
+				)}
 				<div className="grid grid-cols-[auto_1fr_1fr_auto] items-center gap-x-3 gap-y-[6px] text-[11px]">
 					<span />
 					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">header</span>
@@ -134,24 +151,34 @@ function IntegritySection({ report }: { report: IntegrityReport }) {
 						simulated
 					</span>
 					<span />
-					{report.rows.map((row) => (
-						<div key={row.field} className="contents">
-							<span className="text-[#8a8a93]">{integrityRowLabel(row.field)}</span>
-							<span
-								className={`text-right tabular-nums ${row.match ? "text-[#e4e4e7]" : "text-destructive"}`}
-							>
-								{integrityRowValue(row.field, row.header)}
-							</span>
-							<span className="text-right tabular-nums text-[#e4e4e7]">
-								{integrityRowValue(row.field, row.simulated)}
-							</span>
-							{row.match ? (
-								<Check className="size-3 shrink-0 text-[#88b300]" aria-label="matches" />
-							) : (
-								<X className="size-3 shrink-0 text-destructive" aria-label="differs" />
-							)}
-						</div>
-					))}
+					{report.rows.map((row) => {
+						const verdict = rowVerdict(row, incompleteness);
+						return (
+							<div key={row.field} className="contents">
+								<span className="text-[#8a8a93]">{integrityRowLabel(row.field)}</span>
+								<span
+									className={`text-right tabular-nums ${
+										verdict === "differs" ? "text-destructive" : "text-[#e4e4e7]"
+									}`}
+								>
+									{integrityRowValue(row.field, row.header)}
+								</span>
+								<span className="text-right tabular-nums text-[#e4e4e7]">
+									{integrityRowValue(row.field, row.simulated)}
+								</span>
+								{verdict === "match" ? (
+									<Check className="size-3 shrink-0 text-[#88b300]" aria-label="matches" />
+								) : verdict === "expected" ? (
+									<Minus
+										className="size-3 shrink-0 text-[#8a8a93]"
+										aria-label="differs (play ended early)"
+									/>
+								) : (
+									<X className="size-3 shrink-0 text-destructive" aria-label="differs" />
+								)}
+							</div>
+						);
+					})}
 				</div>
 				<div
 					className={`mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] tabular-nums ${
@@ -365,7 +392,9 @@ export function AnalysisPanel() {
 					<StatRow label="median Δt" value={`${analysis.medianDeltaMs.toFixed(1)}ms`} />
 				</dl>
 
-				{scene.integrity !== null && <IntegritySection report={scene.integrity} />}
+				{scene.integrity !== null && (
+					<IntegritySection report={scene.integrity} incompleteness={scene.incompleteness} />
+				)}
 
 				<OffLatticeSection lattice={editor?.lattice ?? null} summary={editor?.offLattice ?? null} />
 			</div>
