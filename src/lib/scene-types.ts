@@ -16,6 +16,18 @@ export interface LoadedScene {
 	/// shipped only for pre-lazer authoritative scenes; always describes the
 	/// loaded file, never in-session edits
 	integrity: IntegrityReport | null;
+	/// present when the play ended early: the header judged fewer objects
+	/// than the map has. the integrity report then annotates instead of
+	/// rendering verdicts, and the export dialog states what a regenerating
+	/// export will contain. withheld on a consented beatmap mismatch
+	incompleteness: Incompleteness | null;
+}
+
+/// judged-vs-total identity computed at load from the header counts alone;
+/// judged < total by construction
+export interface Incompleteness {
+	judged: number;
+	total: number;
 }
 
 export interface IntegrityReport {
@@ -23,10 +35,13 @@ export interface IntegrityReport {
 	crossCheck: {
 		sections: number;
 		gekiKatsu: number;
-		/// sections − (geki + katu): signed, so an impossible header reads as
-		/// the inconsistency it is
-		sectionsWithMiss: number;
+		/// sections − (geki + katu): the sections that ended without a burst
+		/// (stable awards neither geki nor katu to a section containing a
+		/// miss or a 50). signed, so an impossible header reads as the
+		/// inconsistency it is
+		sectionsWithoutBurst: number;
 		countMiss: number;
+		count50: number;
 	};
 	lifeBarPresent: boolean;
 }

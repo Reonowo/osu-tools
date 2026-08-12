@@ -79,6 +79,7 @@ export function testScene(overrides: Partial<LoadedScene> = {}): LoadedScene {
 		backgroundPath: null,
 		warnings: [],
 		integrity: null,
+		incompleteness: null,
 		...overrides
 	};
 }

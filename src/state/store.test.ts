@@ -1208,7 +1208,7 @@ describe("editor slice and edit queue", () => {
 	test("the integrity report describes the loaded file across edits", async () => {
 		const integrity = {
 			rows: [{ field: "count300", header: 1, simulated: 1, match: true }],
-			crossCheck: { sections: 1, gekiKatsu: 1, sectionsWithMiss: 0, countMiss: 0 },
+			crossCheck: { sections: 1, gekiKatsu: 1, sectionsWithoutBurst: 0, countMiss: 0, count50: 0 },
 			lifeBarPresent: false
 		};
 		const store = createViewerStore(
