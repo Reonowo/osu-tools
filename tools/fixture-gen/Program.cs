@@ -392,6 +392,8 @@ void DumpBeatmapFixtures() => FixtureGen.BeatmapDumps.Run(outDir, namedFloatLite
 
 FixtureGen.ReplayDumps.Run(outDir, jsonOptions);
 
+FixtureGen.ScoreDumps.Run(outDir, jsonOptions);
+
 DumpEasingFixtures();
 
 void DumpEasingFixtures()
