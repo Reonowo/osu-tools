@@ -21,7 +21,7 @@ pub struct DerivedScore {
     pub perfect: bool,
     pub total_score: u64,
     pub sections: u32,
-    pub sections_with_miss: u32,
+    pub sections_without_burst: u32,
 }
 
 /// derives everything from one simulation pass. the mod multiplier is
@@ -43,9 +43,9 @@ pub fn derive_score(
         count_miss: timeline.totals.count_miss,
         max_combo: timeline.totals.max_combo,
         perfect: is_perfect(processed, &timeline.totals),
-        total_score: total_score(timeline, stars, NOMOD_SCORE_MULTIPLIER),
+        total_score: total_score(timeline, processed, stars, NOMOD_SCORE_MULTIPLIER),
         sections: tally.sections,
-        sections_with_miss: tally.sections_with_miss,
+        sections_without_burst: tally.sections_without_burst,
     })
 }
 
@@ -121,7 +121,7 @@ mod tests {
             perfect: true,
             total_score,
             sections: 25,
-            sections_with_miss: 0,
+            sections_without_burst: 0,
         }
     }
 

@@ -80,7 +80,7 @@ fn local_nomod_replays_self_verify() {
             (
                 tally.count_geki,
                 tally.count_katsu,
-                total_score(&timeline, stars, NOMOD_SCORE_MULTIPLIER),
+                total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
             ),
             (
                 u32::from(osr.header.count_geki),
@@ -152,7 +152,7 @@ fn synthetic_full_combo_on_the_fixture_map() {
     // committed path also exercises the corpus's derived-field assertions
     let tally = section_tally(&processed, &timeline);
     assert_eq!(
-        (tally.count_geki, tally.count_katsu, tally.sections_with_miss),
+        (tally.count_geki, tally.count_katsu, tally.sections_without_burst),
         (tally.sections, 0, 0),
         "an all-great full combo is all geki"
     );
@@ -168,7 +168,7 @@ fn synthetic_full_combo_on_the_fixture_map() {
         .expect("the score dump family covers the fixture maps");
     let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap();
     assert_eq!(
-        total_score(&timeline, stars, NOMOD_SCORE_MULTIPLIER),
+        total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
         attributes.accuracy_score + attributes.combo_score,
         "simulated full-combo total matches lazer's dumped attributes"
     );

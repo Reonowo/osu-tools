@@ -112,6 +112,7 @@ fn full_combo_timeline(processed: &ProcessedBeatmap) -> JudgementTimeline {
     JudgementTimeline {
         events,
         totals: HitTotals::default(),
+        spinner_scoring: Vec::new(),
     }
 }
 
@@ -198,7 +199,7 @@ fn synthetic_full_combo_totals_match_the_lazer_dumped_attributes() {
         let timeline = full_combo_timeline(&processed);
 
         assert_eq!(
-            total_score(&timeline, stars, NOMOD_SCORE_MULTIPLIER),
+            total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
             case.accuracy_score + case.combo_score,
             "{}: full-combo total",
             case.name
@@ -207,6 +208,58 @@ fn synthetic_full_combo_totals_match_the_lazer_dumped_attributes() {
     }
 
     assert!(covered >= 3, "expected several spinner-free fixture maps, got {covered}");
+}
+
+#[test]
+fn the_stable_spinner_tick_model_reaches_the_lazer_dumped_bonus_at_the_cap() {
+    // the legacy simulator computes stable's theoretical spinner bonus with
+    // the od-0 requirement floor hardcoded (osulegacyscoresimulator.cs:137,
+    // "the worst case that maximises bonus score"), so on an od0 map the
+    // floor is exact and a half-spin count at total_half_spins_possible
+    // must score exactly the dumped BonusScore. driven through total_score
+    // with a missed final (base 0), so the spinner tick fold is the whole
+    // total -- the committed oracle for the tick formula's gate, parity,
+    // and 100/1100 values (engine parity pass, issue 03)
+    let dump: LegacyScoreAttributesDump = fixture_util::load_json("score/legacy_score_attributes.json");
+    let case = dump
+        .maps
+        .iter()
+        .find(|m| m.name == "spinner-od0")
+        .expect("the score dump family covers the od0 spinner map");
+    let processed = processed_fixture("spinner-od0");
+    let ProcessedKind::Spinner(spinner) = &processed.objects[0].kind else {
+        panic!("spinner-od0 holds one spinner");
+    };
+
+    let timeline = JudgementTimeline {
+        events: vec![JudgementEvent {
+            time: 5000.0,
+            object_index: 0,
+            kind: JudgementKind::SpinnerFinal(engine::beatmap::difficulty::HitGrade::Miss),
+            combo_after: 0,
+            accuracy_after: 0.0,
+        }],
+        totals: HitTotals::default(),
+        spinner_scoring: vec![engine::simulation::SpinnerScoring {
+            object_index: 0,
+            scoring_half_spins: i64::from(spinner.total_half_spins_possible),
+        }],
+    };
+    let map = decode_beatmap_path(&fixture_util::fixtures_dir().join("beatmaps/spinner-od0.osu")).unwrap();
+    let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap();
+    assert_eq!(
+        total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
+        case.bonus_score,
+        "capped half spins score exactly the dumped spinner bonus"
+    );
+
+    // and overspinning past the cap changes nothing
+    let mut over = timeline.clone();
+    over.spinner_scoring[0].scoring_half_spins = i64::from(spinner.total_half_spins_possible) + 40;
+    assert_eq!(
+        total_score(&over, &processed, stars, NOMOD_SCORE_MULTIPLIER),
+        case.bonus_score
+    );
 }
 
 #[test]
