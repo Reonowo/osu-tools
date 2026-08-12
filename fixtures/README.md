@@ -38,10 +38,13 @@ test, which is the spec's §Parity 2 oracle. Layout: drop a real `.osr` file and
 its matching `.osu` beatmap side by side, sharing the same stem --
 `<name>.osr` + `<name>.osu`. The test decodes both, simulates the replay
 against the processed beatmap, and asserts that the simulated `{300, 100, 50,
-miss, max combo}` totals equal the `.osr` header's own counts exactly --
+miss, max combo}` totals -- plus the derived geki/katu counts and total score
+(engine `score` module) -- equal the `.osr` header's own values exactly,
 because for a real NoMod stable replay those numbers are already known and
-correct, so any divergence is a bug in this crate's simulation, not in the
-replay. Replays whose `.osr` header mods are non-zero are skipped (mod
+correct, so any divergence is a bug in this crate's simulation or derivation,
+not in the replay. The header is also the _only_ oracle for geki/katu: the
+pinned lazer encoder writes zeros for osu!, so only stable-set replays carry
+real values (lazer-set scores are useless here). Replays whose `.osr` header mods are non-zero are skipped (mod
 simulation is a TODO.md item, not yet a v1 concern); a `.osr` with no sibling
 `.osu`, or that fails to decode, is skipped with a stderr notice rather than
 failing the test. An empty or entirely missing `replays/local/` directory
@@ -52,6 +55,29 @@ replays. `tests/replay_corpus.rs` also carries a second, committed test
 `beatmaps/slider-zoo-v14.osu` with a hand-built replay and hand-derived
 expected totals, so the pipeline is exercised end to end on every CI run
 even with an empty local corpus.
+
+## Score dumps
+
+`score/` pins the derived-field regeneration (engine `score` module) with
+values lazer's own runtime computed (`tools/fixture-gen/ScoreDumps.cs`):
+
+- `score/peppy_stars.json` -- `CalculateDifficultyPeppyStars` over adversarial
+  difficulty triples (messy-float 15-significant-digit rounding, banker's-tie
+  sums in both directions, the ratio clamp at both ends, the `drainLength == 0`
+  sentinel, stable's negative-drain corner) plus the five fixture beatmaps
+  with their object counts and drain lengths dumped separately, so a drain
+  mismatch localises apart from the decimal arithmetic. Consumed by
+  `tests/score_fixtures.rs`.
+- `score/legacy_score_attributes.json` -- the osu! ruleset's legacy score
+  simulator (reached via `OsuRuleset.CreateLegacyScoreSimulator()`; the
+  simulator itself is internal) over the fixture maps. Its `MaxCombo` pins
+  the achievable-combo counter, and on spinner-free maps `AccuracyScore +
+ComboScore` is the exact achieved total of a synthetic full combo.
+- `score/replay_hash.json` -- input pairs for the pinned encoder's replay
+  hash (`md5("lazer-{username}-{date}")`), with the invariant-formatted date
+  string dumped separately from the hash so a formatting mismatch localises.
+
+All score values are integers or exact strings and compare exact.
 
 ## Named floating point literals
 
