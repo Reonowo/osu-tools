@@ -1646,9 +1646,24 @@ mod tests {
                 "pristine byte round-trip failed for {:?}",
                 entry.path()
             );
+            // osu!(stable) appends a trailing comma after the terminal
+            // `-12345` seed frame; lazer's encoder writes that frame bare
+            // (legacyscoreencoder.cs:181, which `write_action` ports). the two
+            // spell the same action list, and this corpus is necessarily
+            // stable-*written* -- only a replay the stable client wrote itself
+            // still carries geki/katu -- so every file in it ends in stable's
+            // separator. compare modulo that one byte rather than holding
+            // stable's files to lazer's spelling; every earlier byte, which is
+            // where a real reserialization regression would land, still has to
+            // match exactly
+            let reserialized = serialize_actions(&decoded.actions);
+            let expected = match decoded.decompressed_payload.strip_suffix(b",") {
+                Some(without_separator) if without_separator == reserialized => without_separator,
+                _ => decoded.decompressed_payload.as_slice(),
+            };
             assert_eq!(
-                serialize_actions(&decoded.actions),
-                decoded.decompressed_payload,
+                reserialized,
+                expected,
                 "payload reserialization diverged for {:?}",
                 entry.path()
             );
