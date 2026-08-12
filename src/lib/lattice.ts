@@ -76,6 +76,66 @@ export function inferLattice(frames: readonly FrameDto[]): Lattice | null {
 	return best;
 }
 
+/** one maximal contiguous span of off-lattice frames -- the forensic
+ * signature of interpolated or synthesized input. indices inclusive */
+export interface OffLatticeRun {
+	startIndex: number;
+	endIndex: number;
+	startTime: number;
+	endTime: number;
+}
+
+export interface OffLatticeSummary {
+	/** every run, counted exactly even when the stored list is capped */
+	runCount: number;
+	/** total off-lattice frames across all runs, exact */
+	offLatticeFrames: number;
+	/** the longest runs (ties broken earlier-first), capped at
+	 * MAX_SUMMARY_RUNS so a hostile alternating stream cannot balloon the
+	 * summary; counts above stay exact regardless */
+	longestRuns: OffLatticeRun[];
+}
+
+export const MAX_SUMMARY_RUNS = 8;
+
+/** a frame is off-lattice when either axis fails the on-lattice predicate at
+ * its usual tolerance; a run is a maximal contiguous index range with no gap
+ * tolerance and no minimum length. computed once at scene install next to
+ * the frozen lattice, never per edit; a null lattice yields null (windowed
+ * play reads as unanalysable, never as clean) */
+export function summarizeOffLattice(frames: readonly FrameDto[], lattice: Lattice | null): OffLatticeSummary | null {
+	if (lattice === null) return null;
+	const { step } = lattice;
+
+	const summary: OffLatticeSummary = { runCount: 0, offLatticeFrames: 0, longestRuns: [] };
+	const runLength = (run: OffLatticeRun) => run.endIndex - run.startIndex + 1;
+	const closeRun = (startIndex: number, endIndex: number) => {
+		summary.runCount += 1;
+		summary.offLatticeFrames += endIndex - startIndex + 1;
+		summary.longestRuns.push({
+			startIndex,
+			endIndex,
+			startTime: frames[startIndex].time,
+			endTime: frames[endIndex].time
+		});
+		summary.longestRuns.sort((a, b) => runLength(b) - runLength(a) || a.startIndex - b.startIndex);
+		if (summary.longestRuns.length > MAX_SUMMARY_RUNS) summary.longestRuns.length = MAX_SUMMARY_RUNS;
+	};
+
+	let runStart = -1;
+	for (let i = 0; i <= frames.length; i += 1) {
+		const frame = frames[i];
+		const off = frame !== undefined && (!isOnLattice(frame.x, step) || !isOnLattice(frame.y, step));
+		if (off && runStart === -1) {
+			runStart = i;
+		} else if (!off && runStart !== -1) {
+			closeRun(runStart, i - 1);
+			runStart = -1;
+		}
+	}
+	return summary;
+}
+
 /** greatest common divisor of two positive integers */
 function gcd(a: number, b: number): number {
 	while (b !== 0) [a, b] = [b, a % b];
