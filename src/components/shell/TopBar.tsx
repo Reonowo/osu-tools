@@ -165,25 +165,21 @@ export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () =>
 					</Tooltip>
 				)}
 
-				{/* the trigger is live -- ExportDialog is the inert surface it opens:
-				the destination field, browse, and the "export .osr" footer button
-				all stay disabled inside it, so opening the dialog can never
-				produce a file. the span wrapper predates this fix and was load-
-				bearing then: a natively `disabled` button suppresses mouse events
-				outright (not just via pointer-events css), so base-ui's hover
-				tooltip needed a non-disabled ancestor to listen on. now that the
-				button isn't disabled, TooltipTrigger could likely target it
-				directly (dialog.tsx renders Button straight into a base-ui
-				render prop elsewhere), but that's unverified without a DOM pass,
-				so the wrapper stays -- a working tooltip matters more than one
-				less span */}
+				{/* the span wrapper predates the live dialog and was load-bearing
+				when this button could be disabled: a natively `disabled` button
+				suppresses mouse events outright (not just via pointer-events
+				css), so base-ui's hover tooltip needed a non-disabled ancestor
+				to listen on. TooltipTrigger could likely target the button
+				directly now, but that's unverified without a DOM pass, so the
+				wrapper stays -- a working tooltip matters more than one less
+				span */}
 				<Tooltip>
 					<TooltipTrigger render={<span />}>
 						<Button size="sm" variant="secondary" onClick={onOpenExport}>
 							<Download /> export
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>export needs the derived-field regeneration in TODO.md</TooltipContent>
+					<TooltipContent>write the current document to a .osr</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
