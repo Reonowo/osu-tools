@@ -56,6 +56,70 @@ replays. `tests/replay_corpus.rs` also carries a second, committed test
 expected totals, so the pipeline is exercised end to end on every CI run
 even with an empty local corpus.
 
+## Sweep runner
+
+The sweep (`CONTEXT.md` § Parity) measures the engine's parity rate across a
+whole local osu! stable play library — measurement, never curation, and the
+instrument behind every quoted parity percentage. It is an engine-crate cargo
+example, so CI never runs it and it may use dev-dependencies:
+
+```bash
+# from src-tauri/; release is the profile every quoted verdict comes from
+cargo run -p engine --release --example sweep_replays -- <stable-dir>
+OSU_STABLE_DIR=E:\osu! cargo run -p engine --release --example sweep_replays
+```
+
+It enumerates the client's own `Data/r` and `Replays` directories, applies
+exactly the corpus admission filters (complete, NoMod, stable-set,
+stable-written — the same rules "Replay corpus" above and the corpus
+checklist define), prints per-filter rejection counts and per-assertion pass
+rates over the admitted population, and writes a JSON failure manifest to
+`replays/local/sweep_manifest.json` (gitignored; `--manifest <path>`
+overrides). The manifest records, per failing replay, the header-vs-simulated
+value of every diverging field plus the two triage axes (header miss count,
+spinner presence); its full schema lives in the example's doc comment
+(`src-tauri/crates/engine/examples/sweep_replays.rs`). Beatmaps are matched
+by header md5 through `osu!.db` when the `osu-db` crate can parse it, falling
+back to hashing `Songs/**/*.osu` (matched files are re-hashed either way, so
+a stale index rejects rather than mismatching).
+
+## Judgement dumps (scenario fixtures)
+
+`judgement/` is the scenario-fixture family (`CONTEXT.md` § Parity): golden
+fixtures whose inputs are hand-built to isolate one mechanic each, judged by
+lazer gameplay itself. `tools/fixture-gen/JudgementDumps.cs` boots a headless
+game host per scenario, plays the hand-built replay through a real
+`ReplayPlayer` under the Classic mod (the legacy rules path the engine
+ports), and dumps the per-element judgement timeline — result kind, hit
+flag, running combo, in application order. The committed minimal maps live
+in `judgement/maps/` (inputs, hand-authored; the dumps are the expectations
+and are never hand-edited).
+
+Scenarios: `baseline` (fully predictable pass — harness regressions show
+here), `spinner-accumulation` (spins past the bonus threshold + a partial
+spin, for the spinner scoring work), `slider-tracking` (follow-circle
+leave-and-return over a tick, plus a dropped tail without a combo break),
+`notelock-stack` (the note-lock predecessor-lifetime shielding case).
+
+Determinism is enforced, not assumed: the beatmap track follows a manually
+stepped clock, the framework runs single-threaded, each scenario generates
+twice in fresh subprocesses, and the two dumps must be byte-identical or
+generation fails. Events deliberately omit raw judgement times and spinner
+rotation (update-loop sampling artifacts, not mechanisms — the full
+rationale is in `JudgementDumps.cs` and the `meta.json` note). Adding a
+scenario = add the map under `judgement/maps/`, add the scenario entry +
+frame builder in `JudgementDumps.cs`, regenerate, and commit map + dump
+together.
+
+`dotnet run --project tools/fixture-gen -- --out fixtures --family judgement`
+regenerates this family alone while iterating (any fixture diff that lands
+should still come from a full run). Do not run code formatters over
+`fixtures/` — the dumps' formatting is the generator's, and reformatting
+breaks the rerun-leaves-the-tree-clean check. Enforced since 2026-08-12:
+`fixtures/` sits in `ignorePatterns` of both `.oxfmtrc.json` and
+`.oxlintrc.json`, which also covers the lint-staged pre-commit hook (the
+ignore wins even over explicitly passed file arguments).
+
 ## Score dumps
 
 `score/` pins the derived-field regeneration (engine `score` module) with

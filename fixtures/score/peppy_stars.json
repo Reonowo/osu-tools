@@ -1,163 +1,172 @@
 {
-	"triples": [
-		{
-			"hp": 5.3,
-			"od": 4.2,
-			"cs": 6.6,
-			"object_count": 1000,
-			"drain_length": 60,
-			"peppy_stars": 4
-		},
-		{
-			"hp": 0.1,
-			"od": 9.9,
-			"cs": 3.7,
-			"object_count": 727,
-			"drain_length": 99,
-			"peppy_stars": 4
-		},
-		{
-			"hp": 7.77777,
-			"od": 1.23456,
-			"cs": 8.1,
-			"object_count": 2500,
-			"drain_length": 180,
-			"peppy_stars": 4
-		},
-		{
-			"hp": 9.999999,
-			"od": 1e-6,
-			"cs": 5,
-			"object_count": 300,
-			"drain_length": 30,
-			"peppy_stars": 4
-		},
-		{
-			"hp": 0,
-			"od": 0,
-			"cs": 0,
-			"object_count": 1,
-			"drain_length": 1,
-			"peppy_stars": 1
-		},
-		{
-			"hp": 10,
-			"od": 10,
-			"cs": 10,
-			"object_count": 100000,
-			"drain_length": 1,
-			"peppy_stars": 6
-		},
-		{
-			"hp": 5,
-			"od": 5,
-			"cs": 5,
-			"object_count": 1,
-			"drain_length": 100000,
-			"peppy_stars": 2
-		},
-		{
-			"hp": 6,
-			"od": 7,
-			"cs": 8,
-			"object_count": 1,
-			"drain_length": 0,
-			"peppy_stars": 5
-		},
-		{
-			"hp": 4,
-			"od": 4,
-			"cs": 4,
-			"object_count": 100,
-			"drain_length": -15,
-			"peppy_stars": 2
-		},
-		{
-			"hp": 2,
-			"od": 3,
-			"cs": 4,
-			"object_count": 1,
-			"drain_length": 3,
-			"peppy_stars": 2
-		},
-		{
-			"hp": 1.5,
-			"od": 1.5,
-			"cs": 0.75,
-			"object_count": 1,
-			"drain_length": 160,
-			"peppy_stars": 0
-		},
-		{
-			"hp": 5.5,
-			"od": 5.25,
-			"cs": 0.25,
-			"object_count": 1,
-			"drain_length": 20,
-			"peppy_stars": 2
-		},
-		{
-			"hp": 9.5,
-			"od": 9.25,
-			"cs": 0.25,
-			"object_count": 0,
-			"drain_length": 1,
-			"peppy_stars": 2
-		},
-		{
-			"hp": 10,
-			"od": 10,
-			"cs": 6.5,
-			"object_count": 1,
-			"drain_length": 80,
-			"peppy_stars": 4
-		}
-	],
-	"maps": [
-		{
-			"name": "stacking-v14",
-			"hp": 5,
-			"od": 8.3,
-			"cs": 4,
-			"object_count": 9,
-			"drain_length": 3,
-			"peppy_stars": 4
-		},
-		{
-			"name": "old-format-v4",
-			"hp": 5,
-			"od": 6,
-			"cs": 5,
-			"object_count": 6,
-			"drain_length": 1,
-			"peppy_stars": 4
-		},
-		{
-			"name": "slider-zoo-v14",
-			"hp": 5,
-			"od": 7,
-			"cs": 5.2,
-			"object_count": 5,
-			"drain_length": 14,
-			"peppy_stars": 3
-		},
-		{
-			"name": "v7-tick-multiplier",
-			"hp": 5,
-			"od": 7,
-			"cs": 4,
-			"object_count": 1,
-			"drain_length": 0,
-			"peppy_stars": 4
-		},
-		{
-			"name": "spinners-combos-od10",
-			"hp": 5,
-			"od": 10,
-			"cs": 7,
-			"object_count": 7,
-			"drain_length": 3,
-			"peppy_stars": 5
-		}
-	]
+  "triples": [
+    {
+      "hp": 5.3,
+      "od": 4.2,
+      "cs": 6.6,
+      "object_count": 1000,
+      "drain_length": 60,
+      "peppy_stars": 4
+    },
+    {
+      "hp": 0.1,
+      "od": 9.9,
+      "cs": 3.7,
+      "object_count": 727,
+      "drain_length": 99,
+      "peppy_stars": 4
+    },
+    {
+      "hp": 7.77777,
+      "od": 1.23456,
+      "cs": 8.1,
+      "object_count": 2500,
+      "drain_length": 180,
+      "peppy_stars": 4
+    },
+    {
+      "hp": 9.999999,
+      "od": 1E-06,
+      "cs": 5,
+      "object_count": 300,
+      "drain_length": 30,
+      "peppy_stars": 4
+    },
+    {
+      "hp": 0,
+      "od": 0,
+      "cs": 0,
+      "object_count": 1,
+      "drain_length": 1,
+      "peppy_stars": 1
+    },
+    {
+      "hp": 10,
+      "od": 10,
+      "cs": 10,
+      "object_count": 100000,
+      "drain_length": 1,
+      "peppy_stars": 6
+    },
+    {
+      "hp": 5,
+      "od": 5,
+      "cs": 5,
+      "object_count": 1,
+      "drain_length": 100000,
+      "peppy_stars": 2
+    },
+    {
+      "hp": 6,
+      "od": 7,
+      "cs": 8,
+      "object_count": 1,
+      "drain_length": 0,
+      "peppy_stars": 5
+    },
+    {
+      "hp": 4,
+      "od": 4,
+      "cs": 4,
+      "object_count": 100,
+      "drain_length": -15,
+      "peppy_stars": 2
+    },
+    {
+      "hp": 2,
+      "od": 3,
+      "cs": 4,
+      "object_count": 1,
+      "drain_length": 3,
+      "peppy_stars": 2
+    },
+    {
+      "hp": 1.5,
+      "od": 1.5,
+      "cs": 0.75,
+      "object_count": 1,
+      "drain_length": 160,
+      "peppy_stars": 0
+    },
+    {
+      "hp": 5.5,
+      "od": 5.25,
+      "cs": 0.25,
+      "object_count": 1,
+      "drain_length": 20,
+      "peppy_stars": 2
+    },
+    {
+      "hp": 9.5,
+      "od": 9.25,
+      "cs": 0.25,
+      "object_count": 0,
+      "drain_length": 1,
+      "peppy_stars": 2
+    },
+    {
+      "hp": 10,
+      "od": 10,
+      "cs": 6.5,
+      "object_count": 1,
+      "drain_length": 80,
+      "peppy_stars": 4
+    }
+  ],
+  "maps": [
+    {
+      "name": "stacking-v14",
+      "hp": 5,
+      "od": 8.3,
+      "cs": 4,
+      "object_count": 9,
+      "drain_length": 3,
+      "peppy_stars": 4
+    },
+    {
+      "name": "old-format-v4",
+      "hp": 5,
+      "od": 6,
+      "cs": 5,
+      "object_count": 6,
+      "drain_length": 1,
+      "peppy_stars": 4
+    },
+    {
+      "name": "slider-zoo-v14",
+      "hp": 5,
+      "od": 7,
+      "cs": 5.2,
+      "object_count": 5,
+      "drain_length": 14,
+      "peppy_stars": 3
+    },
+    {
+      "name": "v7-tick-multiplier",
+      "hp": 5,
+      "od": 7,
+      "cs": 4,
+      "object_count": 1,
+      "drain_length": 0,
+      "peppy_stars": 4
+    },
+    {
+      "name": "spinners-combos-od10",
+      "hp": 5,
+      "od": 10,
+      "cs": 7,
+      "object_count": 7,
+      "drain_length": 3,
+      "peppy_stars": 5
+    },
+    {
+      "name": "spinner-od0",
+      "hp": 5,
+      "od": 0,
+      "cs": 4,
+      "object_count": 1,
+      "drain_length": 0,
+      "peppy_stars": 3
+    }
+  ]
 }

@@ -1,0 +1,949 @@
+{
+  "scenario": "slider-tracking",
+  "description": "slider 1: follow circle left after tick 1 and re-entered before the tail (tick 2 missed); slider 2: tracked through its tick then abandoned (tail dropped without a combo break)",
+  "beatmap_file": "scenario-slider-tracking.osu",
+  "mods": [
+    "CL"
+  ],
+  "clock_step_ms": 4,
+  "frames": [
+    {
+      "time": 0,
+      "pos": [
+        50,
+        50
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1900,
+      "pos": [
+        50,
+        50
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2000,
+      "pos": [
+        50,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2020,
+      "pos": [
+        54,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2040,
+      "pos": [
+        58,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2060,
+      "pos": [
+        62,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2080,
+      "pos": [
+        66,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2100,
+      "pos": [
+        70,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2120,
+      "pos": [
+        74,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2140,
+      "pos": [
+        78,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2160,
+      "pos": [
+        82,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2180,
+      "pos": [
+        86,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2200,
+      "pos": [
+        90,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2220,
+      "pos": [
+        94,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2240,
+      "pos": [
+        98,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2260,
+      "pos": [
+        102,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2280,
+      "pos": [
+        106,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2300,
+      "pos": [
+        110,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2320,
+      "pos": [
+        114,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2340,
+      "pos": [
+        118,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2360,
+      "pos": [
+        122,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2380,
+      "pos": [
+        126,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2400,
+      "pos": [
+        130,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2420,
+      "pos": [
+        134,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2440,
+      "pos": [
+        138,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2460,
+      "pos": [
+        142,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2480,
+      "pos": [
+        146,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2500,
+      "pos": [
+        150,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2520,
+      "pos": [
+        154,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2540,
+      "pos": [
+        158,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2560,
+      "pos": [
+        162,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2580,
+      "pos": [
+        166,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2600,
+      "pos": [
+        170,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2610,
+      "pos": [
+        370,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3040,
+      "pos": [
+        370,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3050,
+      "pos": [
+        260,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3070,
+      "pos": [
+        264,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3090,
+      "pos": [
+        268,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3110,
+      "pos": [
+        272,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3130,
+      "pos": [
+        276,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3150,
+      "pos": [
+        280,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3170,
+      "pos": [
+        284,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3190,
+      "pos": [
+        288,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3210,
+      "pos": [
+        292,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3230,
+      "pos": [
+        296,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3250,
+      "pos": [
+        300,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3270,
+      "pos": [
+        304,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3290,
+      "pos": [
+        308,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3310,
+      "pos": [
+        312,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3330,
+      "pos": [
+        316,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3350,
+      "pos": [
+        320,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3370,
+      "pos": [
+        324,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3390,
+      "pos": [
+        328,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3410,
+      "pos": [
+        332,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3430,
+      "pos": [
+        336,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3450,
+      "pos": [
+        340,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3470,
+      "pos": [
+        344,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3490,
+      "pos": [
+        348,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3520,
+      "pos": [
+        350,
+        50
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3550,
+      "pos": [
+        350,
+        50
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 4900,
+      "pos": [
+        50,
+        250
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 5000,
+      "pos": [
+        50,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5020,
+      "pos": [
+        54,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5040,
+      "pos": [
+        58,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5060,
+      "pos": [
+        62,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5080,
+      "pos": [
+        66,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5100,
+      "pos": [
+        70,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5120,
+      "pos": [
+        74,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5140,
+      "pos": [
+        78,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5160,
+      "pos": [
+        82,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5180,
+      "pos": [
+        86,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5200,
+      "pos": [
+        90,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5220,
+      "pos": [
+        94,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5240,
+      "pos": [
+        98,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5260,
+      "pos": [
+        102,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5280,
+      "pos": [
+        106,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5300,
+      "pos": [
+        110,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5320,
+      "pos": [
+        114,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5340,
+      "pos": [
+        118,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5360,
+      "pos": [
+        122,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5380,
+      "pos": [
+        126,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5400,
+      "pos": [
+        130,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5420,
+      "pos": [
+        134,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5440,
+      "pos": [
+        138,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5460,
+      "pos": [
+        142,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5480,
+      "pos": [
+        146,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5500,
+      "pos": [
+        150,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5520,
+      "pos": [
+        154,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5540,
+      "pos": [
+        158,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5560,
+      "pos": [
+        162,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5580,
+      "pos": [
+        166,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5600,
+      "pos": [
+        170,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5620,
+      "pos": [
+        450,
+        250
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 5900,
+      "pos": [
+        450,
+        250
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 6500,
+      "pos": [
+        450,
+        250
+      ],
+      "left": false,
+      "right": false
+    }
+  ],
+  "events": [
+    {
+      "object_index": 0,
+      "nested_index": 0,
+      "kind": "SliderHeadCircle",
+      "start_time": 2000,
+      "result": "LargeTickHit",
+      "is_hit": true,
+      "combo_after": 1
+    },
+    {
+      "object_index": 0,
+      "nested_index": 1,
+      "kind": "SliderTick",
+      "start_time": 2500,
+      "result": "LargeTickHit",
+      "is_hit": true,
+      "combo_after": 2
+    },
+    {
+      "object_index": 0,
+      "nested_index": 2,
+      "kind": "SliderTick",
+      "start_time": 3000,
+      "result": "LargeTickMiss",
+      "is_hit": false,
+      "combo_after": 0
+    },
+    {
+      "object_index": 0,
+      "nested_index": 3,
+      "kind": "SliderTailCircle",
+      "start_time": 3500,
+      "result": "SmallTickHit",
+      "is_hit": true,
+      "combo_after": 0
+    },
+    {
+      "object_index": 0,
+      "nested_index": null,
+      "kind": "Slider",
+      "start_time": 2000,
+      "result": "Ok",
+      "is_hit": true,
+      "combo_after": 1
+    },
+    {
+      "object_index": 1,
+      "nested_index": 0,
+      "kind": "SliderHeadCircle",
+      "start_time": 5000,
+      "result": "LargeTickHit",
+      "is_hit": true,
+      "combo_after": 2
+    },
+    {
+      "object_index": 1,
+      "nested_index": 1,
+      "kind": "SliderTick",
+      "start_time": 5500,
+      "result": "LargeTickHit",
+      "is_hit": true,
+      "combo_after": 3
+    },
+    {
+      "object_index": 1,
+      "nested_index": 2,
+      "kind": "SliderTailCircle",
+      "start_time": 6000,
+      "result": "SmallTickMiss",
+      "is_hit": false,
+      "combo_after": 3
+    },
+    {
+      "object_index": 1,
+      "nested_index": null,
+      "kind": "Slider",
+      "start_time": 5000,
+      "result": "Ok",
+      "is_hit": true,
+      "combo_after": 4
+    }
+  ]
+}

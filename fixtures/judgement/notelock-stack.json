@@ -1,0 +1,130 @@
+{
+  "scenario": "notelock-stack",
+  "description": "note-lock predecessor lifetime: an older unjudged stacked circle sits off-cursor while a judged-but-fading 1ms spinner occupies the alive-list slot before the target; lazer allows the target hit",
+  "beatmap_file": "scenario-notelock-stack.osu",
+  "mods": [
+    "CL"
+  ],
+  "clock_step_ms": 4,
+  "frames": [
+    {
+      "time": 0,
+      "pos": [
+        300,
+        200
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1000,
+      "pos": [
+        300,
+        200
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2002,
+      "pos": [
+        300,
+        200
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2003,
+      "pos": [
+        300,
+        200
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2023,
+      "pos": [
+        300,
+        200
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2600,
+      "pos": [
+        300,
+        200
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 3000,
+      "pos": [
+        300,
+        200
+      ],
+      "left": false,
+      "right": false
+    }
+  ],
+  "events": [
+    {
+      "object_index": 1,
+      "nested_index": 0,
+      "kind": "SpinnerTick",
+      "start_time": 2001.5,
+      "result": "IgnoreMiss",
+      "is_hit": false,
+      "combo_after": 0
+    },
+    {
+      "object_index": 1,
+      "nested_index": 1,
+      "kind": "SpinnerTick",
+      "start_time": 2002,
+      "result": "IgnoreMiss",
+      "is_hit": false,
+      "combo_after": 0
+    },
+    {
+      "object_index": 1,
+      "nested_index": null,
+      "kind": "Spinner",
+      "start_time": 2001,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 1
+    },
+    {
+      "object_index": 2,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 2003,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 2
+    },
+    {
+      "object_index": 0,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 2000,
+      "result": "Miss",
+      "is_hit": false,
+      "combo_after": 0
+    },
+    {
+      "object_index": 3,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 2200,
+      "result": "Miss",
+      "is_hit": false,
+      "combo_after": 0
+    }
+  ]
+}

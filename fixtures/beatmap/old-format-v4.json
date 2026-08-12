@@ -1,227 +1,341 @@
 {
-	"format_version": 4,
-	"stack_leniency": 0.7,
-	"windows": {
-		"great": 43.5,
-		"ok": 91.5,
-		"meh": 139.5
-	},
-	"objects": [
-		{
-			"kind": "circle",
-			"start_time": 1024,
-			"end_time": 1024,
-			"position": [256, 192],
-			"stacked_position": [249.59738, 185.59738],
-			"stack_height": 2,
-			"scale": 0.500205,
-			"preempt": 1050,
-			"fade_in": 400,
-			"combo_index": 1,
-			"combo_index_with_offsets": 1,
-			"index_in_current_combo": 0,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 1124,
-			"end_time": 1124,
-			"position": [256, 192],
-			"stacked_position": [252.79869, 188.79869],
-			"stack_height": 1,
-			"scale": 0.500205,
-			"preempt": 1050,
-			"fade_in": 400,
-			"combo_index": 1,
-			"combo_index_with_offsets": 1,
-			"index_in_current_combo": 1,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 1224,
-			"end_time": 1224,
-			"position": [256, 192],
-			"stacked_position": [256, 192],
-			"stack_height": 0,
-			"scale": 0.500205,
-			"preempt": 1050,
-			"fade_in": 400,
-			"combo_index": 1,
-			"combo_index_with_offsets": 1,
-			"index_in_current_combo": 2,
-			"last_in_combo": true,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "slider",
-			"start_time": 2024,
-			"end_time": 2424,
-			"position": [100, 100],
-			"stacked_position": [100, 100],
-			"stack_height": 0,
-			"scale": 0.500205,
-			"preempt": 1050,
-			"fade_in": 400,
-			"combo_index": 2,
-			"combo_index_with_offsets": 2,
-			"index_in_current_combo": 0,
-			"last_in_combo": false,
-			"slider": {
-				"velocity": 0.3,
-				"tick_distance": 120,
-				"span_duration": 400,
-				"duration": 400,
-				"end_position": [220, 100],
-				"nested": [
-					{
-						"kind": "head",
-						"span_index": 0,
-						"time": 2024,
-						"position": [100, 100],
-						"stacked_position": [100, 100],
-						"path_progress": null,
-						"preempt": 1050,
-						"fade_in": 400
-					},
-					{
-						"kind": "tail",
-						"span_index": 0,
-						"time": 2424,
-						"position": [220, 100],
-						"stacked_position": [220, 100],
-						"path_progress": null,
-						"preempt": 1450,
-						"fade_in": 400
-					}
-				],
-				"ball_samples": [
-					{
-						"progress": 0,
-						"pos": [0, 0]
-					},
-					{
-						"progress": 0.05,
-						"pos": [6, 0]
-					},
-					{
-						"progress": 0.1,
-						"pos": [12, 0]
-					},
-					{
-						"progress": 0.15,
-						"pos": [18, 0]
-					},
-					{
-						"progress": 0.2,
-						"pos": [24, 0]
-					},
-					{
-						"progress": 0.25,
-						"pos": [30, 0]
-					},
-					{
-						"progress": 0.3,
-						"pos": [36, 0]
-					},
-					{
-						"progress": 0.35,
-						"pos": [42, 0]
-					},
-					{
-						"progress": 0.4,
-						"pos": [48, 0]
-					},
-					{
-						"progress": 0.45,
-						"pos": [54, 0]
-					},
-					{
-						"progress": 0.5,
-						"pos": [60, 0]
-					},
-					{
-						"progress": 0.55,
-						"pos": [66, 0]
-					},
-					{
-						"progress": 0.6,
-						"pos": [72, 0]
-					},
-					{
-						"progress": 0.65,
-						"pos": [78, 0]
-					},
-					{
-						"progress": 0.7,
-						"pos": [84, 0]
-					},
-					{
-						"progress": 0.75,
-						"pos": [90, 0]
-					},
-					{
-						"progress": 0.8,
-						"pos": [96, 0]
-					},
-					{
-						"progress": 0.85,
-						"pos": [102, 0]
-					},
-					{
-						"progress": 0.9,
-						"pos": [108, 0]
-					},
-					{
-						"progress": 0.95,
-						"pos": [114, 0]
-					},
-					{
-						"progress": 1,
-						"pos": [120, 0]
-					}
-				]
-			},
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 2524,
-			"end_time": 2524,
-			"position": [220, 100],
-			"stacked_position": [223.20131, 103.20131],
-			"stack_height": -1,
-			"scale": 0.500205,
-			"preempt": 1050,
-			"fade_in": 400,
-			"combo_index": 2,
-			"combo_index_with_offsets": 2,
-			"index_in_current_combo": 1,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 2624,
-			"end_time": 2624,
-			"position": [220, 100],
-			"stacked_position": [226.40262, 106.402626],
-			"stack_height": -2,
-			"scale": 0.500205,
-			"preempt": 1050,
-			"fade_in": 400,
-			"combo_index": 2,
-			"combo_index_with_offsets": 2,
-			"index_in_current_combo": 2,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		}
-	]
+  "format_version": 4,
+  "stack_leniency": 0.7,
+  "windows": {
+    "great": 43.5,
+    "ok": 91.5,
+    "meh": 139.5
+  },
+  "objects": [
+    {
+      "kind": "circle",
+      "start_time": 1024,
+      "end_time": 1024,
+      "position": [
+        256,
+        192
+      ],
+      "stacked_position": [
+        249.59738,
+        185.59738
+      ],
+      "stack_height": 2,
+      "scale": 0.500205,
+      "preempt": 1050,
+      "fade_in": 400,
+      "combo_index": 1,
+      "combo_index_with_offsets": 1,
+      "index_in_current_combo": 0,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 1124,
+      "end_time": 1124,
+      "position": [
+        256,
+        192
+      ],
+      "stacked_position": [
+        252.79869,
+        188.79869
+      ],
+      "stack_height": 1,
+      "scale": 0.500205,
+      "preempt": 1050,
+      "fade_in": 400,
+      "combo_index": 1,
+      "combo_index_with_offsets": 1,
+      "index_in_current_combo": 1,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 1224,
+      "end_time": 1224,
+      "position": [
+        256,
+        192
+      ],
+      "stacked_position": [
+        256,
+        192
+      ],
+      "stack_height": 0,
+      "scale": 0.500205,
+      "preempt": 1050,
+      "fade_in": 400,
+      "combo_index": 1,
+      "combo_index_with_offsets": 1,
+      "index_in_current_combo": 2,
+      "last_in_combo": true,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "slider",
+      "start_time": 2024,
+      "end_time": 2424,
+      "position": [
+        100,
+        100
+      ],
+      "stacked_position": [
+        100,
+        100
+      ],
+      "stack_height": 0,
+      "scale": 0.500205,
+      "preempt": 1050,
+      "fade_in": 400,
+      "combo_index": 2,
+      "combo_index_with_offsets": 2,
+      "index_in_current_combo": 0,
+      "last_in_combo": false,
+      "slider": {
+        "velocity": 0.3,
+        "tick_distance": 120,
+        "span_duration": 400,
+        "duration": 400,
+        "end_position": [
+          220,
+          100
+        ],
+        "nested": [
+          {
+            "kind": "head",
+            "span_index": 0,
+            "time": 2024,
+            "position": [
+              100,
+              100
+            ],
+            "stacked_position": [
+              100,
+              100
+            ],
+            "path_progress": null,
+            "preempt": 1050,
+            "fade_in": 400
+          },
+          {
+            "kind": "tail",
+            "span_index": 0,
+            "time": 2424,
+            "position": [
+              220,
+              100
+            ],
+            "stacked_position": [
+              220,
+              100
+            ],
+            "path_progress": null,
+            "preempt": 1450,
+            "fade_in": 400
+          }
+        ],
+        "ball_samples": [
+          {
+            "progress": 0,
+            "pos": [
+              0,
+              0
+            ]
+          },
+          {
+            "progress": 0.05,
+            "pos": [
+              6,
+              0
+            ]
+          },
+          {
+            "progress": 0.1,
+            "pos": [
+              12,
+              0
+            ]
+          },
+          {
+            "progress": 0.15,
+            "pos": [
+              18,
+              0
+            ]
+          },
+          {
+            "progress": 0.2,
+            "pos": [
+              24,
+              0
+            ]
+          },
+          {
+            "progress": 0.25,
+            "pos": [
+              30,
+              0
+            ]
+          },
+          {
+            "progress": 0.3,
+            "pos": [
+              36,
+              0
+            ]
+          },
+          {
+            "progress": 0.35,
+            "pos": [
+              42,
+              0
+            ]
+          },
+          {
+            "progress": 0.4,
+            "pos": [
+              48,
+              0
+            ]
+          },
+          {
+            "progress": 0.45,
+            "pos": [
+              54,
+              0
+            ]
+          },
+          {
+            "progress": 0.5,
+            "pos": [
+              60,
+              0
+            ]
+          },
+          {
+            "progress": 0.55,
+            "pos": [
+              66,
+              0
+            ]
+          },
+          {
+            "progress": 0.6,
+            "pos": [
+              72,
+              0
+            ]
+          },
+          {
+            "progress": 0.65,
+            "pos": [
+              78,
+              0
+            ]
+          },
+          {
+            "progress": 0.7,
+            "pos": [
+              84,
+              0
+            ]
+          },
+          {
+            "progress": 0.75,
+            "pos": [
+              90,
+              0
+            ]
+          },
+          {
+            "progress": 0.8,
+            "pos": [
+              96,
+              0
+            ]
+          },
+          {
+            "progress": 0.85,
+            "pos": [
+              102,
+              0
+            ]
+          },
+          {
+            "progress": 0.9,
+            "pos": [
+              108,
+              0
+            ]
+          },
+          {
+            "progress": 0.95,
+            "pos": [
+              114,
+              0
+            ]
+          },
+          {
+            "progress": 1,
+            "pos": [
+              120,
+              0
+            ]
+          }
+        ]
+      },
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 2524,
+      "end_time": 2524,
+      "position": [
+        220,
+        100
+      ],
+      "stacked_position": [
+        223.20131,
+        103.20131
+      ],
+      "stack_height": -1,
+      "scale": 0.500205,
+      "preempt": 1050,
+      "fade_in": 400,
+      "combo_index": 2,
+      "combo_index_with_offsets": 2,
+      "index_in_current_combo": 1,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 2624,
+      "end_time": 2624,
+      "position": [
+        220,
+        100
+      ],
+      "stacked_position": [
+        226.40262,
+        106.402626
+      ],
+      "stack_height": -2,
+      "scale": 0.500205,
+      "preempt": 1050,
+      "fade_in": 400,
+      "combo_index": 2,
+      "combo_index_with_offsets": 2,
+      "index_in_current_combo": 2,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    }
+  ]
 }

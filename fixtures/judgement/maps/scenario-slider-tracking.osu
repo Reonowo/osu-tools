@@ -1,0 +1,28 @@
+osu file format v14
+
+[General]
+AudioFilename: audio.mp3
+AudioLeadIn: 0
+Mode: 0
+StackLeniency: 0.7
+
+[Metadata]
+Title:slider tracking leave-and-return scenario
+Artist:fixture-gen
+Creator:fixture-gen
+Version:scenario
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:5
+ApproachRate:9
+SliderMultiplier:1
+SliderTickRate:1
+
+[TimingPoints]
+0,500,4,2,1,60,1,0
+
+[HitObjects]
+50,50,2000,6,0,L|350:50,1,300
+50,250,5000,2,0,L|250:250,1,200

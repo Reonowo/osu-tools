@@ -1,44 +1,52 @@
 {
-	"maps": [
-		{
-			"name": "stacking-v14",
-			"accuracy_score": 2760,
-			"combo_score": 1680,
-			"bonus_score": 0,
-			"bonus_score_ratio": 0,
-			"max_combo": 10
-		},
-		{
-			"name": "old-format-v4",
-			"accuracy_score": 1860,
-			"combo_score": 672,
-			"bonus_score": 0,
-			"bonus_score_ratio": 0,
-			"max_combo": 7
-		},
-		{
-			"name": "slider-zoo-v14",
-			"accuracy_score": 2040,
-			"combo_score": 3024,
-			"bonus_score": 0,
-			"bonus_score_ratio": 0,
-			"max_combo": 28
-		},
-		{
-			"name": "v7-tick-multiplier",
-			"accuracy_score": 370,
-			"combo_score": 96,
-			"bonus_score": 0,
-			"bonus_score_ratio": 0,
-			"max_combo": 3
-		},
-		{
-			"name": "spinners-combos-od10",
-			"accuracy_score": 2100,
-			"combo_score": 900,
-			"bonus_score": 10100,
-			"bonus_score_ratio": 0.05247524752475247,
-			"max_combo": 7
-		}
-	]
+  "maps": [
+    {
+      "name": "stacking-v14",
+      "accuracy_score": 2760,
+      "combo_score": 1680,
+      "bonus_score": 0,
+      "bonus_score_ratio": 0,
+      "max_combo": 10
+    },
+    {
+      "name": "old-format-v4",
+      "accuracy_score": 1860,
+      "combo_score": 672,
+      "bonus_score": 0,
+      "bonus_score_ratio": 0,
+      "max_combo": 7
+    },
+    {
+      "name": "slider-zoo-v14",
+      "accuracy_score": 2040,
+      "combo_score": 3024,
+      "bonus_score": 0,
+      "bonus_score_ratio": 0,
+      "max_combo": 28
+    },
+    {
+      "name": "v7-tick-multiplier",
+      "accuracy_score": 370,
+      "combo_score": 96,
+      "bonus_score": 0,
+      "bonus_score_ratio": 0,
+      "max_combo": 3
+    },
+    {
+      "name": "spinners-combos-od10",
+      "accuracy_score": 2100,
+      "combo_score": 900,
+      "bonus_score": 10100,
+      "bonus_score_ratio": 0.05247524752475247,
+      "max_combo": 7
+    },
+    {
+      "name": "spinner-od0",
+      "accuracy_score": 300,
+      "combo_score": 0,
+      "bonus_score": 29500,
+      "bonus_score_ratio": 0.0511864406779661,
+      "max_combo": 1
+    }
+  ]
 }

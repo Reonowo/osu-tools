@@ -1,278 +1,410 @@
 {
-	"format_version": 14,
-	"stack_leniency": 0.7,
-	"windows": {
-		"great": 29.5,
-		"ok": 72.5,
-		"meh": 115.5
-	},
-	"objects": [
-		{
-			"kind": "circle",
-			"start_time": 1000,
-			"end_time": 1000,
-			"position": [256, 192],
-			"stacked_position": [248.701, 184.701],
-			"stack_height": 2,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 1,
-			"combo_index_with_offsets": 1,
-			"index_in_current_combo": 0,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 1100,
-			"end_time": 1100,
-			"position": [256, 192],
-			"stacked_position": [252.35051, 188.35051],
-			"stack_height": 1,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 1,
-			"combo_index_with_offsets": 1,
-			"index_in_current_combo": 1,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 1200,
-			"end_time": 1200,
-			"position": [256, 192],
-			"stacked_position": [256, 192],
-			"stack_height": 0,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 1,
-			"combo_index_with_offsets": 1,
-			"index_in_current_combo": 2,
-			"last_in_combo": true,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "slider",
-			"start_time": 2000,
-			"end_time": 2357.142857142857,
-			"position": [100, 100],
-			"stacked_position": [100, 100],
-			"stack_height": 0,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 2,
-			"combo_index_with_offsets": 2,
-			"index_in_current_combo": 0,
-			"last_in_combo": false,
-			"slider": {
-				"velocity": 0.28,
-				"tick_distance": 140,
-				"span_duration": 357.1428571428569,
-				"duration": 357.1428571428569,
-				"end_position": [200, 100],
-				"nested": [
-					{
-						"kind": "head",
-						"span_index": 0,
-						"time": 2000,
-						"position": [100, 100],
-						"stacked_position": [100, 100],
-						"path_progress": null,
-						"preempt": 600,
-						"fade_in": 400
-					},
-					{
-						"kind": "tail",
-						"span_index": 0,
-						"time": 2357.142857142857,
-						"position": [200, 100],
-						"stacked_position": [200, 100],
-						"path_progress": null,
-						"preempt": 957.1428571428569,
-						"fade_in": 400
-					}
-				],
-				"ball_samples": [
-					{
-						"progress": 0,
-						"pos": [0, 0]
-					},
-					{
-						"progress": 0.05,
-						"pos": [5, 0]
-					},
-					{
-						"progress": 0.1,
-						"pos": [10, 0]
-					},
-					{
-						"progress": 0.15,
-						"pos": [15.000001, 0]
-					},
-					{
-						"progress": 0.2,
-						"pos": [20, 0]
-					},
-					{
-						"progress": 0.25,
-						"pos": [25, 0]
-					},
-					{
-						"progress": 0.3,
-						"pos": [30.000002, 0]
-					},
-					{
-						"progress": 0.35,
-						"pos": [35, 0]
-					},
-					{
-						"progress": 0.4,
-						"pos": [40, 0]
-					},
-					{
-						"progress": 0.45,
-						"pos": [45, 0]
-					},
-					{
-						"progress": 0.5,
-						"pos": [50, 0]
-					},
-					{
-						"progress": 0.55,
-						"pos": [55, 0]
-					},
-					{
-						"progress": 0.6,
-						"pos": [60.000004, 0]
-					},
-					{
-						"progress": 0.65,
-						"pos": [65, 0]
-					},
-					{
-						"progress": 0.7,
-						"pos": [70, 0]
-					},
-					{
-						"progress": 0.75,
-						"pos": [75, 0]
-					},
-					{
-						"progress": 0.8,
-						"pos": [80, 0]
-					},
-					{
-						"progress": 0.85,
-						"pos": [85, 0]
-					},
-					{
-						"progress": 0.9,
-						"pos": [90, 0]
-					},
-					{
-						"progress": 0.95,
-						"pos": [95, 0]
-					},
-					{
-						"progress": 1,
-						"pos": [100, 0]
-					}
-				]
-			},
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 2400,
-			"end_time": 2400,
-			"position": [200, 100],
-			"stacked_position": [203.64949, 103.6495],
-			"stack_height": -1,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 2,
-			"combo_index_with_offsets": 2,
-			"index_in_current_combo": 1,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 2500,
-			"end_time": 2500,
-			"position": [200, 100],
-			"stacked_position": [207.299, 107.29899],
-			"stack_height": -2,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 2,
-			"combo_index_with_offsets": 2,
-			"index_in_current_combo": 2,
-			"last_in_combo": true,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 3400,
-			"end_time": 3400,
-			"position": [300, 200],
-			"stacked_position": [296.3505, 196.35051],
-			"stack_height": 1,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 3,
-			"combo_index_with_offsets": 3,
-			"index_in_current_combo": 0,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 3500,
-			"end_time": 3500,
-			"position": [302, 200],
-			"stacked_position": [302, 200],
-			"stack_height": 0,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 3,
-			"combo_index_with_offsets": 3,
-			"index_in_current_combo": 1,
-			"last_in_combo": true,
-			"slider": null,
-			"spinner": null
-		},
-		{
-			"kind": "circle",
-			"start_time": 4800,
-			"end_time": 4800,
-			"position": [420, 300],
-			"stacked_position": [420, 300],
-			"stack_height": 0,
-			"scale": 0.57023364,
-			"preempt": 600,
-			"fade_in": 400,
-			"combo_index": 4,
-			"combo_index_with_offsets": 4,
-			"index_in_current_combo": 0,
-			"last_in_combo": false,
-			"slider": null,
-			"spinner": null
-		}
-	]
+  "format_version": 14,
+  "stack_leniency": 0.7,
+  "windows": {
+    "great": 29.5,
+    "ok": 72.5,
+    "meh": 115.5
+  },
+  "objects": [
+    {
+      "kind": "circle",
+      "start_time": 1000,
+      "end_time": 1000,
+      "position": [
+        256,
+        192
+      ],
+      "stacked_position": [
+        248.701,
+        184.701
+      ],
+      "stack_height": 2,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 1,
+      "combo_index_with_offsets": 1,
+      "index_in_current_combo": 0,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 1100,
+      "end_time": 1100,
+      "position": [
+        256,
+        192
+      ],
+      "stacked_position": [
+        252.35051,
+        188.35051
+      ],
+      "stack_height": 1,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 1,
+      "combo_index_with_offsets": 1,
+      "index_in_current_combo": 1,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 1200,
+      "end_time": 1200,
+      "position": [
+        256,
+        192
+      ],
+      "stacked_position": [
+        256,
+        192
+      ],
+      "stack_height": 0,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 1,
+      "combo_index_with_offsets": 1,
+      "index_in_current_combo": 2,
+      "last_in_combo": true,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "slider",
+      "start_time": 2000,
+      "end_time": 2357.142857142857,
+      "position": [
+        100,
+        100
+      ],
+      "stacked_position": [
+        100,
+        100
+      ],
+      "stack_height": 0,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 2,
+      "combo_index_with_offsets": 2,
+      "index_in_current_combo": 0,
+      "last_in_combo": false,
+      "slider": {
+        "velocity": 0.28,
+        "tick_distance": 140,
+        "span_duration": 357.1428571428569,
+        "duration": 357.1428571428569,
+        "end_position": [
+          200,
+          100
+        ],
+        "nested": [
+          {
+            "kind": "head",
+            "span_index": 0,
+            "time": 2000,
+            "position": [
+              100,
+              100
+            ],
+            "stacked_position": [
+              100,
+              100
+            ],
+            "path_progress": null,
+            "preempt": 600,
+            "fade_in": 400
+          },
+          {
+            "kind": "tail",
+            "span_index": 0,
+            "time": 2357.142857142857,
+            "position": [
+              200,
+              100
+            ],
+            "stacked_position": [
+              200,
+              100
+            ],
+            "path_progress": null,
+            "preempt": 957.1428571428569,
+            "fade_in": 400
+          }
+        ],
+        "ball_samples": [
+          {
+            "progress": 0,
+            "pos": [
+              0,
+              0
+            ]
+          },
+          {
+            "progress": 0.05,
+            "pos": [
+              5,
+              0
+            ]
+          },
+          {
+            "progress": 0.1,
+            "pos": [
+              10,
+              0
+            ]
+          },
+          {
+            "progress": 0.15,
+            "pos": [
+              15.000001,
+              0
+            ]
+          },
+          {
+            "progress": 0.2,
+            "pos": [
+              20,
+              0
+            ]
+          },
+          {
+            "progress": 0.25,
+            "pos": [
+              25,
+              0
+            ]
+          },
+          {
+            "progress": 0.3,
+            "pos": [
+              30.000002,
+              0
+            ]
+          },
+          {
+            "progress": 0.35,
+            "pos": [
+              35,
+              0
+            ]
+          },
+          {
+            "progress": 0.4,
+            "pos": [
+              40,
+              0
+            ]
+          },
+          {
+            "progress": 0.45,
+            "pos": [
+              45,
+              0
+            ]
+          },
+          {
+            "progress": 0.5,
+            "pos": [
+              50,
+              0
+            ]
+          },
+          {
+            "progress": 0.55,
+            "pos": [
+              55,
+              0
+            ]
+          },
+          {
+            "progress": 0.6,
+            "pos": [
+              60.000004,
+              0
+            ]
+          },
+          {
+            "progress": 0.65,
+            "pos": [
+              65,
+              0
+            ]
+          },
+          {
+            "progress": 0.7,
+            "pos": [
+              70,
+              0
+            ]
+          },
+          {
+            "progress": 0.75,
+            "pos": [
+              75,
+              0
+            ]
+          },
+          {
+            "progress": 0.8,
+            "pos": [
+              80,
+              0
+            ]
+          },
+          {
+            "progress": 0.85,
+            "pos": [
+              85,
+              0
+            ]
+          },
+          {
+            "progress": 0.9,
+            "pos": [
+              90,
+              0
+            ]
+          },
+          {
+            "progress": 0.95,
+            "pos": [
+              95,
+              0
+            ]
+          },
+          {
+            "progress": 1,
+            "pos": [
+              100,
+              0
+            ]
+          }
+        ]
+      },
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 2400,
+      "end_time": 2400,
+      "position": [
+        200,
+        100
+      ],
+      "stacked_position": [
+        203.64949,
+        103.6495
+      ],
+      "stack_height": -1,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 2,
+      "combo_index_with_offsets": 2,
+      "index_in_current_combo": 1,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 2500,
+      "end_time": 2500,
+      "position": [
+        200,
+        100
+      ],
+      "stacked_position": [
+        207.299,
+        107.29899
+      ],
+      "stack_height": -2,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 2,
+      "combo_index_with_offsets": 2,
+      "index_in_current_combo": 2,
+      "last_in_combo": true,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 3400,
+      "end_time": 3400,
+      "position": [
+        300,
+        200
+      ],
+      "stacked_position": [
+        296.3505,
+        196.35051
+      ],
+      "stack_height": 1,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 3,
+      "combo_index_with_offsets": 3,
+      "index_in_current_combo": 0,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 3500,
+      "end_time": 3500,
+      "position": [
+        302,
+        200
+      ],
+      "stacked_position": [
+        302,
+        200
+      ],
+      "stack_height": 0,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 3,
+      "combo_index_with_offsets": 3,
+      "index_in_current_combo": 1,
+      "last_in_combo": true,
+      "slider": null,
+      "spinner": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 4800,
+      "end_time": 4800,
+      "position": [
+        420,
+        300
+      ],
+      "stacked_position": [
+        420,
+        300
+      ],
+      "stack_height": 0,
+      "scale": 0.57023364,
+      "preempt": 600,
+      "fade_in": 400,
+      "combo_index": 4,
+      "combo_index_with_offsets": 4,
+      "index_in_current_combo": 0,
+      "last_in_combo": false,
+      "slider": null,
+      "spinner": null
+    }
+  ]
 }

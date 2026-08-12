@@ -1,0 +1,30 @@
+osu file format v14
+
+[General]
+AudioFilename: audio.mp3
+AudioLeadIn: 0
+Mode: 0
+StackLeniency: 0.7
+
+[Metadata]
+Title:baseline sanity scenario
+Artist:fixture-gen
+Creator:fixture-gen
+Version:scenario
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:5
+ApproachRate:9
+SliderMultiplier:1
+SliderTickRate:1
+
+[TimingPoints]
+0,500,4,2,1,60,1,0
+
+[HitObjects]
+100,100,1000,5,0,0:0:0:0:
+200,100,2000,1,0,0:0:0:0:
+300,100,3000,1,0,0:0:0:0:
+100,200,4000,2,0,L|300:200,1,200
