@@ -3,10 +3,21 @@
 // header + scrolling body together, so SidePanel can mount this as a single
 // self-contained panel
 
+import { Check, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { PanelHeader } from "@/components/shell/SidePanel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ERROR_WINDOW_MS, HISTOGRAM_BINS, type HistogramBin, type VelocitySample } from "@/lib/analysis";
+import { formatTime } from "@/lib/format";
+import {
+	crossCheckConsistent,
+	describeCrossCheck,
+	integrityRowLabel,
+	integrityRowValue,
+	lifeBarNote
+} from "@/lib/integrity";
+import { formatLatticeStep, type Lattice, type OffLatticeSummary } from "@/lib/lattice";
+import type { IntegrityReport } from "@/lib/scene-types";
 import { useViewerStore } from "@/state/store";
 import { SectionLabel } from "./SectionLabel";
 
@@ -106,6 +117,104 @@ function Histogram({
 	);
 }
 
+// the loaded file's header-vs-simulated comparison. rendered only when the
+// scene shipped a report (pre-lazer authoritative scenes), so an
+// inapplicable rules profile never raises false mismatch alarms. the report
+// describes the loaded file across every in-session edit
+function IntegritySection({ report }: { report: IntegrityReport }) {
+	const consistent = crossCheckConsistent(report.crossCheck);
+	return (
+		<div>
+			<SectionLabel>integrity</SectionLabel>
+			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+				<div className="grid grid-cols-[auto_1fr_1fr_auto] items-center gap-x-3 gap-y-[6px] text-[11px]">
+					<span />
+					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">header</span>
+					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">
+						simulated
+					</span>
+					<span />
+					{report.rows.map((row) => (
+						<div key={row.field} className="contents">
+							<span className="text-[#8a8a93]">{integrityRowLabel(row.field)}</span>
+							<span
+								className={`text-right tabular-nums ${row.match ? "text-[#e4e4e7]" : "text-destructive"}`}
+							>
+								{integrityRowValue(row.field, row.header)}
+							</span>
+							<span className="text-right tabular-nums text-[#e4e4e7]">
+								{integrityRowValue(row.field, row.simulated)}
+							</span>
+							{row.match ? (
+								<Check className="size-3 shrink-0 text-[#88b300]" aria-label="matches" />
+							) : (
+								<X className="size-3 shrink-0 text-destructive" aria-label="differs" />
+							)}
+						</div>
+					))}
+				</div>
+				<div
+					className={`mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] tabular-nums ${
+						consistent ? "text-[#8a8a93]" : "text-destructive"
+					}`}
+				>
+					{describeCrossCheck(report.crossCheck)}
+				</div>
+				<div className="mt-1 text-[10.5px] text-[#8a8a93]">{lifeBarNote(report.lifeBarPresent)}</div>
+			</div>
+		</div>
+	);
+}
+
+// the off-lattice run summary: shown for any scene with an inferred lattice
+// -- this forensic signal needs no simulation, so NotSimulated and
+// lazer-native scenes get it too. a failed inference reads as unanalysable,
+// never as clean
+function OffLatticeSection({ lattice, summary }: { lattice: Lattice | null; summary: OffLatticeSummary | null }) {
+	return (
+		<div>
+			<SectionLabel>input lattice</SectionLabel>
+			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[9px] text-[11px]">
+				{lattice === null || summary === null ? (
+					<p className="text-[#8a8a93]">
+						no lattice inferred — the coordinates fit no known fullscreen quantisation (windowed play), so
+						off-lattice analysis is unavailable
+					</p>
+				) : summary.runCount === 0 ? (
+					<p className="text-[#8a8a93]">
+						every frame sits on the {formatLatticeStep(lattice)} lattice — no interpolated or synthesized
+						input detected
+					</p>
+				) : (
+					<>
+						<div className="text-[#e4e4e7] tabular-nums">
+							{summary.runCount.toLocaleString()} off-lattice {summary.runCount === 1 ? "run" : "runs"} ·{" "}
+							{summary.offLatticeFrames.toLocaleString()}{" "}
+							{summary.offLatticeFrames === 1 ? "frame" : "frames"} off the {formatLatticeStep(lattice)}{" "}
+							lattice
+						</div>
+						<div className="mt-1.5 flex flex-col gap-[3px] font-mono text-[10px] text-[#a1a1aa]">
+							{summary.longestRuns.map((run) => (
+								<div key={run.startIndex} className="tabular-nums">
+									frames {run.startIndex.toLocaleString()}–{run.endIndex.toLocaleString()} ·{" "}
+									{formatTime(run.startTime)}–{formatTime(run.endTime)} ·{" "}
+									{(run.endIndex - run.startIndex + 1).toLocaleString()} long
+								</div>
+							))}
+						</div>
+						{summary.runCount > summary.longestRuns.length && (
+							<div className="mt-1 text-[10px] text-[#8a8a93]">
+								showing the {summary.longestRuns.length} longest of {summary.runCount.toLocaleString()}{" "}
+								runs
+							</div>
+						)}
+					</>
+				)}
+			</div>
+		</div>
+	);
+}
+
 // x = the sample's share of the trace width, y = its velocity's share of the
 // trace's own peak. both shares are guarded: a single-sample trace would
 // divide by a zero index range, and a motionless replay's peak is zero --
@@ -156,6 +265,7 @@ function VelocityChart({
 export function AnalysisPanel() {
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
+	const editor = useViewerStore((s) => s.editor);
 	if (scene === null || derived === null) return null;
 	const { analysis } = derived;
 	const { simulation } = scene;
@@ -254,6 +364,10 @@ export function AnalysisPanel() {
 					<StatRow label="frames" value={analysis.frameCount.toLocaleString()} />
 					<StatRow label="median Δt" value={`${analysis.medianDeltaMs.toFixed(1)}ms`} />
 				</dl>
+
+				{scene.integrity !== null && <IntegritySection report={scene.integrity} />}
+
+				<OffLatticeSection lattice={editor?.lattice ?? null} summary={editor?.offLattice ?? null} />
 			</div>
 		</>
 	);
