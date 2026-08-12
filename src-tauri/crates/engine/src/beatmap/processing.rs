@@ -106,6 +106,16 @@ pub struct ProcessedSpinner {
     pub duration: f64,
     pub spins_required: i32,
     pub max_bonus_spins: i32,
+    /// osulegacyscoresimulator.cs:145 -- stable's completion requirement in
+    /// half spins: `(int)(secondsDuration * rps)` with rps od-scaled over
+    /// (3, 5, 7.5). the lazer simulator hardcodes the od-0 floor of 3 there
+    /// (it wants the bonus-maximising worst case for a theoretical maximum);
+    /// the achieved scorev1 fold uses the real od, which is what stable's
+    /// own gameplay used when it wrote the header
+    pub stable_half_spins_required: i32,
+    /// osulegacyscoresimulator.cs:143 -- the cap on countable half spins:
+    /// `(int)(secondsDuration * (477.0 / 60) * 2)`
+    pub total_half_spins_possible: i32,
 }
 
 impl ProcessedSpinner {
@@ -173,7 +183,12 @@ pub fn process_beatmap(map: &Beatmap) -> Result<ProcessedBeatmap> {
                         total_vertices as u64,
                     ));
                 }
-                let end_time = obj.start_time + slider.duration;
+                // slider.cs:28 -- EndTime is start + spans * distance /
+                // velocity in ONE rounding; start + slider.duration would
+                // round through the Duration = EndTime - StartTime detour
+                // a second time and can land an ulp away
+                let end_time = obj.start_time
+                    + slider.span_count as f64 * slider.path.distance() / slider.velocity;
                 (obj.pos, end_time, ProcessedKind::Slider(slider))
             }
             HitObjectKind::Spinner { duration } => (
@@ -285,8 +300,16 @@ fn build_slider(
     // converthitobjectparser.cs -- math.max(0, repeatcount) guards a malformed negative repeat count
     let repeat_count = data.repeat_count.max(0);
     let span_count = repeat_count + 1;
-    // slider.cs:28 -- duration through span count and the adjusted distance
-    let duration = span_count as f64 * path.distance() / velocity;
+    // slider.cs:28/91 -- lazer derives Duration as EndTime - StartTime with
+    // EndTime = StartTime + spans * distance / velocity, so the raw quotient
+    // rounds through the start-time sum and back out. reproducing that
+    // double rounding is what makes duration (and every nested time built
+    // from span_duration) bit-exact against the dumps: computing the
+    // quotient directly lands 2 ulp away on maps whose start time dwarfs
+    // the duration (the tolerance audit's one observed inexact field,
+    // stacking-v14 object 3)
+    let end_time = start_time + span_count as f64 * path.distance() / velocity;
+    let duration = end_time - start_time;
     let span_duration = duration / span_count as f64;
 
     let mut slider = ProcessedSlider {
@@ -381,10 +404,15 @@ fn build_nested(
     // is stable -- so this stable sort is identical for every real map. a
     // crafted zero-duration slider can exceed that (nothing stops a file
     // declaring thousands of repeats), where .net switches to unstable
-    // introsort and the tie permutation diverges from this stable order --
-    // a known, deliberate divergence in element order only, never in the
-    // judged counts; reproducing it would mean porting introsort's exact
-    // permutation (see TODO.md, "zero-duration nested tie order")
+    // introsort and the tie permutation diverges from this stable order.
+    //
+    // ratified deliberate divergence (engine parity pass, 2026-08-12):
+    // crafted-input-only and order-only -- the permutation of same-time
+    // elements can never change judged counts -- so the introsort port
+    // stays unbuilt unless a real map ever hits it. pinned by
+    // `zero_duration_tie_order_stays_generation_stable` below, which fails
+    // if this sort stops being stable (see TODO.md, "zero-duration nested
+    // tie order")
     nested.sort_by(|a, b| a.time.total_cmp(&b.time));
     nested
 }
@@ -407,10 +435,20 @@ fn build_spinner(overall_difficulty: f32, duration: f64) -> ProcessedSpinner {
         .wrapping_sub(spins_required)
         .wrapping_sub(BONUS_SPINS_GAP)
         .max(0);
+    // the stable-scoring quantities (osulegacyscoresimulator.cs:140-147):
+    // half-spin granularity, no epsilon, and the 477/60 max-rps cap. these
+    // feed the achieved scorev1 fold only -- gameplay spin/bonus mechanics
+    // above stay lazer's
+    let stable_half_spins_required =
+        dotnet_double_to_i32_unchecked(seconds_duration * difficulty_range(od, 3.0, 5.0, 7.5));
+    let total_half_spins_possible =
+        dotnet_double_to_i32_unchecked(seconds_duration * (477.0 / 60.0) * 2.0);
     ProcessedSpinner {
         duration,
         spins_required,
         max_bonus_spins,
+        stable_half_spins_required,
+        total_half_spins_possible,
     }
 }
 
@@ -508,6 +546,43 @@ mod tests {
             generate_ticks: false,
         }];
         map
+    }
+
+    #[test]
+    fn zero_duration_tie_order_stays_generation_stable() {
+        // pins the ratified deliberate divergence at build_nested's sort
+        // (engine parity pass, 2026-08-12): a crafted zero-length slider
+        // with more than 16 tied elements keeps this port's STABLE sort
+        // order -- head first, repeats in span order, tail last -- where
+        // .net's introsort would permute the ties. this test asserting the
+        // stable order is what makes an accidental "fix" (an unstable sort,
+        // or a port of introsort's permutation without updating the
+        // ratification) visible
+        let map = tickless(base_map(vec![linear_slider(1000.0, Vec2::ZERO, 0.0, 30)]));
+        let processed = process_beatmap(&map).unwrap();
+        let ProcessedKind::Slider(slider) = &processed.objects[0].kind else {
+            panic!("expected a slider");
+        };
+        assert!(slider.duration == 0.0, "the crafted slider collapses to zero duration");
+        assert!(slider.nested.len() > 16, "past .net's insertion-sort threshold");
+        assert!(
+            slider.nested.iter().all(|n| n.time == 1000.0),
+            "every nested element ties on the start time"
+        );
+
+        assert_eq!(slider.nested.first().unwrap().kind, NestedKind::Head);
+        assert_eq!(slider.nested.last().unwrap().kind, NestedKind::Tail);
+        let repeat_spans: Vec<i32> = slider
+            .nested
+            .iter()
+            .filter(|n| n.kind == NestedKind::Repeat)
+            .map(|n| n.span_index)
+            .collect();
+        assert_eq!(
+            repeat_spans,
+            (0..30).collect::<Vec<i32>>(),
+            "repeats stay in generation (span) order under the stable sort"
+        );
     }
 
     #[test]

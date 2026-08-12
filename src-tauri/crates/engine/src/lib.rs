@@ -35,9 +35,12 @@
 //! every port in this crate is checked against golden fixtures under
 //! `fixtures/` that lazer itself generated -- `tools/fixture-gen` links
 //! against a pinned lazer checkout so lazer's own code computes every
-//! expected value, never a hand-derived one. fixture comparisons use the
-//! per-field tolerances recorded in `fixtures/meta.json` (position 1e-4,
-//! distance 1e-3, ratio 1e-6); integers and enums compare exact.
+//! expected value, never a hand-derived one. fixture comparisons are
+//! bit-exact: the 2026-08-12 tolerance audit zeroed every per-field
+//! tolerance recorded in `fixtures/meta.json` after fixing the one genuine
+//! divergence (the slider duration chain's double rounding) at its source,
+//! so integers, enums, times, and floats all compare exact and any drift
+//! is a regression.
 //! `fixtures/meta.json` also records the exact commit pins (`osu_pin`,
 //! `framework_pin`) the fixtures were generated against. the policy is:
 //! regenerate fixtures only when a reference pin bumps or a task adds new
