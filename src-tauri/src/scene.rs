@@ -35,6 +35,49 @@ pub struct LoadedScene {
     pub audio_path: Option<String>,
     pub background_path: Option<String>,
     pub warnings: Vec<Warning>,
+    /// the header-vs-simulated comparison, shipped only for pre-lazer
+    /// authoritative scenes; always describes the loaded file, never
+    /// in-session edits
+    pub integrity: Option<IntegrityDto>,
+}
+
+/// the integrity report (spec, integrity report section): per-field
+/// header-vs-simulated rows, the combo-section cross-check triple, and the
+/// life-bar presence note. the replay hash is deliberately excluded --
+/// its formula varies across client generations, so a mismatch there would
+/// not distinguish tampering from version skew
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrityDto {
+    pub rows: Vec<IntegrityRowDto>,
+    pub cross_check: CrossCheckDto,
+    pub life_bar_present: bool,
+}
+
+/// one compared field; `perfect` rides as 0/1 so every row shares a shape
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrityRowDto {
+    pub field: &'static str,
+    pub header: u64,
+    pub simulated: u64,
+    #[serde(rename = "match")]
+    pub matches: bool,
+}
+
+/// TODO.md's identity stated outright: `sections - (geki + katsu)` is the
+/// number of sections the header claims contained a miss. `geki_katsu` reads
+/// the header's own fields (the analyst's view of the loaded file), and the
+/// implied count is signed so a header claiming more geki+katu than the map
+/// has sections reads as the inconsistency it is
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossCheckDto {
+    pub sections: u32,
+    pub geki_katsu: u32,
+    pub sections_with_miss: i64,
+    /// the header's miss count, restated beside the implication it checks
+    pub count_miss: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +188,47 @@ pub struct TotalsDto {
     pub max_combo: u32,
 }
 
+/// the answer `export_replay` returns: where the file landed, how big it is,
+/// and -- for regenerating exports only -- the nine derived values the
+/// written header now claims. passthrough and carried exports ship `None`
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub path: String,
+    pub bytes: u64,
+    pub regenerated: Option<RegeneratedDto>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegeneratedDto {
+    pub count_300: u16,
+    pub count_100: u16,
+    pub count_50: u16,
+    pub count_geki: u16,
+    pub count_katsu: u16,
+    pub count_miss: u16,
+    pub max_combo: u16,
+    pub perfect: bool,
+    pub total_score: u32,
+}
+
+impl From<&engine::score::DerivedFields> for RegeneratedDto {
+    fn from(fields: &engine::score::DerivedFields) -> Self {
+        RegeneratedDto {
+            count_300: fields.count_300,
+            count_100: fields.count_100,
+            count_50: fields.count_50,
+            count_geki: fields.count_geki,
+            count_katsu: fields.count_katsu,
+            count_miss: fields.count_miss,
+            max_combo: fields.max_combo,
+            perfect: fields.perfect,
+            total_score: fields.total_score,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JudgementEventDto {
@@ -217,6 +301,48 @@ impl From<HitGrade> for GradeDto {
     }
 }
 
+impl IntegrityDto {
+    /// compares the loaded header against the load-time derivation. the
+    /// derivation is the same one export overlays, so the viewer surfaces in
+    /// reverse exactly the constraints its own exports satisfy
+    pub fn compare(header: &OsrHeader, derived: &engine::score::DerivedScore) -> IntegrityDto {
+        let row = |field: &'static str, header: u64, simulated: u64| IntegrityRowDto {
+            field,
+            header,
+            simulated,
+            matches: header == simulated,
+        };
+        let rows = vec![
+            row("count300", u64::from(header.count_300), u64::from(derived.count_300)),
+            row("count100", u64::from(header.count_100), u64::from(derived.count_100)),
+            row("count50", u64::from(header.count_50), u64::from(derived.count_50)),
+            row("countGeki", u64::from(header.count_geki), u64::from(derived.count_geki)),
+            row(
+                "countKatsu",
+                u64::from(header.count_katsu),
+                u64::from(derived.count_katsu),
+            ),
+            row("countMiss", u64::from(header.count_miss), u64::from(derived.count_miss)),
+            row("maxCombo", u64::from(header.max_combo), u64::from(derived.max_combo)),
+            row("perfect", u64::from(header.perfect), u64::from(derived.perfect)),
+            row("totalScore", u64::from(header.total_score), derived.total_score),
+        ];
+        let geki_katsu = u32::from(header.count_geki) + u32::from(header.count_katsu);
+        IntegrityDto {
+            rows,
+            cross_check: CrossCheckDto {
+                sections: derived.sections,
+                geki_katsu,
+                sections_with_miss: i64::from(derived.sections) - i64::from(geki_katsu),
+                count_miss: header.count_miss,
+            },
+            // an empty life graph carries no information either way, so
+            // "present" means non-empty
+            life_bar_present: header.life_graph.as_deref().is_some_and(|graph| !graph.is_empty()),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_scene(
     map: &Beatmap,
@@ -228,6 +354,7 @@ pub fn assemble_scene(
     audio_path: Option<PathBuf>,
     background_path: Option<PathBuf>,
     warnings: Vec<Warning>,
+    integrity: Option<IntegrityDto>,
 ) -> LoadedScene {
     LoadedScene {
         epoch: 0,
@@ -269,6 +396,7 @@ pub fn assemble_scene(
         audio_path: audio_path.map(|p| p.to_string_lossy().into_owned()),
         background_path: background_path.map(|p| p.to_string_lossy().into_owned()),
         warnings,
+        integrity,
     }
 }
 
@@ -380,6 +508,7 @@ mod tests {
             Some(std::path::PathBuf::from(r"C:\somewhere\audio.mp3")),
             None,
             vec![crate::error::Warning::AudioMissing],
+            None,
         );
         let v = serde_json::to_value(&scene).unwrap();
 
@@ -400,5 +529,128 @@ mod tests {
         assert_eq!(v["audioPath"], r"C:\somewhere\audio.mp3");
         assert_eq!(v["backgroundPath"], serde_json::Value::Null);
         assert_eq!(v["warnings"][0]["kind"], "audioMissing");
+        assert_eq!(v["integrity"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn integrity_reports_serialize_with_the_frozen_wire_field_names() {
+        let mut header = crate::testutil::test_header("abc123", 0);
+        header.count_geki = 100;
+        header.count_katsu = 3;
+        header.count_miss = 2;
+        header.life_graph = Some("0|1".into());
+        let derived = engine::score::DerivedScore {
+            count_300: 1,
+            count_100: 0,
+            count_50: 0,
+            count_geki: 99,
+            count_katsu: 3,
+            count_miss: 2,
+            max_combo: 1,
+            perfect: true,
+            total_score: 300,
+            sections: 105,
+            sections_with_miss: 2,
+        };
+        let report = IntegrityDto::compare(&header, &derived);
+        let v = serde_json::to_value(&report).unwrap();
+
+        let fields: std::collections::HashSet<&str> =
+            v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(fields, ["rows", "crossCheck", "lifeBarPresent"].into_iter().collect());
+
+        // rows cover every compared field, in a fixed render order, with the
+        // hash deliberately absent
+        let row_fields: Vec<&str> = v["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["field"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            row_fields,
+            [
+                "count300",
+                "count100",
+                "count50",
+                "countGeki",
+                "countKatsu",
+                "countMiss",
+                "maxCombo",
+                "perfect",
+                "totalScore",
+            ]
+        );
+        assert_eq!(
+            v["rows"][3],
+            serde_json::json!({ "field": "countGeki", "header": 100, "simulated": 99, "match": false })
+        );
+        assert_eq!(v["rows"][0]["match"], true);
+        // perfect rides as 0/1 under the shared row shape
+        assert_eq!(v["rows"][7]["header"], 1);
+
+        assert_eq!(
+            v["crossCheck"],
+            serde_json::json!({ "sections": 105, "gekiKatsu": 103, "sectionsWithMiss": 2, "countMiss": 2 })
+        );
+        assert_eq!(v["lifeBarPresent"], true);
+
+        // an empty life graph reads as absent
+        header.life_graph = Some(String::new());
+        assert!(!IntegrityDto::compare(&header, &derived).life_bar_present);
+        header.life_graph = None;
+        assert!(!IntegrityDto::compare(&header, &derived).life_bar_present);
+    }
+
+    #[test]
+    fn export_results_serialize_with_the_frozen_wire_field_names() {
+        let result = ExportResult {
+            path: r"C:\somewhere\replay (edited).osr".into(),
+            bytes: 1234,
+            regenerated: Some(RegeneratedDto {
+                count_300: 100,
+                count_100: 5,
+                count_50: 1,
+                count_geki: 20,
+                count_katsu: 3,
+                count_miss: 2,
+                max_combo: 250,
+                perfect: false,
+                total_score: 1_234_567,
+            }),
+        };
+        let v = serde_json::to_value(&result).unwrap();
+        let fields: std::collections::HashSet<&str> =
+            v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(fields, ["path", "bytes", "regenerated"].into_iter().collect());
+        let regenerated: std::collections::HashSet<&str> = v["regenerated"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            regenerated,
+            [
+                "count300",
+                "count100",
+                "count50",
+                "countGeki",
+                "countKatsu",
+                "countMiss",
+                "maxCombo",
+                "perfect",
+                "totalScore",
+            ]
+            .into_iter()
+            .collect()
+        );
+
+        let passthrough = ExportResult {
+            path: "x".into(),
+            bytes: 9,
+            regenerated: None,
+        };
+        assert_eq!(serde_json::to_value(&passthrough).unwrap()["regenerated"], serde_json::Value::Null);
     }
 }

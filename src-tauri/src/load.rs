@@ -11,6 +11,7 @@ use engine::formats::osr::{decode_osr, OsrFile};
 use engine::mods::{pipeline_for, process_with_mods, LegacyMods};
 use engine::render_plan::build_render_plan;
 use engine::replay::document::ReplayDocument;
+use engine::score::ScoreContext;
 use engine::simulation::simulate;
 
 use crate::cache::CacheLease;
@@ -40,6 +41,9 @@ pub struct SessionState {
     /// the cached last simulation, kept alongside the document so an editor
     /// command can answer with it without re-simulating
     pub simulation: SimulationDto,
+    /// the stable-faithful score-derivation inputs, captured once at load
+    /// from the decoded beatmap (raw hp/od/cs, object count, drain length)
+    pub score_context: ScoreContext,
 }
 
 // the tests format `Result<LoadOutcome, IpcError>` in panic messages;
@@ -134,27 +138,43 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         warnings.push(Warning::ModsNotSimulated { mods: mods.raw });
     }
 
+    let score_context = ScoreContext::from_beatmap(&source.map);
+
     // mismatch wins as the reason: the geometry may be wrong, so even a
     // nomod timeline would be fiction. unsupported mods still render with
     // nomod geometry -- the spec's persistent-banner path
-    let (processed, simulation) = if source.mismatch {
+    let (processed, simulation, integrity) = if source.mismatch {
         (
             process_beatmap(&source.map)?,
             SimulationDto::NotSimulated {
                 reason: NotSimulatedReason::BeatmapMismatch,
             },
+            None,
         )
     } else if let Some(pipeline) = pipeline_for(mods) {
         let processed = process_with_mods(&source.map, &*pipeline)?;
         let timeline = simulate(&processed, document.frames())?;
         let simulation = SimulationDto::authoritative(&timeline);
-        (processed, simulation)
+        // pre-lazer authoritative scenes only: a lazer-native play simulated
+        // under the legacy profile would flag honest mismatches (TODO.md's
+        // lazer-native item), so those ship no report rather than false
+        // alarms. the derivation itself can only fail on difficulty values
+        // no decode produces; a failure withholds the report, never the load
+        let integrity = if header.version < engine::formats::osr::FIRST_LAZER_VERSION {
+            engine::score::derive_score(&processed, &timeline, &score_context)
+                .ok()
+                .map(|derived| crate::scene::IntegrityDto::compare(&header, &derived))
+        } else {
+            None
+        };
+        (processed, simulation, integrity)
     } else {
         (
             process_beatmap(&source.map)?,
             SimulationDto::NotSimulated {
                 reason: NotSimulatedReason::UnsupportedMods,
             },
+            None,
         )
     };
 
@@ -183,6 +203,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         audio_path,
         background_path,
         warnings,
+        integrity,
     );
     Ok(LoadOutcome {
         scene,
@@ -196,6 +217,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
             undo_labels: Vec::new(),
             redo_labels: Vec::new(),
             simulation: cached_simulation,
+            score_context,
         },
         origin: BeatmapOrigin {
             dir: source
@@ -640,6 +662,52 @@ mod tests {
         let (osr_path, osu_path) = fixture_setup_in(dir.path(), 16); // hard rock
         let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
         assert!(!outcome.session.simulatable);
+    }
+
+    #[test]
+    fn integrity_ships_only_for_pre_lazer_authoritative_scenes() {
+        // pre-lazer + simulatable: the report ships, comparing the synthetic
+        // header (1x300, combo 1, perfect) against the simulated timeline
+        let (_dir, osr_path, osu_path, _md5) = fixture_setup(0);
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        let report = outcome.scene.integrity.expect("authoritative pre-lazer scenes ship a report");
+        assert_eq!(report.rows.len(), 9);
+        assert!(report.rows.iter().all(|row| row.matches == (row.header == row.simulated)));
+        assert!(
+            report.rows.iter().all(|row| row.field != "replayMd5"),
+            "the hash is deliberately never compared"
+        );
+        assert!(!report.life_bar_present, "the synthetic header carries no life graph");
+
+        // unsupported mods: no simulation to compare against
+        let (_dir2, osr_path, osu_path, _md5) = fixture_setup(16);
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert!(outcome.scene.integrity.is_none());
+    }
+
+    #[test]
+    fn lazer_native_scenes_ship_no_integrity_report() {
+        // simulated under the legacy profile, a lazer-native play would flag
+        // honest mismatches -- an inapplicable rules profile must not raise
+        // false alarms
+        let dir = tempfile::tempdir().unwrap();
+        let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("stacking-v14.osu")).unwrap();
+        let md5 = format!("{:x}", md5::compute(&osu_bytes));
+        let osu_path = dir.path().join("map.osu");
+        std::fs::write(&osu_path, &osu_bytes).unwrap();
+        let osr_path = dir.path().join("replay.osr");
+        std::fs::write(
+            &osr_path,
+            crate::testutil::osr_bytes_versioned(&md5, 0, None, 30000001),
+        )
+        .unwrap();
+
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert!(
+            outcome.session.simulatable,
+            "lazer-native still simulates; only the report is withheld"
+        );
+        assert!(outcome.scene.integrity.is_none());
     }
 
     #[test]
