@@ -10,7 +10,9 @@ use crate::edit::{self, EditDelta, EditOp, HistoryDto};
 use crate::error::{editor_engine_error, IpcError};
 use crate::load::{self, LoadOutcome, SavedBeatmap, SessionState};
 use crate::scene::LoadedScene;
-use crate::settings::{save_settings, EditingPrefs, EffectPrefs, OverlayPrefs, RecentReplay, Settings};
+use crate::settings::{
+    save_settings, EditingPrefs, EffectPrefs, OverlayPrefs, RecentReplay, Settings, TimelinePrefs,
+};
 use crate::state::AppState;
 use engine::formats::osr::FIRST_LAZER_VERSION;
 use engine::simulation::simulate;
@@ -226,6 +228,7 @@ pub fn set_viewer_prefs(
     overlays: OverlayPrefs,
     editing: EditingPrefs,
     effects: EffectPrefs,
+    timeline: TimelinePrefs,
 ) -> Result<Settings, IpcError> {
     let mut settings = state.settings.lock().expect("settings lock");
     // persist before publishing, as in set_osu_stable_path
@@ -234,6 +237,7 @@ pub fn set_viewer_prefs(
     candidate.overlays = overlays;
     candidate.editing = editing;
     candidate.effects = effects;
+    candidate.timeline = timeline;
     candidate.sanitize();
     save_settings(&state.config_dir, &candidate)?;
     *settings = candidate;
@@ -981,8 +985,20 @@ mod tests {
             cursor_trail: false,
             ..EffectPrefs::default()
         };
+        let timeline = TimelinePrefs {
+            hit_window_bands: false,
+            ..TimelinePrefs::default()
+        };
         // volume over 100
-        let updated = set_viewer_prefs(app.state(), 250, prefs, editing.clone(), effects.clone()).unwrap();
+        let updated = set_viewer_prefs(
+            app.state(),
+            250,
+            prefs,
+            editing.clone(),
+            effects.clone(),
+            timeline.clone(),
+        )
+        .unwrap();
 
         assert_eq!(updated.volume, 100);
         assert_eq!(
@@ -996,6 +1012,11 @@ mod tests {
         assert!(
             updated.effects.hit_effects,
             "a granular flag survives a disabled master"
+        );
+        assert_eq!(updated.timeline, timeline);
+        assert!(
+            updated.timeline.tethers,
+            "an untouched timeline layer stays visible"
         );
 
         // persisted in sanitized form, not just published
@@ -1017,6 +1038,7 @@ mod tests {
             OverlayPrefs::default(),
             EditingPrefs::default(),
             EffectPrefs::default(),
+            TimelinePrefs::default(),
         )
         .unwrap();
 
@@ -1042,6 +1064,7 @@ mod tests {
             OverlayPrefs::default(),
             EditingPrefs::default(),
             EffectPrefs::default(),
+            TimelinePrefs::default(),
         )
         .unwrap_err();
         assert!(matches!(err, IpcError::Io { .. }));

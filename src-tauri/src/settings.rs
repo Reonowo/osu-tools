@@ -11,6 +11,7 @@
 //! v5 adds the beatmap association each recents entry reopens through, so a
 //! manually paired beatmap survives a restart instead of being looked up
 //! again (or asked for again).
+//! v6 adds `timeline`: the timeline dock's per-layer visibility toggles.
 //!
 //! every field is `#[serde(default)]` at the container level, so a v1 file --
 //! or any future file written by an older build -- hydrates the new fields
@@ -49,6 +50,7 @@ pub struct Settings {
     pub recents: Vec<RecentReplay>,
     pub editing: EditingPrefs,
     pub effects: EffectPrefs,
+    pub timeline: TimelinePrefs,
 }
 
 impl Default for Settings {
@@ -60,6 +62,7 @@ impl Default for Settings {
             recents: Vec::new(),
             editing: EditingPrefs::default(),
             effects: EffectPrefs::default(),
+            timeline: TimelinePrefs::default(),
         }
     }
 }
@@ -168,6 +171,31 @@ impl Default for EffectPrefs {
     }
 }
 
+/// the timeline dock's per-layer visibility: which of the object lane's
+/// decorations -- and the overview strip's severity ticks -- draw. everything
+/// ships on; hiding is an opt-out for readers who find a layer noisy on
+/// their maps. the selected press's extended tether is selection chrome and
+/// deliberately not gated here
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TimelinePrefs {
+    pub hit_window_bands: bool,
+    pub tethers: bool,
+    pub nested_marks: bool,
+    pub severity_ticks: bool,
+}
+
+impl Default for TimelinePrefs {
+    fn default() -> TimelinePrefs {
+        TimelinePrefs {
+            hit_window_bands: true,
+            tethers: true,
+            nested_marks: true,
+            severity_ticks: true,
+        }
+    }
+}
+
 impl Settings {
     /// force every range-limited field back inside its bounds. applied after
     /// parsing a file (which the user can edit by hand) and before persisting
@@ -243,6 +271,12 @@ mod tests {
                 cursor_trail: true,
                 follow_points: false,
             },
+            timeline: TimelinePrefs {
+                hit_window_bands: false,
+                tethers: true,
+                nested_marks: false,
+                severity_ticks: true,
+            },
         }
     }
 
@@ -302,6 +336,16 @@ mod tests {
             },
             "every effect ships enabled, master included"
         );
+        assert_eq!(
+            settings.timeline,
+            TimelinePrefs {
+                hit_window_bands: true,
+                tethers: true,
+                nested_marks: true,
+                severity_ticks: true,
+            },
+            "every timeline layer ships visible"
+        );
     }
 
     #[test]
@@ -338,6 +382,12 @@ mod tests {
                     "cursorTrail": true,
                     "followPoints": false,
                 },
+                "timeline": {
+                    "hitWindowBands": false,
+                    "tethers": true,
+                    "nestedMarks": false,
+                    "severityTicks": true,
+                },
             })
         );
 
@@ -363,6 +413,12 @@ mod tests {
                     "cursorGlow": true,
                     "cursorTrail": true,
                     "followPoints": true,
+                },
+                "timeline": {
+                    "hitWindowBands": true,
+                    "tethers": true,
+                    "nestedMarks": true,
+                    "severityTicks": true,
                 },
             })
         );
@@ -447,6 +503,7 @@ mod tests {
         assert_eq!(loaded.recents, Vec::new());
         assert_eq!(loaded.editing, EditingPrefs::default());
         assert_eq!(loaded.effects, EffectPrefs::default());
+        assert_eq!(loaded.timeline, TimelinePrefs::default());
 
         // a partially-written overlays object hydrates per field too
         std::fs::write(
@@ -492,6 +549,27 @@ mod tests {
         assert!(!loaded.effects.cursor_trail);
         assert!(loaded.effects.enabled, "untouched fields keep their default");
         assert!(loaded.effects.hit_animations);
+    }
+
+    #[test]
+    fn a_legacy_file_hydrates_the_timeline_prefs_per_field() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
+        assert_eq!(load_settings(dir.path()).timeline, TimelinePrefs::default());
+
+        // a partially-written timeline object hydrates the rest from Default
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"timeline":{"tethers":false}}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert!(!loaded.timeline.tethers);
+        assert!(
+            loaded.timeline.hit_window_bands,
+            "untouched fields keep their default"
+        );
+        assert!(loaded.timeline.severity_ticks);
     }
 
     #[test]
