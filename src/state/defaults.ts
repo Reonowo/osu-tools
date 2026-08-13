@@ -10,6 +10,8 @@ export const DEFAULT_OVERLAYS: OverlaySettings = {
 	cursorPath: false,
 	clickMarkers: false,
 	frameMarkers: false,
+	// off: the stock look stays lazer's, whose idle markers melt into the path
+	tintIdleMarkers: false,
 	hideCursor: false,
 	keyOverlay: true,
 	displayLength: 800,

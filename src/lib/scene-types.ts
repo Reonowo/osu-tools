@@ -268,6 +268,9 @@ export interface OverlaySettings {
 	cursorPath: boolean;
 	clickMarkers: boolean;
 	frameMarkers: boolean;
+	/** darkens idle (no-button) frame markers so they read against the cursor
+	 * path -- this viewer's own pref, no lazer counterpart */
+	tintIdleMarkers: boolean;
 	hideCursor: boolean;
 	keyOverlay: boolean;
 	/** ms; lazer's ReplayAnalysisDisplayLength (200-2000, default 800) */

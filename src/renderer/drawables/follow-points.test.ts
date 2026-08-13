@@ -100,6 +100,7 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 			cursorPath: false,
 			clickMarkers: false,
 			frameMarkers: false,
+			tintIdleMarkers: false,
 			hideCursor: false,
 			keyOverlay: true,
 			displayLength: 800,

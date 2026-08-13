@@ -31,6 +31,7 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
 			cursorPath: false,
 			clickMarkers: false,
 			frameMarkers: false,
+			tintIdleMarkers: false,
 			hideCursor: false,
 			keyOverlay: true,
 			displayLength: 800,

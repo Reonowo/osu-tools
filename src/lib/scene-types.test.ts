@@ -113,6 +113,7 @@ describe("scene contract mirror", () => {
 			cursorPath: true,
 			clickMarkers: true,
 			frameMarkers: false,
+			tintIdleMarkers: true,
 			hideCursor: true,
 			keyOverlay: false,
 			displayLength: 1200,

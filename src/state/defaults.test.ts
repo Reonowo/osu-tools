@@ -18,6 +18,7 @@ describe("effectiveOverlays, the edit-mode force-draw fold", () => {
 		cursorPath: false,
 		clickMarkers: false,
 		frameMarkers: false,
+		tintIdleMarkers: false,
 		hideCursor: true,
 		keyOverlay: false,
 		displayLength: 800,
