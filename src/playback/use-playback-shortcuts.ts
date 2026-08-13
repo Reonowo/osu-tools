@@ -1,9 +1,10 @@
 // keyboard shortcuts and wheel frame-stepping for the viewer, extracted from
 // Controls.tsx (spec 2026-08-06, item 4). keyboard goes through
-// @tanstack/react-hotkeys; wheel stays a manual listener because the library
-// is keyboard-only. Controls stays mounted with no scene (App renders it
-// unconditionally and it returns null early), so every handler re-checks the
-// scene itself rather than relying on mount state
+// @tanstack/react-hotkeys, except ctrl+0, which matches on the physical key
+// the library cannot address; wheel stays a manual listener because the
+// library is keyboard-only. Controls stays mounted with no scene (App renders
+// it unconditionally and it returns null early), so every handler re-checks
+// the scene itself rather than relying on mount state
 
 import { useEffect } from "react";
 import { useHotkeys } from "@tanstack/react-hotkeys";
@@ -11,7 +12,7 @@ import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { spacePan } from "@/playback/space-pan";
 import { viewerStore } from "@/state/store";
-import { wheelFrameStep, withinInteractiveControl } from "./shortcut-guards";
+import { asksViewportReset, wheelFrameStep, withinInteractiveControl } from "./shortcut-guards";
 
 /** exact-select the neighbouring replay frame, one index at a time so a run
  * of duplicate-time frames is fully steppable; does not pause playback,
@@ -21,13 +22,15 @@ export function stepFrame(direction: 1 | -1) {
 }
 
 function guarded(e: KeyboardEvent, action: () => void) {
-	// text-like inputs never reach here at all -- @tanstack/hotkeys' default
-	// ignoreInputs (true for these single-key bindings) skips input/textarea/
-	// select/contenteditable before this runs. this predicate is the second
-	// gate, for targets that default doesn't cover: a focused button must keep
-	// its native space activation instead of toggling playback out from under
-	// it, and a focused slider thumb must keep its own arrow-key handling
-	// instead of seeking
+	// for the hotkey registrations, text-like inputs never reach here at all --
+	// @tanstack/hotkeys' default ignoreInputs (true for these single-key
+	// bindings) skips input/textarea/select/contenteditable before this runs,
+	// and this predicate is the second gate, for targets that default doesn't
+	// cover: a focused button must keep its native space activation instead of
+	// toggling playback out from under it, and a focused slider thumb must keep
+	// its own arrow-key handling instead of seeking. ctrl+0 arrives from a
+	// manual listener with no such default ahead of it, so for that one this is
+	// the only gate -- the interactive-tag walk covers the text-like inputs too
 	if (viewerStore.getState().scene === null) return;
 	if (withinInteractiveControl(e.target)) return;
 	action();
@@ -106,11 +109,28 @@ export function usePlaybackShortcuts() {
 			if (viewerStore.getState().scene === null) return;
 			stepFrame(step);
 		}
+		// the zoom readout's click, reachable from the keyboard. a manual
+		// listener rather than a hotkey registration because the reset is the
+		// *physical* zero and the library matches on the character the layout
+		// prints there -- see asksViewportReset for why `Control+0` cannot
+		// express it. guarded() is the whole gate here, with no library
+		// ignoreInputs ahead of it: its interactive-tag walk covers the
+		// input/textarea/select the library would have skipped, plus the
+		// buttons, sliders and dialogs it would not have. preventDefault stays
+		// App.tsx's, app-wide, so page zoom cannot drift even when this declines
+		function onKeyDown(e: KeyboardEvent) {
+			if (!asksViewportReset(e)) return;
+			guarded(e, () => viewerStore.getState().resetViewport());
+		}
 		// passive: the viewer layout never scrolls, so default is never prevented
 		// here. ctrl+wheel is the one wheel gesture that does need a
 		// preventDefault (the webview's own page zoom), and wheelFrameStep bails
 		// on it -- App.tsx suppresses it app-wide with a non-passive listener
 		window.addEventListener("wheel", onWheel, { passive: true });
-		return () => window.removeEventListener("wheel", onWheel);
+		window.addEventListener("keydown", onKeyDown);
+		return () => {
+			window.removeEventListener("wheel", onWheel);
+			window.removeEventListener("keydown", onKeyDown);
+		};
 	}, []);
 }

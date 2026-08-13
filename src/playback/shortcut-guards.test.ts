@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	asksViewportReset,
 	wheelFrameStep,
 	withinInteractiveControl,
 	withinNativeWheelUi,
@@ -140,5 +141,41 @@ describe("wheelFrameStep", () => {
 		// the side panels' scrollable bodies stay opted out too
 		const inPanelBody = el("dd", {}, el("div", { "data-native-wheel": "" }));
 		expect(wheelFrameStep({ deltaY: 100, ctrlKey: false, target: inPanelBody })).toBeNull();
+	});
+});
+
+describe("asksViewportReset", () => {
+	// what each layout actually delivers for a press of the physical top-row
+	// zero, which is the key the webview resets page zoom from. these carry the
+	// shift state the browser would report even though the predicate's own
+	// parameter type does not name it: going by code is exactly what makes the
+	// chord blind to shift, and these three are what that blindness buys
+	const qwerty = { ctrlKey: true, altKey: false, shiftKey: false, code: "Digit0", key: "0" };
+	// french/belgian azerty print `à` there and reach "0" only through shift,
+	// so both of these are one user pressing "ctrl and the zero key"
+	const azertyUnshifted = { ctrlKey: true, altKey: false, shiftKey: false, code: "Digit0", key: "à" };
+	const azertyShifted = { ctrlKey: true, altKey: false, shiftKey: true, code: "Digit0", key: "0" };
+
+	test("the physical top-row zero resets whatever character the layout prints", () => {
+		expect(asksViewportReset(qwerty)).toBe(true);
+		expect(asksViewportReset(azertyUnshifted)).toBe(true);
+		expect(asksViewportReset(azertyShifted)).toBe(true);
+	});
+
+	test("the numpad zero resets only with numlock on", () => {
+		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "Numpad0", key: "0" })).toBe(true);
+		// numlock off makes that same code Insert, and ctrl+insert is copy
+		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "Numpad0", key: "Insert" })).toBe(false);
+	});
+
+	test("altgr is left alone so the german-family layouts can still type `}`", () => {
+		// chromium reports altgr as ctrl+alt
+		expect(asksViewportReset({ ctrlKey: true, altKey: true, code: "Digit0", key: "}" })).toBe(false);
+	});
+
+	test("a plain zero and other ctrl chords ask for nothing", () => {
+		expect(asksViewportReset({ ctrlKey: false, altKey: false, code: "Digit0", key: "0" })).toBe(false);
+		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "Digit9", key: "9" })).toBe(false);
+		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "KeyO", key: "o" })).toBe(false);
 	});
 });

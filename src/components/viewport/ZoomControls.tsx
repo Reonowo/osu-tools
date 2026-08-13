@@ -45,7 +45,9 @@ export function ZoomControls({ onStep }: { onStep: (direction: 1 | -1) => void }
 						</Button>
 					}
 				/>
-				<TooltipContent side="top">reset to 100%, centred — hold space or middle-drag to pan</TooltipContent>
+				<TooltipContent side="top">
+					reset to 100%, centred (ctrl+0) — hold space or middle-drag to pan
+				</TooltipContent>
 			</Tooltip>
 
 			<Tooltip>

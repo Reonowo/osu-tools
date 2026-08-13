@@ -86,3 +86,23 @@ export function wheelFrameStep(e: { deltaY: number; ctrlKey: boolean; target: un
 	if (withinNativeWheelUi(e.target)) return null;
 	return e.deltaY < 0 ? -1 : 1;
 }
+
+/** true when a keydown is the viewport reset chord. the one predicate both
+ * sides read: App.tsx suppresses the webview's page-zoom reset with it and
+ * the shortcut hook acts on it, so what the app swallows and what it acts on
+ * cannot drift apart.
+ *
+ * the top row goes by code, not key -- the physical zero is ctrl+0 whatever
+ * character the layout prints there. an azerty zero is `à` unshifted and "0"
+ * only with shift, so a key test misses it either way, and @tanstack/hotkeys
+ * cannot express this: its `Control+0` demands shift be up, and for the
+ * unshifted azerty press it trusts `à` as a letter and never reaches its own
+ * Digit-code fallback. alt is excluded even so -- chromium reports altgr as
+ * ctrl+alt, and altgr+0 is `}` on the german-family layouts, which this would
+ * otherwise stop those users typing anywhere in the app. the numpad arm does
+ * ask for the key, since with numlock off that same code is Insert:
+ * ctrl+insert is copy, and the webview never zoomed on it */
+export function asksViewportReset(e: { ctrlKey: boolean; altKey: boolean; code: string; key: string }): boolean {
+	if (!e.ctrlKey || e.altKey) return false;
+	return e.code === "Digit0" || (e.code === "Numpad0" && e.key === "0");
+}

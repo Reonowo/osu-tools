@@ -10,6 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { invokeSetViewerPrefs } from "@/lib/ipc";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
+import { asksViewportReset } from "@/playback/shortcut-guards";
 import { installPrefsPersistence } from "@/state/persist";
 import { useViewerStore, viewerStore } from "@/state/store";
 
@@ -38,18 +39,30 @@ export default function App() {
 		return () => void cleanup.then((unlisten) => unlisten());
 	}, []);
 
-	// ctrl+wheel is the webview's own page zoom, and nothing in this app is
-	// ever meant to resize that way -- the gesture belongs to the viewport's
-	// pointer-anchored zoom and the timeline dock's span zoom, both of which
-	// read the event through their own (bubbling, so unaffected) handlers.
-	// suppressed here, at the app root, so it also covers the start screen
-	// and every dialog; non-passive because preventDefault is the whole point
+	// the webview's own page zoom, and nothing in this app is ever meant to
+	// resize that way. both of its gestures belong to the viewer instead:
+	// ctrl+wheel to the viewport's pointer-anchored zoom and the timeline
+	// dock's span zoom, ctrl+0 to the viewport reset, each reading the event
+	// through its own (bubbling, so unaffected) handler. suppressed here, at
+	// the app root, so it also covers the start screen and every dialog and
+	// page zoom cannot drift regardless of what has focus -- including the
+	// cases where the viewer's own ctrl+0 declines to act. non-passive on the
+	// wheel because preventDefault is the whole point
 	useEffect(() => {
 		function onWheel(e: WheelEvent) {
 			if (e.ctrlKey) e.preventDefault();
 		}
+		// the same predicate the viewer's own ctrl+0 acts on, so the chord this
+		// swallows and the chord that resets the viewport are one definition
+		function onKeyDown(e: KeyboardEvent) {
+			if (asksViewportReset(e)) e.preventDefault();
+		}
 		window.addEventListener("wheel", onWheel, { passive: false });
-		return () => window.removeEventListener("wheel", onWheel);
+		window.addEventListener("keydown", onKeyDown);
+		return () => {
+			window.removeEventListener("wheel", onWheel);
+			window.removeEventListener("keydown", onKeyDown);
+		};
 	}, []);
 
 	// persistence is installed only after hydration resolves, so the loaded
