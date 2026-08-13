@@ -20,9 +20,10 @@ export function playfieldTransform(hostW: number, hostH: number) {
 // the only thing that has to know a dom element exists
 
 // the playfield rect in osu!px; its centre is the point every zoom scales
-// about, and its extent is what the leash below measures against the canvas
-const PLAYFIELD_WIDTH = 512;
-const PLAYFIELD_HEIGHT = 384;
+// about, and its extent is what the leash below measures against the canvas.
+// exported for grid.ts, which bounds the playfield grid to this same rect
+export const PLAYFIELD_WIDTH = 512;
+export const PLAYFIELD_HEIGHT = 384;
 const PLAYFIELD_CENTRE_X = PLAYFIELD_WIDTH / 2;
 const PLAYFIELD_CENTRE_Y = PLAYFIELD_HEIGHT / 2;
 

@@ -9,20 +9,27 @@
 // serves from the vite server where no csp is injected, so only the release
 // build exercises this
 import "pixi.js/unsafe-eval";
-import { Application, Container, RenderLayer, type Renderer } from "pixi.js";
+import { Application, Container, Graphics, RenderLayer, type Renderer } from "pixi.js";
 import { fromBytes, type Rgba } from "../engine/color";
 import { HIT_FADE_OUT_TIME } from "../engine/argon";
 import type { BrushRing, ChromeShape, PreviewSnapshot } from "../editor/preview";
 import type { DerivedScene } from "../lib/derive";
 import type { LoadedScene } from "../lib/scene-types";
 import type { EffectSettings, OverlaySettings } from "../state/store";
-import { DEFAULT_EFFECTS, DEFAULT_OVERLAYS, effectiveEffects } from "../state/defaults";
+import {
+	clampPlayfieldGridSpacing,
+	DEFAULT_EFFECTS,
+	DEFAULT_OVERLAYS,
+	effectiveEffects,
+	type PlayfieldGridSpacing
+} from "../state/defaults";
 import { CircleDrawable } from "./drawables/circle";
 import { CursorDrawable } from "./drawables/cursor";
 import { FollowPointsDrawable } from "./drawables/follow-points";
 import { JudgementsDrawable } from "./drawables/judgements";
 import { SliderDrawable } from "./drawables/slider";
 import { SpinnerDrawable } from "./drawables/spinner";
+import { playfieldGridGeometry } from "./playfield-grid";
 import { AnalysisDrawable } from "./overlays/analysis";
 import { EditChromeDrawable } from "./overlays/edit-chrome";
 import {
@@ -144,6 +151,15 @@ function createSceneDrawables(ctx: RenderContext): ObjectDrawable[] {
  * looking at the same part of the replay */
 const DENSITY_DEBOUNCE_MS = 250;
 
+// the playfield grid's ink. uniform white with no centre-line emphasis: the
+// lazer grid this mirrors is uniform, and an emphasised centre would read as
+// a meaningful axis it is not. the border is heavier because it is the one
+// line that has to stay findable once the leash has let the playfield be
+// panned almost entirely off canvas
+const PLAYFIELD_GRID_COLOUR = 0xffffff;
+const PLAYFIELD_GRID_LINE_ALPHA = 0.1;
+const PLAYFIELD_GRID_BORDER_ALPHA = 0.22;
+
 /** the slice of `window` the dpr watcher needs, injected rather than reached
  * for so the headless suite can drive a dpr change */
 export interface DevicePixelRatioView {
@@ -201,6 +217,12 @@ export function applyDevicePixelRatio(target: ResolutionTarget, dpr: number, wid
 export class GameplayRenderer {
 	private app!: Application;
 	private root = new Container();
+	/** the playfield grid: renderer-lifetime, not scene-lifetime -- its
+	 * geometry depends on nothing a scene carries, so it survives every scene
+	 * swap and is redrawn only when the spacing preference changes */
+	private playfieldGrid = new Graphics();
+	/** the spacing `playfieldGrid` holds; null until the first setOverlays */
+	private playfieldGridSpacing: PlayfieldGridSpacing | null = null;
 	private layers = {
 		followPoints: new Container(),
 		objects: new Container(),
@@ -247,6 +269,9 @@ export class GameplayRenderer {
 
 		// later objects render below earlier ones (osu approach order)
 		renderer.layers.objects.sortableChildren = true;
+		// first child, so the playfield grid sits beneath every object layer
+		// and can never obscure what the user is actually watching
+		renderer.root.addChild(renderer.playfieldGrid);
 		for (const layer of [
 			renderer.layers.followPoints,
 			renderer.layers.objects,
@@ -367,6 +392,34 @@ export class GameplayRenderer {
 	setOverlays(overlays: OverlaySettings): void {
 		this.overlays = overlays;
 		this.layers.cursor.visible = !overlays.hideCursor;
+		this.drawPlayfieldGrid(clampPlayfieldGridSpacing(overlays.playfieldGrid));
+	}
+
+	/** the playfield grid, redrawn only when its spacing changes -- never per
+	 * animation frame, and never on zoom or pan: the lines are stroked with
+	 * `pixelLine`, so they stay one device pixel under any transform instead
+	 * of becoming slabs at high zoom.
+	 *
+	 * the playfield grid snaps nothing, ever. it is a ruler; snapping belongs
+	 * to the lattice (lib/lattice.ts), which is what keeps an edit forensically
+	 * plausible, and a second thing to snap to would undermine it */
+	private drawPlayfieldGrid(spacing: PlayfieldGridSpacing): void {
+		if (spacing === this.playfieldGridSpacing) return;
+		this.playfieldGridSpacing = spacing;
+		const grid = this.playfieldGrid;
+		grid.clear();
+		const geometry = playfieldGridGeometry(spacing);
+		if (geometry === null) return;
+		const { width, height } = geometry.border;
+		for (const x of geometry.vertical) grid.moveTo(x, 0).lineTo(x, height);
+		for (const y of geometry.horizontal) grid.moveTo(0, y).lineTo(width, y);
+		grid.stroke({ color: PLAYFIELD_GRID_COLOUR, alpha: PLAYFIELD_GRID_LINE_ALPHA, width: 1, pixelLine: true });
+		grid.rect(geometry.border.x, geometry.border.y, width, height).stroke({
+			color: PLAYFIELD_GRID_COLOUR,
+			alpha: PLAYFIELD_GRID_BORDER_ALPHA,
+			width: 1,
+			pixelLine: true
+		});
 	}
 
 	/** wires (or unwires, with null) the edit-mode chrome. sources are live
