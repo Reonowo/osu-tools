@@ -41,9 +41,11 @@ import type {
 import { deriveScene, type DerivedScene } from "../lib/derive";
 import { clampViewportZoom, DEFAULT_VIEWPORT_ZOOM, NO_VIEWPORT_PAN, type ViewportPan } from "../renderer/playfield";
 import {
+	clampBackgroundDim,
 	clampDetailSpan,
 	clampDisplayLength,
 	clampFeather,
+	clampPlayfieldGridSpacing,
 	clampStrength,
 	clampVolume,
 	DEFAULT_DETAIL_SPAN,
@@ -725,6 +727,10 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					const ms = value as number;
 					if (!Number.isFinite(ms)) return;
 					next = clampDisplayLength(ms) as OverlaySettings[typeof key];
+				} else if (key === "playfieldGrid") {
+					// an enum on the wire, so anything outside the allowed set means
+					// off rather than a value the renderer would have to interpret
+					next = clampPlayfieldGridSpacing(value as number) as OverlaySettings[typeof key];
 				}
 				set({ overlays: { ...get().overlays, [key]: next } });
 			},
@@ -732,7 +738,17 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			// the master and the granular flags are stored side by side and
 			// written the same way: turning `enabled` off must not touch the five
 			// below it, so the user gets their own selection back when it returns
-			setEffect: (key, value) => set({ effects: { ...get().effects, [key]: value } }),
+			setEffect: (key, value) => {
+				let next = value;
+				if (key === "backgroundDim") {
+					// the one numeric member of this group, validated here for the
+					// same reason displayLength is above
+					const percent = value as number;
+					if (!Number.isFinite(percent)) return;
+					next = clampBackgroundDim(percent) as EffectSettings[typeof key];
+				}
+				set({ effects: { ...get().effects, [key]: next } });
+			},
 			setTimeline: (key, value) => set({ timeline: { ...get().timeline, [key]: value } }),
 			setPlaying: (playing) => set({ playing }),
 			setRate: (rate) => set({ rate }),

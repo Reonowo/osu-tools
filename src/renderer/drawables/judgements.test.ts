@@ -33,7 +33,8 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
 			frameMarkers: false,
 			hideCursor: false,
 			keyOverlay: true,
-			displayLength: 800
+			displayLength: 800,
+			playfieldGrid: 0
 		}),
 		getEffects: () => DEFAULT_EFFECTS,
 		getEditChrome: () => null,

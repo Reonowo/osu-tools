@@ -18,6 +18,7 @@ import type {
 import { testScene } from "../test/scene";
 import { VIEWPORT_ZOOM_MAX, VIEWPORT_ZOOM_MIN } from "../renderer/playfield";
 import {
+	DEFAULT_BACKGROUND_DIM,
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_OVERLAYS,
@@ -701,6 +702,19 @@ describe("viewer preferences", () => {
 		store.getState().setOverlay("hideCursor", true);
 		expect(store.getState().overlays.hideCursor).toBe(true);
 	});
+
+	test("the playfield grid ships off and only ever holds an allowed spacing", () => {
+		const store = createViewerStore(deps());
+		expect(store.getState().overlays.playfieldGrid).toBe(0);
+		store.getState().setOverlay("playfieldGrid", 16);
+		expect(store.getState().overlays.playfieldGrid).toBe(16);
+		// off is one of the spacings, not a separate flag
+		store.getState().setOverlay("playfieldGrid", 0);
+		expect(store.getState().overlays.playfieldGrid).toBe(0);
+		// out of the set: off rather than a value the renderer must interpret
+		store.getState().setOverlay("playfieldGrid", 24);
+		expect(store.getState().overlays.playfieldGrid).toBe(0);
+	});
 });
 
 describe("effect settings", () => {
@@ -711,7 +725,8 @@ describe("effect settings", () => {
 			hitEffects: true,
 			cursorGlow: true,
 			cursorTrail: true,
-			followPoints: true
+			followPoints: true,
+			backgroundDim: DEFAULT_BACKGROUND_DIM
 		});
 	});
 
@@ -730,7 +745,10 @@ describe("effect settings", () => {
 			hitEffects: false,
 			cursorGlow: false,
 			cursorTrail: false,
-			followPoints: false
+			followPoints: false,
+			// not an effect: the master takes the five down and leaves the
+			// background exactly as dim as the user set it
+			backgroundDim: DEFAULT_BACKGROUND_DIM
 		});
 
 		// and switching the master back on restores exactly what was chosen
@@ -738,6 +756,22 @@ describe("effect settings", () => {
 		const live = effectiveEffects(store.getState().effects);
 		expect(live.hitEffects).toBe(true);
 		expect(live.cursorTrail).toBe(false);
+	});
+
+	test("the background dim is clamped on the way in, like display length", () => {
+		const store = createViewerStore(deps());
+		store.getState().setEffect("backgroundDim", 140);
+		expect(store.getState().effects.backgroundDim).toBe(100);
+		store.getState().setEffect("backgroundDim", -20);
+		expect(store.getState().effects.backgroundDim).toBe(0);
+		store.getState().setEffect("backgroundDim", 63.4);
+		expect(store.getState().effects.backgroundDim).toBe(63);
+		// the last good value stands rather than a NaN reaching the scrim
+		store.getState().setEffect("backgroundDim", Number.NaN);
+		expect(store.getState().effects.backgroundDim).toBe(63);
+		// booleans are untouched by the numeric guard
+		store.getState().setEffect("cursorGlow", false);
+		expect(store.getState().effects.cursorGlow).toBe(false);
 	});
 
 	test("effectiveEffects hands back the same object when the master is on", () => {

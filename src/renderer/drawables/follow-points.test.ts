@@ -102,7 +102,8 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 			frameMarkers: false,
 			hideCursor: false,
 			keyOverlay: true,
-			displayLength: 800
+			displayLength: 800,
+			playfieldGrid: 0
 		}),
 		getEffects: () => effects,
 		getEditChrome: () => null,

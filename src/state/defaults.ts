@@ -12,7 +12,10 @@ export const DEFAULT_OVERLAYS: OverlaySettings = {
 	frameMarkers: false,
 	hideCursor: false,
 	keyOverlay: true,
-	displayLength: 800
+	displayLength: 800,
+	// off: a reference grid the user did not ask for must not appear over
+	// their replay
+	playfieldGrid: 0
 };
 
 /** mirrors settings.rs EditingPrefs::default() */
@@ -21,6 +24,21 @@ export const DEFAULT_EDITING: EditingSettings = {
 	warnOnOverwrite: true
 };
 
+/** the black scrim over the beatmap background, percent; 100 is fully black,
+ * matching osu!'s own dim control. declared above DEFAULT_EFFECTS rather than
+ * with the other numeric trios at the foot of this file because that object
+ * reads it. the default is what the viewer drew hardcoded before the control
+ * existed, so a fresh install looks the way it always did */
+export const BACKGROUND_DIM_MIN = 0;
+export const BACKGROUND_DIM_MAX = 100;
+export const DEFAULT_BACKGROUND_DIM = 70;
+
+/** rounds and clamps a dim percent; NaN is rejected by the callers, exactly
+ * as it is for volume and display length */
+export function clampBackgroundDim(percent: number): number {
+	return Math.round(Math.min(Math.max(percent, BACKGROUND_DIM_MIN), BACKGROUND_DIM_MAX));
+}
+
 /** mirrors settings.rs EffectPrefs::default() -- the full-fat look */
 export const DEFAULT_EFFECTS: EffectSettings = {
 	enabled: true,
@@ -28,7 +46,8 @@ export const DEFAULT_EFFECTS: EffectSettings = {
 	hitEffects: true,
 	cursorGlow: true,
 	cursorTrail: true,
-	followPoints: true
+	followPoints: true,
+	backgroundDim: DEFAULT_BACKGROUND_DIM
 };
 
 /** mirrors settings.rs TimelinePrefs::default() -- every layer visible */
@@ -52,7 +71,12 @@ export function effectiveEffects(effects: EffectSettings): EffectSettings {
 		hitEffects: false,
 		cursorGlow: false,
 		cursorTrail: false,
-		followPoints: false
+		followPoints: false,
+		// the background dim is not an effect -- it rides on this group for
+		// where it belongs in the settings dialog, and switching gameplay
+		// effects off must not change the background. it passes through
+		// untouched
+		backgroundDim: effects.backgroundDim
 	};
 }
 
@@ -83,6 +107,19 @@ export function clampVolume(volume: number): number {
 
 export function clampDisplayLength(ms: number): number {
 	return Math.round(Math.min(Math.max(ms, DISPLAY_LENGTH_MIN), DISPLAY_LENGTH_MAX));
+}
+
+/** the playfield grid's spacings, in osu!px, `0` meaning off. one preference
+ * rather than a boolean plus a size, so it cannot reach an incoherent state.
+ * the four sizes are the ones osu!'s own beatmap editor offers */
+export const PLAYFIELD_GRID_SPACINGS = [0, 4, 8, 16, 32] as const;
+export type PlayfieldGridSpacing = (typeof PLAYFIELD_GRID_SPACINGS)[number];
+
+/** anything outside the allowed set means a hand-edited or newer settings
+ * file; off is the inert answer, mirroring how a non-finite display length
+ * falls back to its own default */
+export function clampPlayfieldGridSpacing(spacing: number): PlayfieldGridSpacing {
+	return PLAYFIELD_GRID_SPACINGS.find((allowed) => allowed === spacing) ?? 0;
 }
 
 /** the move tool's feather window, ms (parent design spec: default 40).

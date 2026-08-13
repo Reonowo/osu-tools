@@ -272,6 +272,10 @@ export interface OverlaySettings {
 	keyOverlay: boolean;
 	/** ms; lazer's ReplayAnalysisDisplayLength (200-2000, default 800) */
 	displayLength: number;
+	/** the playfield grid's spacing in osu!px, `0` meaning off. a plain
+	 * number rather than a literal union: json can keep no such promise, so
+	 * the allowed set is enforced by clampPlayfieldGridSpacing and by sanitize() */
+	playfieldGrid: number;
 }
 
 /** mirrors settings.rs RecentReplay. the beatmap association is what
@@ -315,6 +319,11 @@ export interface EffectSettings {
 	cursorGlow: boolean;
 	cursorTrail: boolean;
 	followPoints: boolean;
+	/** percent 0-100, 100 fully black; matches osu!'s own dim control. rides
+	 * on this group for where it belongs in the settings dialog, NOT because
+	 * the master gates it -- it is not an effect and effectiveEffects passes
+	 * it through untouched */
+	backgroundDim: number;
 }
 
 /** mirrors settings.rs TimelinePrefs. which of the timeline dock's layers

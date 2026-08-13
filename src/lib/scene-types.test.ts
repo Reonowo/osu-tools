@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import type { IpcError, JudgementKindDto, LoadedSceneWarning, RenderKind, SimulationDto } from "./scene-types";
+import type {
+	EffectSettings,
+	IpcError,
+	JudgementKindDto,
+	LoadedSceneWarning,
+	OverlaySettings,
+	RenderKind,
+	SimulationDto
+} from "./scene-types";
 import { isIpcError } from "./ipc";
 
 describe("scene contract mirror", () => {
@@ -94,6 +102,40 @@ describe("scene contract mirror", () => {
 		expect(isIpcError(new Error("nope"))).toBe(false);
 		expect(isIpcError({ message: "no kind" })).toBe(false);
 		expect(isIpcError(null)).toBe(false);
+	});
+
+	test("the overlay prefs accept the rust-serialized shape, grid spacing included", () => {
+		// keys copied from settings.rs's settings_serialize_with_camel_case_keys.
+		// the spacing is a plain number rather than a literal union, since json
+		// can keep no such promise -- sanitize() and clampPlayfieldGridSpacing
+		// are the validation instead
+		const overlays: OverlaySettings = {
+			cursorPath: true,
+			clickMarkers: true,
+			frameMarkers: false,
+			hideCursor: true,
+			keyOverlay: false,
+			displayLength: 1200,
+			playfieldGrid: 16
+		};
+		expect(overlays.playfieldGrid).toBe(16);
+	});
+
+	test("the effect prefs accept the rust-serialized shape, dim included", () => {
+		// keys copied from settings.rs's settings_serialize_with_camel_case_keys;
+		// the background dim is a plain number rather than a literal union,
+		// since json can keep no such promise -- sanitize() and
+		// clampBackgroundDim are the validation instead
+		const effects: EffectSettings = {
+			enabled: true,
+			hitAnimations: false,
+			hitEffects: true,
+			cursorGlow: false,
+			cursorTrail: true,
+			followPoints: false,
+			backgroundDim: 35
+		};
+		expect(effects.backgroundDim).toBe(35);
 	});
 
 	test("warnings carry their payload fields", () => {
