@@ -10,6 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { invokeSetViewerPrefs } from "@/lib/ipc";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
+import { installFocusModality } from "@/playback/focus-modality";
 import { asksViewportReset } from "@/playback/shortcut-guards";
 import { installPrefsPersistence } from "@/state/persist";
 import { useViewerStore, viewerStore } from "@/state/store";
@@ -38,6 +39,11 @@ export default function App() {
 		const cleanup = installDropHandler();
 		return () => void cleanup.then((unlisten) => unlisten());
 	}, []);
+
+	// the focus-modality stamps the keyboard guard pivots on (see
+	// focus-modality.ts); app-rooted because every guard consumer -- the
+	// playback shortcuts and the edit tools' keydown -- assumes it is live
+	useEffect(() => installFocusModality(window), []);
 
 	// the webview's own page zoom, and nothing in this app is ever meant to
 	// resize that way. both of its gestures belong to the viewer instead:
