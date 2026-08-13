@@ -280,6 +280,26 @@ mod tests {
     }
 
     #[test]
+    fn a_head_missed_slider_scores_the_plain_fold() {
+        // measured and rejected during parity issue 15's triage: granting a
+        // head-missed slider's aggregate an extra combo unit fixed the
+        // Totsugeki-class plays but broke 699 previously-exact plays
+        // carrying the identical break shape (the sweep is the arbiter).
+        // this pins the plain fold so the rejected variant cannot sneak
+        // back: reset at the head, tail +30 through combo 1, aggregate Ok
+        // with zero bonus
+        let mut timeline = timeline_of(&[
+            JudgementKind::SliderHead { hit: false },
+            JudgementKind::SliderTail { hit: true },
+            JudgementKind::SliderAggregate(HitGrade::Ok),
+        ]);
+        for event in &mut timeline.events {
+            event.object_index = 0;
+        }
+        assert_eq!(total_score(&timeline, &circles_map(3), 5, 1.0), 130);
+    }
+
+    #[test]
     fn missed_slider_parts_score_nothing() {
         let timeline = timeline_of(&[
             JudgementKind::SliderHead { hit: false },
