@@ -233,7 +233,7 @@ describe("move tool", () => {
 		return map;
 	}
 
-	test("pointer-down on a frame pauses playback; on empty space the gesture is inert", () => {
+	test("pointer-down on a frame pauses playback; on empty space the gesture edits nothing", () => {
 		const onFrame = new GestureController();
 		expect(onFrame.pointerDown({ x: 150, y: 100 }, false, moveEnv({ selection: [1] })).pause).toBe(true);
 
@@ -243,6 +243,72 @@ describe("move tool", () => {
 		expect(fx.selection).toBeUndefined();
 		expect(onEmpty.pointerMove({ x: 410, y: 300 }).previewOps).toBeUndefined();
 		expect(onEmpty.pointerUp({ x: 410, y: 300 }).commit).toBeUndefined();
+	});
+
+	test("an empty-space click clears the selection, without pausing playback", () => {
+		// the same rule as the select tool's click-on-miss: letting go of a
+		// selection should not need a tool switch or a reach for escape. no
+		// pause -- pausing exists to stop the path animating under a mutating
+		// drag, and this mutates nothing
+		const controller = new GestureController();
+		controller.pointerDown({ x: 400, y: 300 }, false, moveEnv({ selection: [1, 2] }));
+		const fx = controller.pointerUp({ x: 400, y: 300 });
+		expect(fx.selection).toEqual([]);
+		expect(fx.pause).toBeUndefined();
+		expect(fx.commit).toBeUndefined();
+	});
+
+	test("travel inside the slop is still a click, so a shaky press clears too", () => {
+		const controller = new GestureController();
+		controller.pointerDown({ x: 400, y: 300 }, false, moveEnv({ selection: [1, 2] }));
+		controller.pointerMove({ x: 402, y: 301 });
+		expect(controller.pointerUp({ x: 402, y: 301 }).selection).toEqual([]);
+	});
+
+	test("a drag from empty space leaves the selection alone", () => {
+		// a stray drag past the path must not throw the work away
+		const controller = new GestureController();
+		controller.pointerDown({ x: 400, y: 300 }, false, moveEnv({ selection: [1, 2] }));
+		controller.pointerMove({ x: 440, y: 300 });
+		const fx = controller.pointerUp({ x: 440, y: 300 });
+		expect(fx.selection).toBeUndefined();
+		expect(fx.pause).toBeUndefined();
+	});
+
+	test("a release past the slop is a drag even when no move was delivered", () => {
+		// a coalesced or throttled pointer stream can go straight from down to up:
+		// the release is the last travel sample, so the selection survives
+		const controller = new GestureController();
+		controller.pointerDown({ x: 400, y: 300 }, false, moveEnv({ selection: [1, 2] }));
+		const fx = controller.pointerUp({ x: 440, y: 300 });
+		expect(fx.selection).toBeUndefined();
+		expect(fx.pause).toBeUndefined();
+	});
+
+	test("a drag that comes back inside the slop stays a drag", () => {
+		// the select tool's own press has the same rule: crossing the slop is
+		// one-way, so returning near the origin does not demote it to a click
+		const controller = new GestureController();
+		controller.pointerDown({ x: 400, y: 300 }, false, moveEnv({ selection: [1, 2] }));
+		controller.pointerMove({ x: 440, y: 300 });
+		controller.pointerMove({ x: 400, y: 300 });
+		expect(controller.pointerUp({ x: 400, y: 300 }).selection).toBeUndefined();
+	});
+
+	test("shift+click on empty space clears nothing", () => {
+		// shift means refine, and the flag is frozen at pointer-down -- the move
+		// tool used to discard it entirely
+		const controller = new GestureController();
+		controller.pointerDown({ x: 400, y: 300 }, true, moveEnv({ selection: [1, 2] }));
+		const fx = controller.pointerUp({ x: 400, y: 300 });
+		expect(fx.selection).toBeUndefined();
+		expect(fx.pause).toBeUndefined();
+	});
+
+	test("a cancelled empty press clears nothing", () => {
+		const controller = new GestureController();
+		controller.pointerDown({ x: 400, y: 300 }, false, moveEnv({ selection: [1, 2] }));
+		expect(controller.cancel().selection).toBeUndefined();
 	});
 
 	test("a click with zero travel commits nothing, snap and off-lattice frames notwithstanding", () => {

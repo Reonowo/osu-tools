@@ -103,8 +103,17 @@ interface MoveState {
 	origin: PlayfieldPoint;
 	/** what the drag moves: the whole selection when it grabbed a selected
 	 * frame, the one frame it grabbed otherwise. empty means the press landed
-	 * on empty space -- the gesture stays live only to swallow its release */
+	 * on empty space -- the gesture stays live to swallow its release and to
+	 * decide, on the two fields below, whether that release lets the selection
+	 * go */
 	targets: readonly number[];
+	/** the empty press's click-versus-drag phase, the same shape the select
+	 * tool's own press uses: crossing the slop makes it a drag for the rest of
+	 * its life. only read when `targets` is empty */
+	phase: "click" | "drag";
+	/** frozen at pointer-down, like the select and lasso states freeze theirs:
+	 * shift means refine, so a refining miss must not throw the work away */
+	shift: boolean;
 	env: GestureEnv;
 }
 
@@ -148,9 +157,10 @@ export class GestureController {
 			case "move": {
 				const hit = hitTestFrame(env.frames, env.candidates, point, env.hitRadius);
 				if (hit === null) {
-					// empty space does nothing -- but the press is still consumed,
-					// or its release would fall through to whatever else listens
-					this.state = { tool: "move", origin: point, targets: [], env };
+					// empty space grabs nothing -- but the press is still consumed,
+					// or its release would fall through to whatever else listens.
+					// what that release does is decided on the phase below
+					this.state = { tool: "move", origin: point, targets: [], phase: "click", shift, env };
 					return {};
 				}
 				const grabbedSelected = env.selection.includes(hit);
@@ -158,6 +168,8 @@ export class GestureController {
 					tool: "move",
 					origin: point,
 					targets: grabbedSelected ? env.selection : [hit],
+					phase: "click",
+					shift,
 					env
 				};
 				// a mutating gesture pauses playback: the path must not animate
@@ -197,7 +209,14 @@ export class GestureController {
 				return { shape: { kind: "lasso", points: state.points } };
 			}
 			case "move":
-				if (state.targets.length === 0) return {};
+				if (state.targets.length === 0) {
+					// an empty press only tracks travel: past the slop it is a drag,
+					// and a drag lets go of nothing on release
+					if (state.phase === "click" && distance(state.origin, point) > state.env.slop) {
+						state.phase = "drag";
+					}
+					return {};
+				}
 				return { previewOps: this.moveOps(state, point) };
 			case "smooth":
 			case "erase": {
@@ -225,7 +244,22 @@ export class GestureController {
 			case "lasso":
 				return this.lassoRelease(state, point);
 			case "move": {
-				if (state.targets.length === 0) return {};
+				if (state.targets.length === 0) {
+					// a click that grabbed nothing lets the selection go, the same
+					// rule the select tool's own click-on-miss follows. a drag from
+					// empty space does not -- a stray drag past the path must not
+					// throw the work away -- and shift means refine, so a refining
+					// miss keeps it too. no pause is requested either way: pausing
+					// exists to stop the path animating under a mutating drag, and
+					// this mutates nothing.
+					//
+					// the release counts as the last travel sample: a coalesced
+					// pointer stream can land past the slop having delivered no move
+					// at all, and that is still a drag
+					const travelled = state.phase === "drag" || distance(state.origin, point) > state.env.slop;
+					if (!travelled && !state.shift) return { selection: [] };
+					return {};
+				}
 				const ops = this.moveOps(state, point);
 				// preview-equals-commit is structural: the ops released with are
 				// the ops the last preview drew, recomputed from identical inputs
