@@ -23,9 +23,10 @@ import { gesturePreview, opsToAuthoritative, selectionToAuthoritative } from "@/
 import { countedLabel, deletedFrameCount, movedFrameCount } from "@/editor/tool-commits";
 import { countTimedAtOrBefore } from "@/lib/timeline";
 import { viewportPointToPlayfield, viewportTransform } from "@/renderer/playfield";
+import { focusModality } from "@/playback/focus-modality";
 import { playbackClock } from "@/playback/instance";
 import { spacePan } from "@/playback/space-pan";
-import { withinInteractiveControl, withinViewportChrome } from "@/playback/shortcut-guards";
+import { controlOwnsKeydown, withinInteractiveControl, withinViewportChrome } from "@/playback/shortcut-guards";
 import { effectiveOverlays } from "@/state/defaults";
 import { viewerStore } from "@/state/store";
 
@@ -353,7 +354,12 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 				live = null;
 				return;
 			}
-			if (withinInteractiveControl(e.target)) return;
+			// the modality-aware keyboard guard, not the structural pointer one:
+			// Delete and the clear-selections Escape must fire after a click on
+			// the chrome parks focus on a button, while keyboard-acquired focus
+			// and text entry keep their own keys (a number field's Backspace,
+			// a dialog's Escape)
+			if (controlOwnsKeydown(e, focusModality.keyboardFocus)) return;
 			if (e.key === "Delete" || e.key === "Backspace") {
 				eraseSelection();
 				return;
