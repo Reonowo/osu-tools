@@ -3,8 +3,8 @@
 // like the overview strip, this is a continuous consumer (decision 6) -- one
 // rAF loop reads playbackClock and writes straight to dom refs, never
 // through react state. the twist here is that even the *set of marks to
-// draw* is continuous (judgements and key/mouse holds scroll past as the
-// window slides), and re-rendering react for every one of them would be as
+// draw* is continuous (objects, tethers and key/mouse holds scroll past as
+// the window slides), and re-rendering react for every one of them would be as
 // bad as re-rendering on every clock tick. the neighbourhood scheme below is
 // what keeps both under control: see the comment above the rAF effect
 //
@@ -35,9 +35,10 @@ import { pressRunAt, pressRunFromIndex } from "@/editor/press-runs";
 import { pressLabel } from "@/editor/tool-commits";
 import { physicalButton, PHYSICAL_BUTTONS, type PhysicalKey } from "@/engine/buttons";
 import { holdSpansFlat, sliceSpansFlat } from "@/engine/interpolation";
-import type { VelocitySample } from "@/lib/analysis";
+import { aimTime, type VelocitySample } from "@/lib/analysis";
+import type { ObjectLaneEntry } from "@/lib/derive";
 import { formatTime } from "@/lib/format";
-import type { FrameDto, Grade, LoadedScene } from "@/lib/scene-types";
+import type { FrameDto, Grade, RenderObject } from "@/lib/scene-types";
 import { audioExtendedBounds, type TimeBounds } from "@/lib/timeline";
 import {
 	clampSpan,
@@ -82,31 +83,45 @@ const HOLD_ORDER: readonly BitKey[] = PHYSICAL_BUTTONS.map((button) => button.ed
 /** px around a span edge where a pointer-down grabs that edge alone */
 const EDGE_ZONE_PX = 5;
 
-interface JudgeMark {
-	time: number;
-	grade: Grade;
+// osu!'s hit colours, demoted onto small elements rather than full-height
+// bars so colour carries the grade without dominating the row; null grade
+// (NotSimulated) draws neutral rather than fabricating an outcome
+const GRADE_HEX: Record<Grade, string> = {
+	great: "#66ccff",
+	ok: "#88b300",
+	meh: "#ffcc22",
+	miss: "#ed1121"
+};
+const UNGRADED_HEX = "#8a8a93";
+
+// the lane rows' pixel stack, top of the layer down: ruler, object lane,
+// K1/K2/M1/M2, velocity. the extended tether draws across rows and needs
+// these offsets; keep them in lockstep with the row classNames below
+const RULER_ROW_PX = 17;
+const OBJECT_ROW_PX = 17;
+const HOLD_ROW_PX = 13;
+/** the at-rest tether hairline's y within the layer: 2px up from the object
+ * row's bottom edge */
+const TETHER_REST_Y_PX = RULER_ROW_PX + OBJECT_ROW_PX - 3;
+
+function holdRowCentreY(bit: BitKey): number {
+	const rowTop = RULER_ROW_PX + OBJECT_ROW_PX + HOLD_ORDER.indexOf(bit) * HOLD_ROW_PX;
+	return rowTop + Math.floor(HOLD_ROW_PX / 2);
 }
 
-const JUDGE_MARK_CLASS: Record<Grade, string> = {
-	great: "absolute w-0.5 inset-y-[3px] bg-[#66ccff]",
-	ok: "absolute w-[2.5px] inset-y-px bg-[#88b300]",
-	meh: "absolute w-[2.5px] inset-y-px bg-[#ffcc22]",
-	miss: "absolute w-[3px] inset-y-0 bg-[#ed1121]"
-};
-
-// only these three judgement kinds carry a grade the judge lane can draw;
-// ticks/repeats/tails/spinner-spin events are proximity- or spin-driven and
-// have nothing gradeable to show here (mirrors analysis.ts's judgedTime)
-function judgeMarksFor(scene: LoadedScene | null): JudgeMark[] {
-	if (scene === null || scene.simulation.status !== "authoritative") return [];
-	const marks: JudgeMark[] = [];
-	for (const event of scene.simulation.events) {
-		const kind = event.kind;
-		if (kind.type === "circle" || kind.type === "sliderAggregate" || kind.type === "spinnerFinal") {
-			marks.push({ time: event.time, grade: kind.grade });
-		}
+/** the hover readout: type, grade, and the exact hit error. a miss states
+ * the absent hit error without claiming the object was never pressed -- the
+ * event stream cannot reliably tell a press-caused miss from a timeout */
+function objectTitle(object: RenderObject, entry: ObjectLaneEntry): string {
+	const type = object.kind.type;
+	if (entry.grade === null) return type;
+	if (entry.tether !== null) {
+		const error = entry.tether.toTime - entry.tether.fromTime;
+		const value = Number.isInteger(error) ? `${error}` : error.toFixed(1);
+		return `${type} · ${entry.grade} · ${error >= 0 ? "+" : ""}${value} ms`;
 	}
-	return marks;
+	if (entry.grade === "miss") return `${type} · miss · no hit error`;
+	return `${type} · ${entry.grade}`;
 }
 
 // spans are retained per scene in holdSpansFlat's pair-packed form so a
@@ -147,6 +162,9 @@ export function DetailLanes() {
 	const pressSelection = useViewerStore((s) => s.editor?.pressSelection ?? null);
 	const panelOpen = useViewerStore((s) => s.panelOpen);
 	const panelTab = useViewerStore((s) => s.panelTab);
+	/** the persisted per-layer visibility (settings.rs TimelinePrefs). the
+	 * extended tether is selection chrome and deliberately not gated by it */
+	const timeline = useViewerStore((s) => s.timeline);
 	/** the live drag's frame-snapped outcome, drawn in place of the spans it
 	 * replaces -- local dom state, never the store or the pixi chrome */
 	const [dragPreview, setDragPreview] = useState<PressDragPreview | null>(null);
@@ -165,23 +183,57 @@ export function DetailLanes() {
 	// per-scene source lists: independent of the zoom window, recomputed only
 	// when a new scene installs (scene's reference changes 1:1 with sceneId,
 	// since store.install() sets both together)
-	const judgeMarks = useMemo(() => judgeMarksFor(scene), [scene]);
 	const holds = useMemo(() => holdsForScene(scene?.frames ?? []), [scene]);
 
-	// the selected press, resolved to its run for the lane highlight. edit
-	// mode only -- watch mode's lanes keep their observational look -- and
-	// only while the sidebar is open on the keypress tab: the highlight is
-	// that panel's presence on the timeline, and a brightened span with no
-	// visible owner reads as a glitch. hide, not clear -- the selection
-	// itself stays in the store, so reopening the panel restores it exactly.
-	// (the drag preview below is gesture state and never gates on the panel,
-	// and the viewport's frame-selection chrome is tool-owned elsewhere)
+	// the hit-window band background, one per-scene gradient shared by every
+	// aimable object: three nested bands (meh, ok, great) centred where the
+	// press should land, in the same hit colours the grades use. the widths
+	// are per-scene constants off the render plan, so the stop positions are
+	// computed once; the bands draw always and are allowed to be sub-pixel at
+	// coarse zoom -- resolving with zoom is the intended behaviour, and no
+	// bands draw on a NotSimulated scene
+	const hitWindowBand = useMemo(() => {
+		if (scene === null || scene.simulation.status !== "authoritative") return null;
+		const windows = scene.renderPlan.hitWindows;
+		if (!(windows.meh > 0)) return null;
+		const stop = (ms: number) => `${((ms / (2 * windows.meh)) * 100).toFixed(3)}%`;
+		const meh = "#ffcc2226";
+		const ok = "#88b30038";
+		const great = "#66ccff52";
+		// the gradient spans ±meh; each stop is where one band hands over to
+		// the next, early (left) side then late (right) side
+		const earlyOkStop = stop(windows.meh - windows.ok);
+		const earlyGreatStop = stop(windows.meh - windows.great);
+		const lateGreatStop = stop(windows.meh + windows.great);
+		const lateOkStop = stop(windows.meh + windows.ok);
+		return {
+			mehMs: windows.meh,
+			background: `linear-gradient(to right, ${meh} 0 ${earlyOkStop}, ${ok} ${earlyOkStop} ${earlyGreatStop}, ${great} ${earlyGreatStop} ${lateGreatStop}, ${ok} ${lateGreatStop} ${lateOkStop}, ${meh} ${lateOkStop} 100%)`
+		};
+	}, [scene]);
+
+	// the selected press, resolved to its run for the lane highlight and the
+	// tether's extended state. edit mode only -- watch mode's lanes keep
+	// their observational look -- and only while the sidebar is open on the
+	// keypress tab: the highlight is that panel's presence on the timeline,
+	// and a brightened span with no visible owner reads as a glitch. hide,
+	// not clear -- the selection itself stays in the store, so reopening the
+	// panel restores it exactly. (the drag preview below is gesture state and
+	// never gates on the panel, and the viewport's frame-selection chrome is
+	// tool-owned elsewhere)
 	const selectedHighlight = useMemo(() => {
 		if (mode !== "edit" || !panelOpen || panelTab !== "keys") return null;
 		if (scene === null || pressSelection === null) return null;
 		const run = pressRunFromIndex(scene.frames, pressSelection.key, pressSelection.startIndex);
 		if (run === null) return null;
-		return { bit: physicalButton(pressSelection.key).edgesKey, startTime: run.startTime };
+		return {
+			bit: physicalButton(pressSelection.key).edgesKey,
+			key: pressSelection.key,
+			startIndex: run.startIndex,
+			fallIndex: run.fallIndex,
+			startTime: run.startTime,
+			endTime: run.endTime
+		};
 	}, [mode, panelOpen, panelTab, scene, pressSelection]);
 
 	// sliceEpochRef is the counter of record, bumped synchronously by the rAF
@@ -214,10 +266,44 @@ export function DetailLanes() {
 		requestedNeighbourhoodRef.current = neighbourhood;
 	}, [neighbourhood]);
 
-	const slicedMarks = useMemo(
-		() => judgeMarks.filter((m) => m.time >= neighbourhood.start && m.time <= neighbourhood.end),
-		[judgeMarks, neighbourhood]
-	);
+	// the object lane's slice: render objects with their derived entries,
+	// index-aligned by construction (derive.ts). padded by the miss window so
+	// a hit-window band or tether poking into the neighbourhood from a
+	// just-outside object still draws at extreme zoom
+	const slicedObjects = useMemo(() => {
+		if (scene === null || derived === null) return [];
+		const objects = scene.renderPlan.objects;
+		const pad = scene.renderPlan.hitWindows.miss;
+		const sliced: { index: number; object: RenderObject; entry: ObjectLaneEntry }[] = [];
+		for (let index = 0; index < objects.length; index++) {
+			const object = objects[index];
+			if (object.endTime < neighbourhood.start - pad || object.startTime > neighbourhood.end + pad) continue;
+			sliced.push({ index, object, entry: derived.objectLane[index] });
+		}
+		return sliced;
+	}, [scene, derived, neighbourhood]);
+
+	// the tether whose extended state is showing: the visible object judged
+	// by the selected press. shares selectedHighlight's keys-tab gate exactly
+	// -- the extension is selection chrome, hidden (not cleared) with the
+	// panel. containment over frame indices rather than times: duplicate-time
+	// frames can pack a release and re-press into one millisecond, where two
+	// distinct runs share the tether's toTime and only the rise frame's index
+	// says which run the judging press belongs to
+	const tetherExtension = useMemo(() => {
+		if (selectedHighlight === null) return null;
+		for (const { entry } of slicedObjects) {
+			const tether = entry.tether;
+			if (tether === null || tether.key !== selectedHighlight.key) continue;
+			if (
+				tether.pressFrameIndex >= selectedHighlight.startIndex &&
+				tether.pressFrameIndex < selectedHighlight.fallIndex
+			) {
+				return tether;
+			}
+		}
+		return null;
+	}, [slicedObjects, selectedHighlight]);
 	const slicedHolds = useMemo(() => {
 		// one lane pixel of the neighbourhood, the merge quantum sliceSpansFlat
 		// coalesces below -- sub-pixel gaps cannot render distinctly, and the
@@ -396,6 +482,39 @@ export function DetailLanes() {
 		return PHYSICAL_BUTTONS.find((button) => button.edgesKey === bit)?.label ?? null;
 	};
 
+	const objectIndexForEvent = (target: EventTarget | null): number | null => {
+		const objectEl = target instanceof Element ? target.closest("[data-object-index]") : null;
+		if (objectEl === null) return null;
+		const index = Number((objectEl as HTMLElement).dataset.objectIndex);
+		return Number.isInteger(index) ? index : null;
+	};
+
+	// "fix this note": a single click on a tethered object selects its
+	// judging press and raises the keypress tab (opening the panel if it is
+	// closed, so the click never lands invisibly). the tether's stored rise
+	// frame index resolves the click through the existing press-run lookup --
+	// nothing is re-derived, and the index (not a time search) is what keeps
+	// duplicate-time streams honest: a release and re-press at one
+	// millisecond are two runs, and only the index names the judging one --
+	// and a tetherless object (a miss, a spinner, any object on a
+	// NotSimulated scene) does nothing rather than selecting something
+	// arbitrary. single clicks never seek, the detail tier's one rule.
+	// deliberately not behind the frame-edit gate: selection is inspection,
+	// and on a non-editable-but-simulated scene the keypress panel opens
+	// with its controls disabled, which is that panel's own job to say
+	const onLaneClick = (e: ReactMouseEvent<HTMLDivElement>) => {
+		const state = viewerStore.getState();
+		if (state.mode !== "edit" || state.scene === null || state.derived === null) return;
+		const objectIndex = objectIndexForEvent(e.target);
+		if (objectIndex === null) return;
+		const tether = state.derived.objectLane[objectIndex]?.tether ?? null;
+		if (tether === null) return;
+		const run = pressRunFromIndex(state.scene.frames, tether.key, tether.pressFrameIndex);
+		if (run === null) return;
+		state.setPressSelection({ key: tether.key, startIndex: run.startIndex });
+		state.setPanelTab("keys");
+	};
+
 	const onLanePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
 		if (e.button !== 0 || pressDrag.live || laneGestureRef.current !== null) return;
 		const state = viewerStore.getState();
@@ -448,10 +567,20 @@ export function DetailLanes() {
 	};
 
 	// double-click is the one deliberate seek affordance; single-click never
-	// seeks. resolved through the same inversion as the drag hit-testing
+	// seeks. an object double-click is pure navigation: through the playback
+	// clock rather than the frame cursor, and ungated by the frame-edit gate,
+	// so it still works on a NotSimulated scene where the hold-lane gestures
+	// are disabled. the hold-lane path resolves through the same inversion as
+	// the drag hit-testing
 	const onLaneDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
 		const state = viewerStore.getState();
 		if (state.mode !== "edit" || state.scene === null) return;
+		const objectIndex = objectIndexForEvent(e.target);
+		if (objectIndex !== null) {
+			const object = state.scene.renderPlan.objects[objectIndex];
+			if (object !== undefined) playbackClock.seekTo(object.startTime);
+			return;
+		}
 		if (!frameEditGate(state.scene).editable) return;
 		const key = laneKeyForEvent(e.target);
 		if (key === null) return;
@@ -471,11 +600,14 @@ export function DetailLanes() {
 		// the span zoom rides ctrl+wheel on the dock (TimelineDock), one rule
 		// for every tier
 		<div className="relative flex border-b border-[#17171b] bg-surface-rail">
+			{/* the hold-lane labels share one neutral tone: k/m identity comes
+			from the label text alone, keeping hue reserved for judgement meaning
+			(blue means "great", never "K1") */}
 			<div className="w-[74px] shrink-0 border-r border-[#17171b] pr-2 pb-1 text-right font-mono text-[10.5px]">
 				<div className="h-[17px]" />
-				<div className="flex h-[17px] items-center justify-end text-[#71717a]">judge</div>
-				<div className="flex h-[13px] items-center justify-end text-[#99ddff]">K1</div>
-				<div className="flex h-[13px] items-center justify-end text-[#99ddff]">K2</div>
+				<div className="flex h-[17px] items-center justify-end text-[#71717a]">obj</div>
+				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">K1</div>
+				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">K2</div>
 				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">M1</div>
 				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">M2</div>
 				<div className="flex h-[34px] items-center justify-end text-[#eb4791]">vel</div>
@@ -485,14 +617,17 @@ export function DetailLanes() {
 			below is NEIGHBOURHOOD_FACTOR windows wide and hangs out of the track on
 			both sides, and this is the box that clips it back to the visible span.
 			the pointer handlers live here too -- capture retargets a drag's later
-			events to this box, and only presses inside a [data-hold-lane] row do
-			anything, so the ruler, judge and velocity rows stay untouched */}
+			events to this box; presses do something only inside a [data-hold-lane]
+			row and clicks only inside a [data-object-index] mark, so the ruler and
+			velocity rows stay untouched and the object lane never disturbs press
+			dragging */}
 			<div
 				ref={track.attach}
 				onPointerDown={onLanePointerDown}
 				onPointerMove={onLanePointerMove}
 				onPointerUp={onLanePointerUp}
 				onPointerCancel={onLanePointerCancel}
+				onClick={onLaneClick}
 				onDoubleClick={onLaneDoubleClick}
 				className="relative min-w-0 flex-1 overflow-hidden pb-1"
 			>
@@ -515,19 +650,117 @@ export function DetailLanes() {
 						))}
 					</div>
 
+					{/* the object lane: the beatmap's own objects at their own times,
+					the dock's fixed frame of reference -- nothing in this row moves
+					under editing. circles are marks, sliders and spinners spans with
+					head/repeat/tail marks inside them, each coloured by its grade.
+					hit-window bands sit behind the marks and at-rest tethers between
+					the two, every layer positioned once in neighbourhood percent */}
 					<div className="relative h-[17px] border-b border-[#101013]">
-						{slicedMarks.map((mark, i) => (
-							<div
-								key={i}
-								className={JUDGE_MARK_CLASS[mark.grade]}
-								style={{ left: percentOf(mark.time) }}
-							/>
-						))}
+						{timeline.hitWindowBands &&
+							hitWindowBand !== null &&
+							slicedObjects.map(({ index, object }) => {
+								const centre = aimTime(object);
+								if (centre === null) return null;
+								const width =
+									((2 * hitWindowBand.mehMs) / (neighbourhood.end - neighbourhood.start)) * 100;
+								return (
+									<div
+										key={index}
+										className="pointer-events-none absolute inset-y-[2px] rounded-[1px]"
+										style={{
+											left: percentOf(centre - hitWindowBand.mehMs),
+											width: `${width}%`,
+											background: hitWindowBand.background
+										}}
+									/>
+								);
+							})}
+						{timeline.tethers &&
+							slicedObjects.map(({ index, entry }) => {
+								// the at-rest tether: a hairline whose length is the hit
+								// error, drawn inside the lane so a dense stream never
+								// becomes a hatched mess; sub-pixel at coarse zoom by design
+								const tether = entry.tether;
+								if (tether === null) return null;
+								const errorMs = Math.abs(tether.toTime - tether.fromTime);
+								const width = (errorMs / (neighbourhood.end - neighbourhood.start)) * 100;
+								return (
+									<div
+										key={index}
+										className="pointer-events-none absolute bottom-[2px] h-px bg-[#e4e4e7]/70"
+										style={{
+											left: percentOf(Math.min(tether.fromTime, tether.toTime)),
+											width: `${width}%`
+										}}
+									/>
+								);
+							})}
+						{slicedObjects.map(({ index, object, entry }) => {
+							const colour = entry.grade === null ? UNGRADED_HEX : GRADE_HEX[entry.grade];
+							const title = objectTitle(object, entry);
+							const clickable = entry.tether !== null;
+							if (object.kind.type === "circle") {
+								return (
+									<div
+										key={index}
+										data-object-index={index}
+										title={title}
+										className={`absolute inset-y-0 -ml-[3.5px] w-[7px] ${clickable ? "cursor-pointer" : ""}`}
+										style={{ left: percentOf(object.startTime) }}
+									>
+										<div
+											className="absolute inset-y-[4px] left-[2px] w-[3px] rounded-[1px]"
+											style={{ background: colour }}
+										/>
+									</div>
+								);
+							}
+							const left = windowFraction(neighbourhood, object.startTime);
+							const right = windowFraction(neighbourhood, object.endTime);
+							const spinner = object.kind.type === "spinner";
+							return (
+								<div
+									key={index}
+									data-object-index={index}
+									title={title}
+									className={`absolute inset-y-0 min-w-[3px] ${clickable ? "cursor-pointer" : ""}`}
+									style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
+								>
+									<div
+										className="absolute inset-x-0 inset-y-[5px] rounded-[2px]"
+										style={
+											// spin sections read differently from tap sections:
+											// a spinner's span is hatched where a slider's is solid
+											spinner
+												? {
+														background: `repeating-linear-gradient(45deg, ${colour}8c 0 2px, transparent 2px 5px)`
+													}
+												: { background: `${colour}66` }
+										}
+									/>
+									{!spinner &&
+										timeline.nestedMarks &&
+										entry.nestedMarks.map((time, i) => {
+											const span = object.endTime - object.startTime;
+											const fraction = span > 0 ? (time - object.startTime) / span : 0;
+											return (
+												<div
+													key={i}
+													className="absolute inset-y-[3px] -ml-px w-[2px] rounded-[1px]"
+													style={{ left: `${fraction * 100}%`, background: colour }}
+												/>
+											);
+										})}
+								</div>
+							);
+						})}
 					</div>
 
-					{/* all four rows share one mark style (bg-[#99ddff]) per the brief --
-					only the gutter labels distinguish k1/k2 from m1/m2 by colour. the
-					selected press's span brightens; a live drag hides the spans its
+					{/* all four rows share one neutral span tone -- hue stays reserved
+					for judgement meaning, and only the gutter labels distinguish the
+					keys. the selected press's span brightens, a stronger signal now
+					that its neighbours are neutral; a live drag hides the spans its
 					expansion replaces and draws the realized outcome in their place */}
 					{HOLD_ORDER.map((bit) => {
 						const preview =
@@ -566,14 +799,14 @@ export function DetailLanes() {
 										<div
 											key={i}
 											data-selected={selected ? "" : undefined}
-											className="absolute inset-y-[3px] rounded-[2px] bg-[#99ddff] data-[selected]:bg-[#e8f7ff] data-[selected]:shadow-[0_0_0_1px_#ffffff66]"
+											className="absolute inset-y-[3px] rounded-[2px] bg-[#a1a1aa] data-[selected]:bg-[#f4f4f5] data-[selected]:shadow-[0_0_0_1px_#ffffff66]"
 											style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
 										/>
 									);
 								})}
 								{previewFractions !== null && (
 									<div
-										className="absolute inset-y-[3px] rounded-[2px] bg-[#e8f7ff] shadow-[0_0_0_1px_#ffffff66]"
+										className="absolute inset-y-[3px] rounded-[2px] bg-[#f4f4f5] shadow-[0_0_0_1px_#ffffff66]"
 										style={{
 											left: `${previewFractions.left * 100}%`,
 											width: `${(previewFractions.right - previewFractions.left) * 100}%`
@@ -598,6 +831,50 @@ export function DetailLanes() {
 							<polyline fill="none" stroke="#eb4791" strokeWidth={1.4} points={velocityTrace ?? ""} />
 						</svg>
 					</div>
+
+					{/* the tether's extended state: the bond drops out of the object
+					lane down to its press exactly while that press is selected (the
+					keys-tab gate, via tetherExtension) or mid-drag. during a drag the
+					press end follows the frame-snapped preview -- the same render the
+					preview span itself rides, so the error visibly shrinks as the
+					user aims -- and a cancelled drag retracts with the preview. the
+					preview substitutes only for its own run: it lingers until the
+					commit settles, and selecting another same-key run in that window
+					must show that run's authoritative tether, not the old drag's time */}
+					{tetherExtension !== null &&
+						(() => {
+							const tether = tetherExtension;
+							const pressTime =
+								dragPreview !== null &&
+								dragPreview.key === tether.key &&
+								dragPreview.runStartIndex === selectedHighlight?.startIndex
+									? dragPreview.span.start
+									: tether.toTime;
+							const fromTime = tether.fromTime;
+							const span = neighbourhood.end - neighbourhood.start;
+							const width = (Math.abs(pressTime - fromTime) / span) * 100;
+							const dropBottom = holdRowCentreY(physicalButton(tether.key).edgesKey);
+							return (
+								<div className="pointer-events-none absolute inset-0">
+									<div
+										className="absolute h-px bg-[#f4f4f5]"
+										style={{
+											top: `${TETHER_REST_Y_PX}px`,
+											left: percentOf(Math.min(fromTime, pressTime)),
+											width: `${width}%`
+										}}
+									/>
+									<div
+										className="absolute w-px bg-[#f4f4f5]/80"
+										style={{
+											top: `${TETHER_REST_Y_PX}px`,
+											height: `${dropBottom - TETHER_REST_Y_PX}px`,
+											left: percentOf(pressTime)
+										}}
+									/>
+								</div>
+							);
+						})()}
 				</div>
 
 				<Playhead ref={playheadRef} />
