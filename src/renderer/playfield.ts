@@ -19,19 +19,18 @@ export function playfieldTransform(hostW: number, hostH: number) {
 // takes the host box explicitly, so the interaction layer (Viewport.tsx) is
 // the only thing that has to know a dom element exists
 
-// the 512x384 playfield's centre, which is the point every zoom scales about
-const PLAYFIELD_CENTRE_X = 256;
-const PLAYFIELD_CENTRE_Y = 192;
+// the playfield rect in osu!px; its centre is the point every zoom scales
+// about, and its extent is what the leash below measures against the canvas
+const PLAYFIELD_WIDTH = 512;
+const PLAYFIELD_HEIGHT = 384;
+const PLAYFIELD_CENTRE_X = PLAYFIELD_WIDTH / 2;
+const PLAYFIELD_CENTRE_Y = PLAYFIELD_HEIGHT / 2;
 
-/** the pannable area is the playfield plus this many osu!px on every side, so
- * an object sitting on the very edge can still be dragged clear of the
- * viewport border. 48 is the ceiling: the 0.8 fit leaves a fifth of the host
- * free on the constrained axis, which is 96 osu!px vertically, and the margin
- * is spent twice (once per side) -- anything wider would make maxViewportPan
- * non-zero at zoom 1 and let the playfield drift off centre unzoomed */
-const PANNABLE_MARGIN = 32;
-const PANNABLE_WIDTH = 512 + 2 * PANNABLE_MARGIN;
-const PANNABLE_HEIGHT = 384 + 2 * PANNABLE_MARGIN;
+/** the leash: this many screen pixels of the playfield must stay on canvas,
+ * per axis. screen pixels rather than osu!px so the boundary feels identical
+ * at every zoom -- a sliver small enough to shove the playfield almost
+ * entirely aside, large enough to grab and drag back */
+export const VIEWPORT_LEASH_PX = 48;
 
 export const VIEWPORT_ZOOM_MIN = 0.5;
 export const VIEWPORT_ZOOM_MAX = 4;
@@ -94,15 +93,18 @@ export function viewportPointToPlayfield(
 	return { x: (point.x - t.x) / t.scale, y: (point.y - t.y) / t.scale };
 }
 
-/** how far each axis may pan before the pannable area's edge would come
- * inside the viewport's. zero on both axes until the area outgrows the host,
- * which the 0.8 fit means cannot happen at zoom 1 -- so the playfield stays
- * centred until the user actually zooms in */
+/** how far each axis may pan before the leash bites. `(extent * scale +
+ * hostExtent) / 2` is the pan that would carry the playfield's near edge onto
+ * the canvas' far edge, so subtracting the sliver leaves exactly that much of
+ * it showing; the playfield is otherwise free to leave the canvas. positive
+ * on any axis the host can fit two slivers along, which is what makes a drag
+ * work at fit zoom and below -- the floor only catches host boxes too small
+ * to show a sliver at all (a zero-size host mid-mount) */
 export function maxViewportPan(hostW: number, hostH: number, zoom: number): ViewportPan {
 	const scale = playfieldTransform(hostW, hostH).scale * zoom;
 	return {
-		x: Math.max(0, (PANNABLE_WIDTH * scale - hostW) / 2),
-		y: Math.max(0, (PANNABLE_HEIGHT * scale - hostH) / 2)
+		x: Math.max(0, (PLAYFIELD_WIDTH * scale + hostW) / 2 - VIEWPORT_LEASH_PX),
+		y: Math.max(0, (PLAYFIELD_HEIGHT * scale + hostH) / 2 - VIEWPORT_LEASH_PX)
 	};
 }
 

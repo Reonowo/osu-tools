@@ -15,6 +15,7 @@ import {
 	textureDensity,
 	viewportPointToPlayfield,
 	viewportTransform,
+	VIEWPORT_LEASH_PX,
 	VIEWPORT_ZOOM_MAX,
 	VIEWPORT_ZOOM_MIN,
 	wheelZoomFactor
@@ -453,40 +454,92 @@ describe("the +/- buttons' zoom step", () => {
 	});
 });
 
-describe("pan clamping", () => {
-	test("zoom 1 pins the playfield centred, whatever the host box", () => {
-		// the 0.8 fit leaves a fifth of the host free on the constrained axis, so
-		// the pannable area cannot outgrow the viewport until the user zooms in
+describe("the pan leash", () => {
+	/** the rule the spec pins, per axis:
+	 *   |pan| <= (playfieldExtent * scale + hostExtent) / 2 - sliver */
+	function leashBound(hostW: number, hostH: number, zoom: number) {
+		const scale = playfieldTransform(hostW, hostH).scale * zoom;
+		return {
+			x: (512 * scale + hostW) / 2 - VIEWPORT_LEASH_PX,
+			y: (384 * scale + hostH) / 2 - VIEWPORT_LEASH_PX
+		};
+	}
+
+	test("the bound is exactly the leash formula, at every zoom and host box", () => {
 		for (const { w, h } of HOST_BOXES) {
-			expect(maxViewportPan(w, h, 1)).toEqual({ x: 0, y: 0 });
-			expect(clampViewportPan(w, h, 1, { x: 400, y: -900 })).toEqual({ x: 0, y: 0 });
+			for (const zoom of [VIEWPORT_ZOOM_MIN, 1, 2.7, VIEWPORT_ZOOM_MAX]) {
+				const expected = leashBound(w, h, zoom);
+				const max = maxViewportPan(w, h, zoom);
+				expect(max.x).toBeCloseTo(Math.max(0, expected.x), 9);
+				expect(max.y).toBeCloseTo(Math.max(0, expected.y), 9);
+			}
 		}
 	});
 
-	test("2x and 4x open up progressively more room, symmetric about centre", () => {
-		const at2 = maxViewportPan(1024, 768, 2);
-		const at4 = maxViewportPan(1024, 768, 4);
-		expect(at2.x).toBeGreaterThan(0);
-		expect(at2.y).toBeGreaterThan(0);
-		expect(at4.x).toBeGreaterThan(at2.x);
-		expect(at4.y).toBeGreaterThan(at2.y);
-		expect(clampViewportPan(1024, 768, 4, { x: 1e6, y: -1e6 })).toEqual({ x: at4.x, y: -at4.y });
+	test("a drag pans at every zoom, fit zoom included", () => {
+		// the bound is positive on an axis as soon as the host can hold two
+		// slivers, so every host box a window can actually be has pan room --
+		// including at and below fit zoom, where the old clamp ignored drags
+		const boxes = HOST_BOXES.filter((box) => box.w >= 2 * VIEWPORT_LEASH_PX && box.h >= 2 * VIEWPORT_LEASH_PX);
+		for (const { w, h } of boxes) {
+			for (const zoom of [VIEWPORT_ZOOM_MIN, 1, VIEWPORT_ZOOM_MAX]) {
+				const max = maxViewportPan(w, h, zoom);
+				expect(max.x).toBeGreaterThan(0);
+				expect(max.y).toBeGreaterThan(0);
+				expect(clampViewportPan(w, h, zoom, { x: 30, y: -30 })).toEqual({ x: 30, y: -30 });
+			}
+		}
 	});
 
-	test("the bound is exactly where the pannable area's edge meets the viewport's", () => {
-		// 512x384 plus a 32 osu!px margin on every side, taken at the zoomed scale
-		const scale = playfieldTransform(1024, 768).scale * 4;
-		expect(maxViewportPan(1024, 768, 4).x).toBeCloseTo((576 * scale - 1024) / 2, 9);
-		expect(maxViewportPan(1024, 768, 4).y).toBeCloseTo((448 * scale - 768) / 2, 9);
+	test("at the bound, exactly the sliver of the playfield is still on canvas", () => {
+		for (const { w, h } of [
+			{ w: 1024, h: 768 },
+			{ w: 1920, h: 1080 }
+		]) {
+			for (const zoom of [0.5, 1, 4]) {
+				const right = viewportTransform(w, h, zoom, clampViewportPan(w, h, zoom, { x: 1e6, y: 0 }));
+				// pushed as far right as the leash allows, the playfield's left edge
+				// sits one sliver inside the canvas' right edge
+				expect(w - right.x).toBeCloseTo(VIEWPORT_LEASH_PX, 9);
+
+				const up = viewportTransform(w, h, zoom, clampViewportPan(w, h, zoom, { x: 0, y: -1e6 }));
+				// and pushed up, the playfield's bottom edge sits one sliver below
+				// the canvas' top
+				expect(up.y + 384 * up.scale).toBeCloseTo(VIEWPORT_LEASH_PX, 9);
+			}
+		}
 	});
 
-	test("a pan already inside the bound is returned untouched", () => {
+	test("the bound is symmetric about centre on each axis", () => {
+		const max = maxViewportPan(1024, 768, 2);
+		expect(clampViewportPan(1024, 768, 2, { x: 1e6, y: 1e6 })).toEqual({ x: max.x, y: max.y });
+		expect(clampViewportPan(1024, 768, 2, { x: -1e6, y: -1e6 })).toEqual({ x: -max.x, y: -max.y });
+	});
+
+	test("the axes clamp independently, so the playfield can be pushed into a corner", () => {
+		const max = maxViewportPan(1024, 768, 3);
+		expect(clampViewportPan(1024, 768, 3, { x: 1e6, y: 12 })).toEqual({ x: max.x, y: 12 });
+		expect(clampViewportPan(1024, 768, 3, { x: -7, y: -1e6 })).toEqual({ x: -7, y: -max.y });
+	});
+
+	test("a pan already inside the leash is returned untouched", () => {
 		const inside = { x: 12, y: -34 };
 		expect(clampViewportPan(1024, 768, 4, inside)).toEqual(inside);
+		expect(clampViewportPan(1024, 768, 1, inside)).toEqual(inside);
 	});
 
-	test("a zero-size host clamps everything to nothing instead of producing NaN", () => {
+	test("zooming out leaves the framing alone -- only the bound shrinks", () => {
+		const framed = clampViewportPan(1024, 768, 4, { x: 300, y: -200 });
+		expect(framed).toEqual({ x: 300, y: -200 });
+		// stepping all the way back to fit zoom keeps it: no recentring, and the
+		// leash at zoom 1 is still far wider than this pan
+		expect(clampViewportPan(1024, 768, 1, framed)).toEqual({ x: 300, y: -200 });
+	});
+
+	test("a host box too small to show a sliver stays finite instead of going negative", () => {
+		expect(maxViewportPan(0, 0, 4)).toEqual({ x: 0, y: 0 });
 		expect(clampViewportPan(0, 0, 4, { x: 50, y: 50 })).toEqual({ x: 0, y: 0 });
+		expect(clampViewportPan(1, 1, 1, { x: 50, y: -50 })).toEqual({ x: 0, y: 0 });
 	});
 });
 

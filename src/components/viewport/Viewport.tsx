@@ -146,9 +146,10 @@ export function Viewport() {
 		};
 	}, []);
 
-	// the +/- buttons re-clamp the pan against the zoom they land on, so
-	// stepping back down to 100% recentres instead of leaving the playfield
-	// stranded wherever a 400% pan had pushed it
+	// the +/- buttons re-clamp against the zoom they land on: a smaller
+	// playfield is a shorter leash, so a pan that was legal at 400% can sit
+	// past it at 100%. the framing itself survives the step -- only a pan
+	// already outside the new leash moves, and only as far as the leash
 	function stepZoom(direction: 1 | -1) {
 		const container = containerRef.current;
 		if (container === null) return;
