@@ -32,6 +32,7 @@ export function PlayerView() {
 	const viewportZoom = useViewerStore((s) => s.viewportZoom);
 	const viewportPan = useViewerStore((s) => s.viewportPan);
 	const backgroundPath = useViewerStore((s) => s.scene?.backgroundPath ?? null);
+	const backgroundDim = useViewerStore((s) => s.effects.backgroundDim);
 
 	// renderer + raf loop live for the component's lifetime
 	useEffect(() => {
@@ -188,15 +189,25 @@ export function PlayerView() {
 		rendererRef.current?.setViewport(viewportZoom, viewportPan);
 	}, [viewportZoom, viewportPan]);
 
+	// the raw stored value, never effectiveEffects': the background dim is not
+	// gated by the effects master (state/defaults.ts carries it through the
+	// fold for the same reason). the scrim is a black layer between the image
+	// and the pixi host rather than the image's own opacity, so it generalises
+	// to the video and storyboard backgrounds TODO.md still defers -- and it
+	// draws only when there is an image to darken, since the bare area is
+	// already the app's own near-black
 	return (
 		<div className="absolute inset-0">
 			{backgroundPath !== null && (
-				<img
-					src={convertFileSrc(backgroundPath)}
-					alt=""
-					className="absolute inset-0 h-full w-full object-cover opacity-30"
-					draggable={false}
-				/>
+				<>
+					<img
+						src={convertFileSrc(backgroundPath)}
+						alt=""
+						className="absolute inset-0 h-full w-full object-cover"
+						draggable={false}
+					/>
+					<div className="absolute inset-0 bg-black" style={{ opacity: backgroundDim / 100 }} />
+				</>
 			)}
 			<div ref={hostRef} className="absolute inset-0" />
 		</div>
