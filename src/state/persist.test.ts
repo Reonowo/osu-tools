@@ -5,10 +5,11 @@ import type {
 	EffectSettings,
 	IpcError,
 	OverlaySettings,
-	Settings
+	Settings,
+	TimelineSettings
 } from "../lib/scene-types";
 import { testScene } from "../test/scene";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "./defaults";
+import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "./defaults";
 import { installPrefsPersistence, type Scheduler } from "./persist";
 import { createViewerStore, type IpcDeps } from "./store";
 
@@ -18,7 +19,8 @@ const baseSettings: Settings = {
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,
-	effects: DEFAULT_EFFECTS
+	effects: DEFAULT_EFFECTS,
+	timeline: DEFAULT_TIMELINE
 };
 
 const identityDelta: EditDelta = {
@@ -103,11 +105,18 @@ function saveRecorder() {
 		overlays: OverlaySettings;
 		editing: EditingSettings;
 		effects: EffectSettings;
+		timeline: TimelineSettings;
 	}[] = [];
 	return {
 		calls,
-		save: async (volume: number, overlays: OverlaySettings, editing: EditingSettings, effects: EffectSettings) => {
-			calls.push({ volume, overlays, editing, effects });
+		save: async (
+			volume: number,
+			overlays: OverlaySettings,
+			editing: EditingSettings,
+			effects: EffectSettings,
+			timeline: TimelineSettings
+		) => {
+			calls.push({ volume, overlays, editing, effects, timeline });
 			return baseSettings;
 		}
 	};
@@ -199,6 +208,19 @@ describe("installPrefsPersistence", () => {
 		expect(rec.calls[0].effects.enabled).toBe(false);
 		expect(rec.calls[0].effects.cursorTrail).toBe(false);
 		expect(rec.calls[0].effects.hitEffects).toBe(true);
+	});
+
+	test("timeline changes schedule a save too", () => {
+		const store = createViewerStore(deps());
+		const timer = manualScheduler();
+		const rec = saveRecorder();
+		installPrefsPersistence(store, rec.save, 500, timer.scheduler);
+
+		store.getState().setTimeline("tethers", false);
+		expect(timer.scheduled).toBe(1);
+		timer.fire();
+		expect(rec.calls[0].timeline.tethers).toBe(false);
+		expect(rec.calls[0].timeline.hitWindowBands).toBe(true);
 	});
 
 	test("dispose flushes the pending save and stops listening", () => {

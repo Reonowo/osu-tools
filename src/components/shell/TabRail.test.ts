@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import type { EditDelta, Settings } from "../../lib/scene-types";
 import { testScene } from "../../test/scene";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "../../state/defaults";
+import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "../../state/defaults";
 import { createViewerStore, type IpcDeps } from "../../state/store";
 import { railTabClick } from "./TabRail";
 
@@ -16,7 +16,8 @@ const baseSettings: Settings = {
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,
-	effects: DEFAULT_EFFECTS
+	effects: DEFAULT_EFFECTS,
+	timeline: DEFAULT_TIMELINE
 };
 
 const identityDelta: EditDelta = {

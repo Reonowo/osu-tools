@@ -35,7 +35,8 @@ import type {
 	LoadedScene,
 	OverlaySettings,
 	RecentReplay,
-	Settings
+	Settings,
+	TimelineSettings
 } from "../lib/scene-types";
 import { deriveScene, type DerivedScene } from "../lib/derive";
 import { clampViewportZoom, DEFAULT_VIEWPORT_ZOOM, NO_VIEWPORT_PAN, type ViewportPan } from "../renderer/playfield";
@@ -51,6 +52,7 @@ import {
 	DEFAULT_FEATHER_MS,
 	DEFAULT_OVERLAYS,
 	DEFAULT_SMOOTH_STRENGTH,
+	DEFAULT_TIMELINE,
 	DEFAULT_VOLUME
 } from "./defaults";
 import { describeIpcError } from "./errors";
@@ -58,7 +60,7 @@ import { describeIpcError } from "./errors";
 // OverlaySettings moved to the wire contract (scene-types.ts) when the
 // overlays became a persisted setting; re-exported so the renderer and the
 // settings dialog keep importing it from here
-export type { EditingSettings, EffectSettings, OverlaySettings };
+export type { EditingSettings, EffectSettings, OverlaySettings, TimelineSettings };
 
 // watch shows a replay; edit is the (future) mutation surface
 export type ViewerMode = "watch" | "edit";
@@ -75,7 +77,8 @@ export interface IpcDeps {
 		volume: number,
 		overlays: OverlaySettings,
 		editing: EditingSettings,
-		effects: EffectSettings
+		effects: EffectSettings,
+		timeline: TimelineSettings
 	): Promise<Settings>;
 	clearRecents(): Promise<Settings>;
 	applyEdit(epoch: number, baseRevision: number, ops: EditOp[], label: string): Promise<EditDelta>;
@@ -189,6 +192,8 @@ export interface ViewerState {
 	/** the raw per-effect toggles, master included -- consumers gate on
 	 * effectiveEffects(effects), never on the granular flags alone */
 	effects: EffectSettings;
+	/** the timeline dock's per-layer visibility toggles */
+	timeline: TimelineSettings;
 	playing: boolean;
 	rate: number;
 	/** linear amplitude percent 0-100; persisted (unlike rate, which belongs
@@ -236,6 +241,7 @@ export interface ViewerState {
 	setOverlay<K extends keyof OverlaySettings>(key: K, value: OverlaySettings[K]): void;
 	setEditing<K extends keyof EditingSettings>(key: K, value: EditingSettings[K]): void;
 	setEffect<K extends keyof EffectSettings>(key: K, value: EffectSettings[K]): void;
+	setTimeline<K extends keyof TimelineSettings>(key: K, value: TimelineSettings[K]): void;
 	setPlaying(playing: boolean): void;
 	setRate(rate: number): void;
 	setVolume(volume: number): void;
@@ -676,6 +682,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			overlays: DEFAULT_OVERLAYS,
 			editing: DEFAULT_EDITING,
 			effects: DEFAULT_EFFECTS,
+			timeline: DEFAULT_TIMELINE,
 			playing: false,
 			rate: 1,
 			volume: DEFAULT_VOLUME,
@@ -726,6 +733,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			// written the same way: turning `enabled` off must not touch the five
 			// below it, so the user gets their own selection back when it returns
 			setEffect: (key, value) => set({ effects: { ...get().effects, [key]: value } }),
+			setTimeline: (key, value) => set({ timeline: { ...get().timeline, [key]: value } }),
 			setPlaying: (playing) => set({ playing }),
 			setRate: (rate) => set({ rate }),
 			setVolume: (volume) => {
@@ -763,6 +771,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				const overlaysBefore = get().overlays;
 				const editingBefore = get().editing;
 				const effectsBefore = get().effects;
+				const timelineBefore = get().timeline;
 				const volumeEditsBefore = volumeEdits;
 				// claimed at initiation, like install()'s refresh: bumping only at
 				// publication would let this read -- when it resolves late --
@@ -779,22 +788,24 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					return;
 				}
 				const volumeEdited = volumeEdits !== volumeEditsBefore;
-				// reference equality: setOverlay/setEditing/setEffect always build a
-				// new object
+				// reference equality: setOverlay/setEditing/setEffect/setTimeline
+				// always build a new object
 				const overlaysEdited = get().overlays !== overlaysBefore;
 				const editingEdited = get().editing !== editingBefore;
 				const effectsEdited = get().effects !== effectsBefore;
-				// volume/overlays/editing/effects are frontend-owned -- nothing
-				// backend-side ever changes them on its own -- so they apply even when
-				// a newer read has claimed the slot; the settings object itself
-				// (recents move under a concurrent load) publishes only while this
-				// read is still the newest claim
+				const timelineEdited = get().timeline !== timelineBefore;
+				// volume/overlays/editing/effects/timeline are frontend-owned --
+				// nothing backend-side ever changes them on its own -- so they apply
+				// even when a newer read has claimed the slot; the settings object
+				// itself (recents move under a concurrent load) publishes only while
+				// this read is still the newest claim
 				set({
 					...(refreshSeq === settingsRefreshSeq ? { settings } : {}),
 					...(volumeEdited ? {} : { volume: clampVolume(settings.volume) }),
 					...(overlaysEdited ? {} : { overlays: { ...DEFAULT_OVERLAYS, ...settings.overlays } }),
 					...(editingEdited ? {} : { editing: { ...DEFAULT_EDITING, ...settings.editing } }),
-					...(effectsEdited ? {} : { effects: { ...DEFAULT_EFFECTS, ...settings.effects } })
+					...(effectsEdited ? {} : { effects: { ...DEFAULT_EFFECTS, ...settings.effects } }),
+					...(timelineEdited ? {} : { timeline: { ...DEFAULT_TIMELINE, ...settings.timeline } })
 				});
 				// an edit made while the read was in flight predates the persistence
 				// subscription (App installs it only once this resolves), and the
@@ -805,17 +816,18 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// while the save was in flight; edits after the stable save cannot
 				// slip past install, because App's subscription lands in the same
 				// microtask drain as this resolution, ahead of any queued input
-				if (volumeEdited || overlaysEdited || editingEdited || effectsEdited) {
+				if (volumeEdited || overlaysEdited || editingEdited || effectsEdited || timelineEdited) {
 					for (;;) {
-						const { volume, overlays, editing, effects } = get();
+						const { volume, overlays, editing, effects, timeline } = get();
 						const volumeEditsAtSave = volumeEdits;
 						try {
-							const saved = await deps.setViewerPrefs(volume, overlays, editing, effects);
+							const saved = await deps.setViewerPrefs(volume, overlays, editing, effects, timeline);
 							const stable =
 								volumeEdits === volumeEditsAtSave &&
 								get().overlays === overlays &&
 								get().editing === editing &&
-								get().effects === effects;
+								get().effects === effects &&
+								get().timeline === timeline;
 							if (stable) {
 								publishSettings(saved);
 								break;

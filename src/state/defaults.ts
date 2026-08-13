@@ -3,7 +3,7 @@
 // mirror settings.rs's OverlayPrefs::default / Settings::default, which is
 // what a fresh (or legacy) settings.json hydrates to
 
-import type { EditingSettings, EffectSettings, OverlaySettings } from "../lib/scene-types";
+import type { EditingSettings, EffectSettings, OverlaySettings, TimelineSettings } from "../lib/scene-types";
 
 /** osurulesetconfigmanager.cs:27-31 */
 export const DEFAULT_OVERLAYS: OverlaySettings = {
@@ -29,6 +29,14 @@ export const DEFAULT_EFFECTS: EffectSettings = {
 	cursorGlow: true,
 	cursorTrail: true,
 	followPoints: true
+};
+
+/** mirrors settings.rs TimelinePrefs::default() -- every layer visible */
+export const DEFAULT_TIMELINE: TimelineSettings = {
+	hitWindowBands: true,
+	tethers: true,
+	nestedMarks: true,
+	severityTicks: true
 };
 
 /** the master folded into every granular flag, which is what the renderer

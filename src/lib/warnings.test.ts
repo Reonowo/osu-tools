@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { EditDelta, LoadedSceneWarning, Settings } from "@/lib/scene-types";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "@/state/defaults";
+import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "@/state/defaults";
 import { createViewerStore, type ViewerState } from "@/state/store";
 import { testScene } from "@/test/scene";
 import { selectWarnings, warningList, warningText } from "./warnings";
@@ -11,7 +11,8 @@ const settings: Settings = {
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,
-	effects: DEFAULT_EFFECTS
+	effects: DEFAULT_EFFECTS,
+	timeline: DEFAULT_TIMELINE
 };
 
 const identityDelta: EditDelta = {

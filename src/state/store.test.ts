@@ -21,6 +21,7 @@ import {
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_OVERLAYS,
+	DEFAULT_TIMELINE,
 	DETAIL_SPAN_MAX,
 	DETAIL_SPAN_MIN,
 	effectiveEffects
@@ -33,7 +34,8 @@ const baseSettings: Settings = {
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,
-	effects: DEFAULT_EFFECTS
+	effects: DEFAULT_EFFECTS,
+	timeline: DEFAULT_TIMELINE
 };
 
 const sampleRecent: RecentReplay = {
@@ -57,12 +59,13 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing, effects) => ({
+		setViewerPrefs: async (volume, overlays, editing, effects, timeline) => ({
 			...baseSettings,
 			volume,
 			overlays,
 			editing,
-			effects
+			effects,
+			timeline
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
 		applyEdit: async () => identityDelta,
@@ -436,7 +439,8 @@ describe("viewer preferences", () => {
 			overlays: { ...DEFAULT_OVERLAYS, cursorPath: true, keyOverlay: false, displayLength: 1400 },
 			recents: [],
 			editing: { ...DEFAULT_EDITING, snapToLattice: false },
-			effects: DEFAULT_EFFECTS
+			effects: DEFAULT_EFFECTS,
+			timeline: DEFAULT_TIMELINE
 		};
 		const store = createViewerStore(deps({ getSettings: async () => stored }));
 
@@ -786,6 +790,68 @@ describe("effect settings", () => {
 		expect(saved).toHaveLength(1);
 		expect(saved[0].hitAnimations).toBe(false); // and it reaches disk
 		expect(store.getState().settings?.effects.hitAnimations).toBe(false);
+	});
+});
+
+describe("timeline settings", () => {
+	test("every layer ships visible, mirroring settings.rs TimelinePrefs::default", () => {
+		expect(createViewerStore(deps()).getState().timeline).toEqual({
+			hitWindowBands: true,
+			tethers: true,
+			nestedMarks: true,
+			severityTicks: true
+		});
+	});
+
+	test("setTimeline flips one layer and leaves the rest alone", () => {
+		const store = createViewerStore(deps());
+		store.getState().setTimeline("tethers", false);
+		expect(store.getState().timeline.tethers).toBe(false);
+		expect(store.getState().timeline.hitWindowBands).toBe(true);
+	});
+
+	test("hydrateSettings applies the persisted timeline and fills gaps from the defaults", async () => {
+		const stored = { ...baseSettings, timeline: { ...DEFAULT_TIMELINE, severityTicks: false } };
+		const store = createViewerStore(deps({ getSettings: async () => stored }));
+		await store.getState().hydrateSettings();
+		expect(store.getState().timeline).toEqual(stored.timeline);
+
+		// a settings file written before this section existed
+		const legacy = createViewerStore(
+			deps({
+				getSettings: async () =>
+					({ osuStablePath: null, volume: 70, overlays: {}, recents: [] }) as unknown as Settings
+			})
+		);
+		await legacy.getState().hydrateSettings();
+		expect(legacy.getState().timeline).toEqual(DEFAULT_TIMELINE);
+	});
+
+	test("a layer toggled while hydration is in flight survives and is written through", async () => {
+		const saved: Settings["timeline"][] = [];
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					}),
+				setViewerPrefs: async (volume, overlays, editing, effects, timeline) => {
+					saved.push(timeline);
+					return { ...baseSettings, volume, overlays, editing, effects, timeline };
+				}
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setTimeline("hitWindowBands", false);
+		resolveSettings({ ...baseSettings, timeline: DEFAULT_TIMELINE });
+		await hydrating;
+
+		expect(store.getState().timeline.hitWindowBands).toBe(false); // the edit wins over the loaded value
+		expect(saved).toHaveLength(1);
+		expect(saved[0].hitWindowBands).toBe(false); // and it reaches disk
+		expect(store.getState().settings?.timeline.hitWindowBands).toBe(false);
 	});
 });
 
