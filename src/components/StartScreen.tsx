@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Identity } from "@/components/shell/TopBar";
 import { PanelHeader } from "@/components/shell/SidePanel";
+import type { SettingsCategory } from "@/components/settings/categories";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatAccuracy, formatRelativeTime } from "@/lib/format";
 import { pickReplay } from "@/lib/openers";
@@ -40,7 +41,7 @@ function RecentEntry({
 	);
 }
 
-export function StartScreen({ onOpenSettings }: { onOpenSettings: () => void }) {
+export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: SettingsCategory) => void }) {
 	const settings = useViewerStore((s) => s.settings);
 	const loading = useViewerStore((s) => s.loading);
 	// not openReplay: a recents card reopens through the beatmap association
@@ -74,7 +75,9 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: () => void }) 
 								variant="ghost"
 								aria-label="settings"
 								className="ml-auto"
-								onClick={onOpenSettings}
+								// this button exists for the install path: landing anywhere
+								// but general here would be a regression
+								onClick={() => onOpenSettings("general")}
 							>
 								<Settings2 />
 							</Button>

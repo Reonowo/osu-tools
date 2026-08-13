@@ -3,6 +3,7 @@
 // every row is real now (TopBar, SidePanel, TabRail, TimelineDock,
 // StatusBar), so this file only composes layout and never their internals
 
+import type { SettingsCategory } from "@/components/settings/categories";
 import { TimelineDock } from "@/components/timeline/TimelineDock";
 import { Viewport } from "@/components/viewport/Viewport";
 import { usePlaybackShortcuts } from "@/playback/use-playback-shortcuts";
@@ -12,7 +13,13 @@ import { StatusBar } from "./StatusBar";
 import { TabRail } from "./TabRail";
 import { TopBar } from "./TopBar";
 
-export function AppShell({ onOpenSettings, onOpenExport }: { onOpenSettings: () => void; onOpenExport: () => void }) {
+export function AppShell({
+	onOpenSettings,
+	onOpenExport
+}: {
+	onOpenSettings: (category?: SettingsCategory) => void;
+	onOpenExport: () => void;
+}) {
 	const panelOpen = useViewerStore((s) => s.panelOpen);
 
 	// Controls.tsx was the only caller before the shell replaced it; the shell

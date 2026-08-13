@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { AppShell } from "@/components/shell/AppShell";
 import { ExportDialog } from "@/components/ExportDialog";
 import { MismatchDialog } from "@/components/MismatchDialog";
-import { SettingsDialog } from "@/components/SettingsDialog";
+import { resolveOpenCategory, type SettingsCategory } from "@/components/settings/categories";
+import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { StartScreen } from "@/components/StartScreen";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { invokeSetViewerPrefs } from "@/lib/ipc";
@@ -13,10 +14,24 @@ import { installPrefsPersistence } from "@/state/persist";
 import { useViewerStore, viewerStore } from "@/state/store";
 
 export default function App() {
-	const [settingsOpen, setSettingsOpen] = useState(false);
+	// which settings category is showing, null being a closed dialog
+	const [settingsCategory, setSettingsCategory] = useState<SettingsCategory | null>(null);
+	// where the user last was, for this session only -- reopening from the top
+	// bar returns there. deliberately not persisted: no new pref, no settings.rs
+	// change. a ref rather than state since only the next open reads it
+	const lastCategory = useRef<SettingsCategory | null>(null);
 	const [exportOpen, setExportOpen] = useState(false);
 	const scene = useViewerStore((s) => s.scene);
 	const lastError = useViewerStore((s) => s.lastError);
+
+	function selectCategory(category: SettingsCategory) {
+		lastCategory.current = category;
+		setSettingsCategory(category);
+	}
+
+	function openSettings(target?: SettingsCategory) {
+		selectCategory(resolveOpenCategory(target, lastCategory.current));
+	}
 
 	useEffect(() => {
 		const cleanup = installDropHandler();
@@ -78,12 +93,16 @@ export default function App() {
 		// icon and short enough to feel like an answer to hovering one
 		<TooltipProvider delay={300}>
 			{scene === null ? (
-				<StartScreen onOpenSettings={() => setSettingsOpen(true)} />
+				<StartScreen onOpenSettings={openSettings} />
 			) : (
-				<AppShell onOpenSettings={() => setSettingsOpen(true)} onOpenExport={() => setExportOpen(true)} />
+				<AppShell onOpenSettings={openSettings} onOpenExport={() => setExportOpen(true)} />
 			)}
 			<MismatchDialog />
-			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+			<SettingsDialog
+				category={settingsCategory}
+				onCategoryChange={selectCategory}
+				onClose={() => setSettingsCategory(null)}
+			/>
 			<ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
 			{/* select-text: error toasts are diagnostic copy opt-ins (index.css) */}
 			<Toaster theme="dark" position="bottom-right" richColors toastOptions={{ className: "select-text" }} />

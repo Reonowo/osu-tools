@@ -2,6 +2,7 @@
 // and the watch/edit switcher plus the edit-history controls
 
 import { Download, Redo2, Settings2, Undo2 } from "lucide-react";
+import type { SettingsCategory } from "@/components/settings/categories";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -27,7 +28,13 @@ export function Identity() {
 	);
 }
 
-export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () => void; onOpenExport: () => void }) {
+export function TopBar({
+	onOpenSettings,
+	onOpenExport
+}: {
+	onOpenSettings: (category?: SettingsCategory) => void;
+	onOpenExport: () => void;
+}) {
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
 	const mode = useViewerStore((s) => s.mode);
@@ -185,7 +192,13 @@ export function TopBar({ onOpenSettings, onOpenExport }: { onOpenSettings: () =>
 				<Tooltip>
 					<TooltipTrigger
 						render={
-							<Button size="icon-sm" variant="ghost" aria-label="settings" onClick={onOpenSettings}>
+							// no category: reopens wherever the user last was
+							<Button
+								size="icon-sm"
+								variant="ghost"
+								aria-label="settings"
+								onClick={() => onOpenSettings()}
+							>
 								<Settings2 />
 							</Button>
 						}
