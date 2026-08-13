@@ -81,7 +81,11 @@
 //! `fields` holds only the diverging fields, out of: `count_300`,
 //! `count_100`, `count_50`, `count_miss`, `max_combo`, `count_geki`,
 //! `count_katsu`, `total_score`. `header_misses` and `has_spinners` are the
-//! two triage axes the 2026-08-12 baseline bucketed by.
+//! two triage axes the 2026-08-12 baseline bucketed by;
+//! `header_count_100`/`header_count_50`/`header_max_combo`/
+//! `max_achievable_combo` carry the corpus-admission context issue 11's
+//! wishlist rows key on (dropped-element and dropped-tail-forfeits-perfect
+//! signatures need the header's own counts against the map's ceiling).
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -133,6 +137,13 @@ struct Failure {
     beatmap_path: String,
     header_misses: u32,
     has_spinners: bool,
+    // corpus-admission triage context (issue 11's wishlist rows key on
+    // these): the header's own counts/combo, the strict perfect check, and
+    // the map's achievable ceiling
+    header_count_100: u32,
+    header_count_50: u32,
+    header_max_combo: u32,
+    max_achievable_combo: u32,
     fields: BTreeMap<&'static str, FieldDivergence>,
 }
 
@@ -156,6 +167,7 @@ struct Verdict {
     simulated: [u64; 8],
     header_misses: u32,
     has_spinners: bool,
+    max_achievable_combo: u32,
     beatmap_path: PathBuf,
 }
 
@@ -502,6 +514,7 @@ fn admit_and_verify(
             .objects
             .iter()
             .any(|o| matches!(o.kind, ProcessedKind::Spinner(_))),
+        max_achievable_combo: engine::score::max_achievable_combo(processed),
         beatmap_path: osu_path.clone(),
     })
 }
@@ -528,6 +541,10 @@ fn failure_entry(path: &Path, verdict: &Verdict) -> Failure {
         beatmap_path: verdict.beatmap_path.display().to_string(),
         header_misses: verdict.header_misses,
         has_spinners: verdict.has_spinners,
+        header_count_100: verdict.header[1] as u32,
+        header_count_50: verdict.header[2] as u32,
+        header_max_combo: verdict.header[4] as u32,
+        max_achievable_combo: verdict.max_achievable_combo,
         fields,
     }
 }
