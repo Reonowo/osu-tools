@@ -49,7 +49,16 @@ impl ScoreState {
                     self.increment_combo();
                 }
             }
-            JudgementKind::SliderAggregate(grade) => self.count(*grade),
+            JudgementKind::SliderAggregate(grade) => {
+                self.count(*grade);
+                // danser slider.go:458 -- the whole-slider miss resets combo
+                // (reachable with combo standing only via 2b-style overlap,
+                // since a zero rate implies the elements already reset it);
+                // a non-miss aggregate holds, never increments
+                if *grade == HitGrade::Miss {
+                    self.combo = 0;
+                }
+            }
             JudgementKind::SliderHead { hit }
             | JudgementKind::SliderTick { hit }
             | JudgementKind::SliderRepeat { hit } => {
@@ -147,14 +156,22 @@ mod tests {
     }
 
     #[test]
-    fn slider_aggregate_never_touches_combo() {
-        // osulegacyscoresimulator.cs:121-127 -- increaseCombo = false for the
-        // slider object itself; its combo came from the nested elements
+    fn slider_aggregate_never_increments_and_resets_only_on_miss() {
+        // danser slider.go:458-465 -- the aggregate holds combo on any hit
+        // grade and resets on a whole-slider miss
+        let s = state_after(&[
+            JudgementKind::SliderHead { hit: true },
+            JudgementKind::SliderAggregate(HitGrade::Ok),
+        ]);
+        assert_eq!(s.combo, 1);
+        assert_eq!(s.count_100, 1);
+
         let s = state_after(&[
             JudgementKind::SliderHead { hit: true },
             JudgementKind::SliderAggregate(HitGrade::Miss),
         ]);
-        assert_eq!(s.combo, 1);
+        assert_eq!(s.combo, 0);
+        assert_eq!(s.max_combo, 1);
         assert_eq!(s.count_miss, 1);
     }
 
