@@ -52,6 +52,9 @@ export function PlayerView() {
 			renderer.setOverlays(effectiveOverlays(state.overlays, state.mode));
 			renderer.setViewport(state.viewportZoom, state.viewportPan);
 			if (state.mode === "edit") renderer.setEditChromeSources(editChromeSources);
+			// the app's only render clock (adr 0001, one render clock): pixi
+			// draws nothing by itself, so every frame on screen is one this loop
+			// updated first
 			const loop = () => {
 				const t = playbackClock.tick();
 				renderer.render(t);

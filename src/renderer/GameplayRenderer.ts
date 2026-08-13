@@ -238,7 +238,10 @@ export class GameplayRenderer {
 			resolution: renderer.devicePixelRatio,
 			autoDensity: true,
 			preference: "webgl",
-			resizeTo: host
+			resizeTo: host,
+			// adr 0001 (one render clock): pixi's own ticker never starts, so
+			// render() below is the only thing that ever draws this stage
+			autoStart: false
 		});
 		host.appendChild(renderer.app.canvas);
 
@@ -389,7 +392,25 @@ export class GameplayRenderer {
 		}
 	}
 
+	/** the one render clock (adr 0001): the update pass, then the draw, always
+	 * in that order and from nowhere else. with pixi's automatic tick off, a
+	 * mutation arriving between two loop turns -- the debounced density rebake
+	 * destroying and recreating the scene-lifetime drawables, a react effect
+	 * rebuilding the scene after an edit -- can no longer reach the screen
+	 * before the pass that positions it has run. drawing unconditionally, even
+	 * with no scene installed, because the stage still holds whatever the last
+	 * one left behind until setScene clears it.
+	 *
+	 * the one draw this is not: pixi's resize plugin renders once itself after
+	 * a window resize. that is safe -- a resize rebuilds no drawables (the
+	 * density rebake it may schedule is debounced past it), so the worst it
+	 * can show is a complete scene one frame behind on the transform */
 	render(t: number): void {
+		this.update(t);
+		this.app.render();
+	}
+
+	private update(t: number): void {
 		if (this.ctx === null || this.tracker === null) return;
 		const ctx = this.ctx;
 		// reconcileActiveDrawables guards against re-creating an index the map
