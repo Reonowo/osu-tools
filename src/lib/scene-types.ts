@@ -317,6 +317,17 @@ export interface EffectSettings {
 	followPoints: boolean;
 }
 
+/** mirrors settings.rs TimelinePrefs. which of the timeline dock's layers
+ * draw: the object lane's decorations and the overview strip's severity
+ * ticks. the selected press's extended tether is selection chrome and
+ * deliberately not gated here */
+export interface TimelineSettings {
+	hitWindowBands: boolean;
+	tethers: boolean;
+	nestedMarks: boolean;
+	severityTicks: boolean;
+}
+
 /** mirrors settings.rs Settings */
 export interface Settings {
 	osuStablePath: string | null;
@@ -326,4 +337,5 @@ export interface Settings {
 	recents: RecentReplay[];
 	editing: EditingSettings;
 	effects: EffectSettings;
+	timeline: TimelineSettings;
 }

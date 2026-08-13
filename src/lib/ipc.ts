@@ -8,7 +8,8 @@ import type {
 	IpcError,
 	LoadedScene,
 	OverlaySettings,
-	Settings
+	Settings,
+	TimelineSettings
 } from "./scene-types";
 
 const IPC_ERROR_KINDS = new Set([
@@ -69,9 +70,10 @@ export function invokeSetViewerPrefs(
 	volume: number,
 	overlays: OverlaySettings,
 	editing: EditingSettings,
-	effects: EffectSettings
+	effects: EffectSettings,
+	timeline: TimelineSettings
 ): Promise<Settings> {
-	return invoke<Settings>("set_viewer_prefs", { volume, overlays, editing, effects });
+	return invoke<Settings>("set_viewer_prefs", { volume, overlays, editing, effects, timeline });
 }
 
 export function invokeClearRecents(): Promise<Settings> {
