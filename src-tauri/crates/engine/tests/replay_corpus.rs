@@ -7,6 +7,31 @@ use engine::replay::frames::convert_frames;
 use engine::score::{peppy_stars, section_tally, total_score, ScoreContext, NOMOD_SCORE_MULTIPLIER};
 use engine::simulation::simulate;
 
+/// human-ratified deliberate divergences in the local corpus -- a visible
+/// exception ledger, never a silent allowlist. each entry names the replay
+/// stem, the single field allowed to diverge with its exact signed delta
+/// (simulated minus header), the mechanism, and where the ratification is
+/// recorded. the corpus test enforces the entry in both directions: a
+/// drifted delta is new behaviour hiding behind an old record, and a
+/// vanished divergence is a stale record -- either way the run fails and
+/// the entry comes back for human review
+struct RatifiedDivergence {
+    stem: &'static str,
+    /// simulated total score minus the header's; every other field must stay exact
+    score_delta: i64,
+    mechanism: &'static str,
+    record: &'static str,
+}
+
+const RATIFIED_DIVERGENCES: &[RatifiedDivergence] = &[RatifiedDivergence {
+    stem: "L033---cosmobousou-p---denpa-shoujo",
+    score_delta: -19_580,
+    mechanism: "intra-frame ordering: a head-miss deadline and a tail point 2ms apart land on one \
+                replay frame and apply in walk order, not due-time order, costing one combo unit \
+                over the closing run",
+    record: "ratified 2026-08-12; .scratch/engine-parity-pass/issues/05 closing comment",
+}];
+
 /// spec parity rule 2: the .osr header's counts and max combo are the oracle.
 /// corpus layout: fixtures/replays/local/<name>.osr with a sibling
 /// <name>.osu (same stem). the directory is gitignored; an empty or missing
@@ -20,6 +45,10 @@ fn local_nomod_replays_self_verify() {
     };
 
     let mut checked = 0;
+    let mut ratified = 0;
+    // every failing pair is reported before the assertion so a red run
+    // shows the whole corpus picture, not the alphabetically first mismatch
+    let mut failures: Vec<String> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("osr") {
@@ -49,23 +78,32 @@ fn local_nomod_replays_self_verify() {
         let frames = convert_frames(&osr.actions, map.format_version);
         let timeline = simulate(&processed, &frames).unwrap_or_else(|e| panic!("{name}: simulate: {e}"));
 
-        assert_eq!(
-            (
-                timeline.totals.count_300,
-                timeline.totals.count_100,
-                timeline.totals.count_50,
-                timeline.totals.count_miss,
-                timeline.totals.max_combo,
-            ),
-            (
-                u32::from(osr.header.count_300),
-                u32::from(osr.header.count_100),
-                u32::from(osr.header.count_50),
-                u32::from(osr.header.count_miss),
-                u32::from(osr.header.max_combo),
-            ),
-            "{name}: simulated totals diverge from the .osr header"
+        let simulated = (
+            timeline.totals.count_300,
+            timeline.totals.count_100,
+            timeline.totals.count_50,
+            timeline.totals.count_miss,
+            timeline.totals.max_combo,
         );
+        let header = (
+            u32::from(osr.header.count_300),
+            u32::from(osr.header.count_100),
+            u32::from(osr.header.count_50),
+            u32::from(osr.header.count_miss),
+            u32::from(osr.header.max_combo),
+        );
+        let ratification = RATIFIED_DIVERGENCES.iter().find(|r| r.stem == name);
+        if simulated != header {
+            // the ledger covers total score only; a ratified stem whose
+            // counts diverge means the record no longer describes reality
+            let stale = ratification
+                .map(|r| format!(" (a ratified score-only divergence is on record -- review it: {})", r.record))
+                .unwrap_or_default();
+            failures.push(format!(
+                "{name}: simulated totals {simulated:?} diverge from the header's {header:?}{stale}"
+            ));
+            continue;
+        }
 
         // the derived fields the export regenerates, against the same oracle.
         // this is the only oracle geki/katu have (the pinned lazer encoder
@@ -76,22 +114,83 @@ fn local_nomod_replays_self_verify() {
         let tally = section_tally(&processed, &timeline);
         let stars =
             peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap_or_else(|e| panic!("{name}: stars: {e}"));
-        assert_eq!(
-            (
-                tally.count_geki,
-                tally.count_katsu,
-                total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
-            ),
-            (
-                u32::from(osr.header.count_geki),
-                u32::from(osr.header.count_katsu),
-                u64::from(osr.header.total_score),
-            ),
-            "{name}: derived geki/katu/total score diverge from the .osr header"
+        let derived = (
+            tally.count_geki,
+            tally.count_katsu,
+            total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
         );
+        let header_derived = (
+            u32::from(osr.header.count_geki),
+            u32::from(osr.header.count_katsu),
+            u64::from(osr.header.total_score),
+        );
+        match ratification {
+            Some(r) => {
+                let score_delta = derived.2 as i64 - header_derived.2 as i64;
+                if (derived.0, derived.1) != (header_derived.0, header_derived.1) {
+                    failures.push(format!(
+                        "{name}: geki/katu ({}, {}) diverge from the header's ({}, {}); the ratified \
+                         record covers total score only -- review it: {}",
+                        derived.0, derived.1, header_derived.0, header_derived.1, r.record
+                    ));
+                } else if score_delta == r.score_delta {
+                    eprintln!(
+                        "corpus: {name}: ratified divergence stands (score {:+}; {}; {})",
+                        r.score_delta, r.mechanism, r.record
+                    );
+                    ratified += 1;
+                } else if score_delta == 0 {
+                    failures.push(format!(
+                        "{name}: the ratified score divergence ({:+}) no longer reproduces -- the \
+                         ledger entry is stale; review it: {}",
+                        r.score_delta, r.record
+                    ));
+                } else {
+                    failures.push(format!(
+                        "{name}: score delta {score_delta:+} differs from the ratified {:+} -- new \
+                         behaviour is hiding behind the record; review it: {}",
+                        r.score_delta, r.record
+                    ));
+                }
+                continue;
+            }
+            None if derived != header_derived => {
+                failures.push(format!(
+                    "{name}: derived geki/katu/score {derived:?} diverge from the header's {header_derived:?}"
+                ));
+                continue;
+            }
+            None => {}
+        }
         checked += 1;
     }
-    eprintln!("corpus: verified {checked} replays");
+    // a ledger entry whose pair is absent from THIS corpus validates
+    // nothing this run -- said out loud rather than silently passing, but
+    // never a failure: the corpus is per-machine personal data and another
+    // machine legitimately lacks the stem
+    let verified_stems: Vec<String> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+    for entry in RATIFIED_DIVERGENCES {
+        if !verified_stems.iter().any(|s| s == entry.stem) {
+            eprintln!(
+                "corpus NOTICE: ratified-divergence ledger entry {} has no pair in this corpus -- unverified this run",
+                entry.stem
+            );
+        }
+    }
+    for failure in &failures {
+        eprintln!("corpus FAIL: {failure}");
+    }
+    assert!(
+        failures.is_empty(),
+        "{} corpus replays diverge from their headers (list above)",
+        failures.len()
+    );
+    eprintln!("corpus: verified {checked} replays exact, {ratified} on the ratified-divergence ledger");
 }
 
 /// committed stand-in for the corpus: a synthetic replay that full-combos the
