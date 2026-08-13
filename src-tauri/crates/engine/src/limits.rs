@@ -104,9 +104,12 @@ pub const MAX_SLIDER_NESTED_OBJECTS: usize = 1_000_000;
 /// cap, so fresh per-slider budgets alone admit tens of GiB of retention and
 /// an allocation abort instead of a `ResourceLimit`. charged cumulatively as
 /// sliders build (the per-slider cap bounds the transient overshoot to one
-/// slider's worth). 2x the per-slider ceiling keeps every real map, aspire
-/// included (low tens of thousands of nested objects map-wide), two orders of
-/// magnitude clear, while bounding worst-case retention near 100 MiB
+/// slider's worth), counting BOTH retained point lists per slider -- the
+/// lazer nested objects and the stable score points
+/// (`beatmap::stable_points`), which are the same order of magnitude each.
+/// 2x the per-slider ceiling keeps every real map, aspire included (low
+/// tens of thousands of nested objects map-wide), two orders of magnitude
+/// clear, while bounding worst-case retention near 100 MiB
 pub const MAX_TOTAL_SLIDER_NESTED_OBJECTS: usize = 2_000_000;
 
 /// the same aggregate concern for [`MAX_SLIDER_PATH_VERTICES`]: each

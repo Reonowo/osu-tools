@@ -45,6 +45,18 @@ pub fn preempt_from_approach_rate(approach_rate: f32) -> f64 {
     difficulty_range_int(approach_rate as f64, PREEMPT_MAX, PREEMPT_MID, PREEMPT_MIN) as f64
 }
 
+/// stable's circle radius as the simulation compares it: danser
+/// difficulty.go:126-127 -- the f64 range (54.4, 32, 9.6) times the 1.00041
+/// broken-gamefield allowance, narrowed to f32 once at the boundary
+/// (GetRadius, difficulty.go:378-387). deliberately not derived from
+/// `scale_from_circle_size`: lazer's scale formula rounds through f32
+/// mid-expression, and the two can differ in the last f32 bit for
+/// fractional circle sizes -- the x87 follow compare needs stable's exact
+/// input
+pub fn stable_radius_from_circle_size(circle_size: f32) -> f32 {
+    (difficulty_range(circle_size as f64, 54.4, 32.0, 9.6) * 1.00041) as f32
+}
+
 /// osuhitobject.cs:180
 pub fn fade_in_from_preempt(preempt: f64) -> f64 {
     400.0 * f64::min(1.0, preempt / PREEMPT_MIN)
