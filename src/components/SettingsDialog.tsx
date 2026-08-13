@@ -7,7 +7,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { open } from "@tauri-apps/plugin-dialog";
 import { SectionLabel } from "@/components/panels/SectionLabel";
 import { DISPLAY_LENGTH_MAX, DISPLAY_LENGTH_MIN } from "@/state/defaults";
-import { useViewerStore, type EditingSettings, type EffectSettings, type OverlaySettings } from "@/state/store";
+import {
+	useViewerStore,
+	type EditingSettings,
+	type EffectSettings,
+	type OverlaySettings,
+	type TimelineSettings
+} from "@/state/store";
 
 const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string; description: string }[] = [
 	{
@@ -31,6 +37,33 @@ const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string; description:
 		description: "hides the cursor and its trail so the path and markers read clearly on their own"
 	},
 	{ key: "keyOverlay", label: "show key overlay", description: "the K1/K2/M1/M2 press counters beside the playfield" }
+];
+
+// mirrors settings.rs TimelinePrefs -- the timeline dock's per-layer
+// visibility. the selected press's extended tether is selection chrome and
+// stays visible whatever these say
+const TIMELINE_TOGGLES: { key: keyof TimelineSettings; label: string; description: string }[] = [
+	{
+		key: "hitWindowBands",
+		label: "show hit-window bands",
+		description: "the great/ok/meh timing bands behind each object on the object lane"
+	},
+	{
+		key: "tethers",
+		label: "show tethers",
+		description:
+			"the hairline joining each object to the press that judged it, its length the hit error; the selected press's extended tether always draws"
+	},
+	{
+		key: "nestedMarks",
+		label: "show slider heads, repeats and tails",
+		description: "the marks inside each slider's span for the moments that demand an input"
+	},
+	{
+		key: "severityTicks",
+		label: "show severity ticks",
+		description: "the miss/meh/ok marks on the whole-replay overview strip, taller meaning worse"
+	}
 ];
 
 const EDITING_TOGGLES: { key: keyof EditingSettings; label: string; description: string }[] = [
@@ -115,6 +148,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
 	const setEditing = useViewerStore((s) => s.setEditing);
 	const effects = useViewerStore((s) => s.effects);
 	const setEffect = useViewerStore((s) => s.setEffect);
+	const timeline = useViewerStore((s) => s.timeline);
+	const setTimeline = useViewerStore((s) => s.setTimeline);
 	const loadSettings = useViewerStore((s) => s.loadSettings);
 	const saveStablePath = useViewerStore((s) => s.saveStablePath);
 	const [saving, setSaving] = useState(false);
@@ -213,6 +248,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange }: { open: boolean; 
 								<span className="text-zinc-400">ms</span>
 							</span>
 						</label>
+					</section>
+
+					<section className="space-y-2">
+						<SectionLabel>timeline</SectionLabel>
+						{TIMELINE_TOGGLES.map(({ key, label, description }) => (
+							<ToggleRow
+								key={key}
+								label={label}
+								description={description}
+								checked={timeline[key]}
+								onCheckedChange={(v) => setTimeline(key, v)}
+							/>
+						))}
 					</section>
 
 					<section className="space-y-2">
