@@ -5,8 +5,9 @@
 import { SectionLabel } from "@/components/panels/SectionLabel";
 import { ToggleRow } from "@/components/settings/ToggleRow";
 import { NumberField } from "@/components/ui/number-field";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { DISPLAY_LENGTH_MAX, DISPLAY_LENGTH_MIN } from "@/state/defaults";
+import { DISPLAY_LENGTH_MAX, DISPLAY_LENGTH_MIN, PLAYFIELD_GRID_SPACINGS } from "@/state/defaults";
 import { useViewerStore, type OverlaySettings, type TimelineSettings } from "@/state/store";
 
 export const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string; description: string }[] = [
@@ -112,6 +113,51 @@ export function AnalysisCategory({
 						<span className="text-zinc-400">ms</span>
 					</span>
 				</label>
+
+				{/* one enum rather than a flag plus a size: off is a spacing, so
+				    the setting cannot reach an incoherent state.
+				    a div, not a label like the row above: base ui's toggle items
+				    are buttons, which are labelable, so a label would forward a
+				    click on this text to the first item and silently set the grid
+				    to off. Transport.tsx's rate group is bare for the same reason;
+				    the display-length row gets away with a label because a
+				    NumberField is a real input */}
+				<div className="flex items-center justify-between gap-4 text-sm">
+					<span>playfield grid</span>
+					<Tooltip>
+						<TooltipTrigger render={<span />}>
+							<ToggleGroup
+								aria-label="playfield grid"
+								value={[String(overlays.playfieldGrid)]}
+								onValueChange={(next) => {
+									// base-ui's group value is array-valued even in
+									// single-select mode, and clicking the active item
+									// empties it -- the group stays controlled by the
+									// preference, so an empty result is ignored rather
+									// than clearing it (Transport.tsx's rate group
+									// carries the same note)
+									const chosen = next[0];
+									if (chosen !== undefined) setOverlay("playfieldGrid", Number(chosen));
+								}}
+								className="h-[26px] rounded-[7px] border border-border bg-[#131316] p-0.5"
+							>
+								{PLAYFIELD_GRID_SPACINGS.map((spacing) => (
+									<ToggleGroupItem
+										key={spacing}
+										value={String(spacing)}
+										className="h-full rounded-[5px] px-2 text-[10.5px] text-[#71717a] aria-pressed:bg-primary aria-pressed:font-bold aria-pressed:text-primary-foreground"
+									>
+										{spacing === 0 ? "off" : spacing}
+									</ToggleGroupItem>
+								))}
+							</ToggleGroup>
+						</TooltipTrigger>
+						<TooltipContent side="left">
+							a reference grid over the playfield at this spacing in osu!px, plus the playfield's own
+							border. it never snaps anything -- snapping is the lattice's job
+						</TooltipContent>
+					</Tooltip>
+				</div>
 			</section>
 
 			<section className="space-y-2">

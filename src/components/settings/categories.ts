@@ -45,6 +45,7 @@ export type SettingsPrefKey =
 export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]> = {
 	general: [],
 	gameplay: [
+		"effects.backgroundDim",
 		"effects.enabled",
 		"effects.hitAnimations",
 		"effects.hitEffects",
@@ -59,6 +60,7 @@ export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]
 		"overlays.hideCursor",
 		"overlays.keyOverlay",
 		"overlays.displayLength",
+		"overlays.playfieldGrid",
 		"timeline.hitWindowBands",
 		"timeline.tethers",
 		"timeline.nestedMarks",

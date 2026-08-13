@@ -30,15 +30,18 @@ const COVERED_KEYS: string[] = Object.values(CATEGORY_PREFS).flat();
  * store: without it, deleting a ToggleRow's descriptor leaves every other
  * assertion green while the pref silently loses its ui.
  *
- * display length is the one entry written out by hand, because it is the one
- * rendered pref with no descriptor -- a NumberField, not a toggle -- which is
- * the same reason coverage is keyed on pref keys rather than on descriptors
- * (categories.ts). general renders no per-key pref at all */
+ * display length, the playfield grid and background dim are the entries
+ * written out by hand, because they are the rendered prefs with no descriptor
+ * -- a NumberField, a toggle group and a slider, none of them a ToggleRow --
+ * which is the same reason coverage is keyed on pref keys rather than on
+ * descriptors (categories.ts). general renders no per-key pref at all */
 const RENDERED_PREF_KEYS: string[] = [
 	...OVERLAY_TOGGLES.map(({ key }) => `overlays.${key}`),
 	"overlays.displayLength",
+	"overlays.playfieldGrid",
 	...TIMELINE_TOGGLES.map(({ key }) => `timeline.${key}`),
 	...EFFECT_TOGGLES.map(({ key }) => `effects.${key}`),
+	"effects.backgroundDim",
 	...EDITING_TOGGLES.map(({ key }) => `editing.${key}`)
 ];
 
