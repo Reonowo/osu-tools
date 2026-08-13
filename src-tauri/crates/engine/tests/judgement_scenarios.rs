@@ -153,6 +153,57 @@ fn slider_tracking_matches_the_lazer_dump() {
     }
 }
 
+/// the dense-stack note-lock scenario (issue 06's oracle) -- where the
+/// stable machine DIVERGES from the lazer dump, deliberately (ratified
+/// 2026-08-12, `.scratch/engine-parity-pass/issues/06`): lazer's
+/// `LegacyHitPolicy` consults only the immediate alive-list predecessor,
+/// and the judged-but-fading spinner occupying that slot lets the shielded
+/// press through (the dump records object 2 `Great`). stable's hit policy
+/// (danser `CanBeHitStable`, the community-validated stable model this
+/// engine ports) walks EVERY earlier unhit processed object, finds the
+/// older unjudged stacked circle, and locks the press -- object 2 times
+/// out `Miss`. no real play exercises the pattern (the corpus-wishlist
+/// dense-stack row exists to find one), so stable headers cannot arbitrate;
+/// until one does, this pins the stable machine's answer against the dump's
+/// recorded lazer answer so any drift in either direction is loud
+#[test]
+fn notelock_stack_pins_the_stable_divergence_from_the_lazer_dump() {
+    let dump = load_judgement_dump("notelock-stack");
+    let timeline = simulate_scenario(&dump);
+
+    let engine_basics: Vec<(usize, &'static str)> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            JudgementKind::Circle(grade) | JudgementKind::SpinnerFinal(grade) => {
+                Some((e.object_index, grade_name(grade)))
+            }
+            JudgementKind::SliderAggregate(grade) => Some((e.object_index, grade_name(grade))),
+            _ => None,
+        })
+        .collect();
+    let dump_basics: Vec<(usize, &str)> = dump
+        .events
+        .iter()
+        .filter(|e| matches!(e.kind.as_str(), "HitCircle" | "Spinner" | "Slider"))
+        .map(|e| (e.object_index, e.result.as_str()))
+        .collect();
+
+    // the dump's recorded lazer answer: the shielded press lands
+    assert_eq!(
+        dump_basics,
+        vec![(1, "Great"), (2, "Great"), (0, "Miss"), (3, "Miss")],
+        "the fixture still records lazer allowing the shielded hit"
+    );
+    // the stable machine's answer: the older unjudged stacked object locks
+    // the press and object 2 times out
+    assert_eq!(
+        engine_basics,
+        vec![(1, "Great"), (0, "Miss"), (2, "Miss"), (3, "Miss")],
+        "the stable hit policy locks the press lazer would allow"
+    );
+}
+
 /// the baseline scenario end to end: circle grades and the slider aggregate
 /// must match the dump exactly (the harness canary, engine side)
 #[test]
