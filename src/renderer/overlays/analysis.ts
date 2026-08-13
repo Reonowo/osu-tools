@@ -28,6 +28,12 @@ const MARKER_SIZE = 16;
  * leaves every number below directly comparable with its citation */
 const MARKER_REFERENCE_CANVAS = MARKER_SIZE * 2;
 
+/** ~65% brightness: multiplied onto the idle marker's pink2 it lands on
+ * #992e5e, dark enough to read against the path's #eb4791 while staying in
+ * its palette. a tint rather than a texture variant, so the cache keeps one
+ * idle texture and the pref flips for free */
+const IDLE_MARKER_TINT = 0xa6a6a6;
+
 // marker textures: sizes/colours from clickmarker.cs:27-77 /
 // framemarker.cs:25-63 / cursorpathcontainer.cs:24,30 -- gray5 #555 (osucolour.cs:388),
 // gray4 #444 (osucolour.cs:387), pink2 #eb4791 (osucolour.cs:411), yellow
@@ -91,6 +97,9 @@ export class AnalysisDrawable implements ObjectDrawable {
 	/** pooled marker positions were overridden by a preview and need one
 	 * restore pass when the preview ends */
 	private markersPreviewed = false;
+	/** the tint pref the pooled markers were last styled under; null forces
+	 * the first update through the restyle pass */
+	private lastTintIdleMarkers: boolean | null = null;
 
 	constructor(private readonly ctx: RenderContext) {
 		this.frames = ctx.scene.frames;
@@ -113,6 +122,9 @@ export class AnalysisDrawable implements ObjectDrawable {
 		sprite.texture = markerTexture(this.ctx, variant);
 		// framemarker.cs:61 -- 4px held, 2.5px idle
 		sprite.width = sprite.height = left || right ? 4 : 2.5;
+		// deliberate divergence behind a default-off pref: framemarker.cs paints
+		// an idle marker the same pink2 as the path, so it vanishes into the line
+		sprite.tint = variant === "frame-none" && this.ctx.getOverlays().tintIdleMarkers ? IDLE_MARKER_TINT : 0xffffff;
 	}
 
 	private markerSpriteFor(frame: FrameDto): Sprite {
@@ -199,6 +211,13 @@ export class AnalysisDrawable implements ObjectDrawable {
 			this.syncPool(this.framePool, this.frameLayer, this.frameTimes, t, length, (i) =>
 				this.markerSpriteFor(this.frames[i])
 			);
+			// a tint pref flip restyles the survivors: syncPool styles only the
+			// sprites it spawns, and a paused player would otherwise show both
+			// looks at once until the window churned them out
+			if (overlays.tintIdleMarkers !== this.lastTintIdleMarkers) {
+				this.lastTintIdleMarkers = overlays.tintIdleMarkers;
+				for (const [index, sprite] of this.framePool) this.applyMarkerStyle(sprite, this.frames[index].buttons);
+			}
 			this.applyMarkerPreview(previewing ? snapshot : null, t - length, t);
 		}
 		if (overlays.clickMarkers)
