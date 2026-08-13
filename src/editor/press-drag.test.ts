@@ -41,6 +41,10 @@ describe("zone grammar and select-and-drag", () => {
 		const fx = controller.pointerMove(170);
 		// start 100+40 snaps to 140, end 160+40 snaps to 200
 		expect(fx.preview?.span).toEqual({ start: 140, end: 200 });
+		// the preview names the dragged run: a consumer keyed to the selection
+		// must be able to ignore a preview that lingers (until its commit
+		// settles) into another same-key run's selection
+		expect(fx.preview?.runStartIndex).toBe(1);
 		const up = controller.pointerUp(170);
 		expect(up.commit?.edit).toEqual({ start: 140, end: 200 });
 	});

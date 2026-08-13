@@ -37,6 +37,12 @@ export type PressDragZone = "start" | "end" | "body";
 
 export interface PressDragPreview {
 	key: PhysicalKey;
+	/** the dragged run's identity (press-runs.ts startIndex). a preview
+	 * outlives its gesture until the commit settles, and the selection can
+	 * move to another run of the same key in that window -- consumers keyed
+	 * to the selection must match this, not just the key, before substituting
+	 * the preview for authoritative data */
+	runStartIndex: number;
 	/** authoritative spans inside these ranges hide while the preview shows:
 	 * the dragged run's own span and the realized outcome's, kept separate
 	 * when the drag has flown past intervening presses -- those survive the
@@ -143,6 +149,7 @@ export class PressDragController {
 		const newSpan = { from: expansion.realized.startTime, to: expansion.realized.endTime };
 		const preview: PressDragPreview = {
 			key: env.key,
+			runStartIndex: run.startIndex,
 			hide:
 				newSpan.from <= oldSpan.to && oldSpan.from <= newSpan.to
 					? [{ from: Math.min(oldSpan.from, newSpan.from), to: Math.max(oldSpan.to, newSpan.to) }]
