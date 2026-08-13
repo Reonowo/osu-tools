@@ -43,15 +43,29 @@ export const VELOCITY_SAMPLES = 220;
 /** the sliding window peak tap rate is measured over */
 export const TAP_WINDOW_MS = 1000;
 
-/** the time an object's judgement is measured against: a slider head has its
- * own nested time, everything else is judged at the object's start */
-function judgedTime(object: RenderObject, kind: JudgementEventDto["kind"]): number | null {
-	if (kind.type === "circle") return kind.grade === "miss" ? null : object.startTime;
-	if (kind.type === "sliderHead") {
-		if (!kind.hit) return null;
-		if (object.kind.type !== "slider") return object.startTime;
+/** where a press at this object is aimed: a circle's start time, a slider's
+ * head nested time; null for spinners, which are spin-judged and offer no
+ * press target. shared by judgedTime below and the timeline's hit-window
+ * bands, so the band's centre and the hit error's reference can never
+ * disagree */
+export function aimTime(object: RenderObject): number | null {
+	if (object.kind.type === "circle") return object.startTime;
+	if (object.kind.type === "slider") {
 		return object.kind.nested.find((n) => n.kind === "head")?.time ?? object.startTime;
 	}
+	return null;
+}
+
+/** the time an object's judgement is measured against: aimTime for the
+ * press-judged kinds, nothing for the rest.
+ *
+ * this is THE shared tether predicate: a hit error -- and so a tether on the
+ * timeline's object lane -- exists exactly where this returns non-null. the
+ * hit-error list below and derive.ts's tether derivation both go through it,
+ * and deriveScene's invariant test fails loudly if either call site drifts */
+export function judgedTime(object: RenderObject, kind: JudgementEventDto["kind"]): number | null {
+	if (kind.type === "circle") return kind.grade === "miss" ? null : (aimTime(object) ?? object.startTime);
+	if (kind.type === "sliderHead") return kind.hit ? (aimTime(object) ?? object.startTime) : null;
 	// ticks, repeats, tails and spinner events carry no meaningful tap error:
 	// they are judged by proximity or spin count, not by a press time
 	return null;

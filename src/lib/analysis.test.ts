@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { errorHistogram, hitErrors, meanHold, medianFrameDelta, peakTapBpm, velocityTrace } from "./analysis";
+import { aimTime, errorHistogram, hitErrors, meanHold, medianFrameDelta, peakTapBpm, velocityTrace } from "./analysis";
 import type { FrameDto, JudgementEventDto, RenderObject } from "./scene-types";
 
 function circleAt(startTime: number): RenderObject {
@@ -24,6 +24,47 @@ function judgement(time: number, objectIndex: number, grade: "great" | "ok" | "m
 function frame(time: number, x: number, y: number, buttons = 0): FrameDto {
 	return { time, x, y, buttons };
 }
+
+describe("aimTime", () => {
+	test("a circle aims at its start, a slider at its head's nested time, a spinner at nothing", () => {
+		expect(aimTime(circleAt(1000))).toBe(1000);
+		const slider: RenderObject = {
+			...circleAt(1000),
+			endTime: 1500,
+			kind: {
+				type: "slider",
+				vertices: [0, 0, 10, 0],
+				cumulativeLengths: [0, 10],
+				distance: 10,
+				segmentEnds: [1],
+				repeatCount: 0,
+				spanCount: 1,
+				spanDuration: 500,
+				duration: 500,
+				endPosition: [10, 0],
+				snakeInDuration: 100,
+				nested: [
+					{
+						kind: "head",
+						spanIndex: 0,
+						time: 1010,
+						position: [0, 0],
+						pathProgress: 0,
+						preempt: 600,
+						fadeIn: 400
+					}
+				]
+			}
+		};
+		expect(aimTime(slider)).toBe(1010);
+		const spinner: RenderObject = {
+			...circleAt(1000),
+			endTime: 2000,
+			kind: { type: "spinner", duration: 1000, spinsRequired: 3, maxBonusSpins: 1 }
+		};
+		expect(aimTime(spinner)).toBeNull();
+	});
+});
 
 describe("hitErrors", () => {
 	test("signs errors early-negative against the object start time", () => {
