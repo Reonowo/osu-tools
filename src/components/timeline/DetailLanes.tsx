@@ -35,7 +35,7 @@ import { pressRunAt, pressRunFromIndex } from "@/editor/press-runs";
 import { pressLabel } from "@/editor/tool-commits";
 import { physicalButton, PHYSICAL_BUTTONS, type PhysicalKey } from "@/engine/buttons";
 import { holdSpansFlat, sliceSpansFlat } from "@/engine/interpolation";
-import { aimTime, type VelocitySample } from "@/lib/analysis";
+import { aimTime, velocityTraceWindow, type VelocitySample } from "@/lib/analysis";
 import type { ObjectLaneEntry } from "@/lib/derive";
 import { formatTime } from "@/lib/format";
 import type { FrameDto, Grade, RenderObject } from "@/lib/scene-types";
@@ -60,6 +60,12 @@ import { useTrackMetrics } from "./use-track-metrics";
 // generous enough that ordinary playback and zooming can move the window a
 // good while before a re-slice is needed
 const NEIGHBOURHOOD_FACTOR = 3;
+
+// the velocity row's per-slice resolution: one bucket per svg viewBox unit
+// across the neighbourhood (the row's polyline viewBox is 600 units wide),
+// so the trace resolves with the zoom instead of inheriting the analysis
+// panel's whole-replay sample spacing
+const VELOCITY_LANE_BUCKETS = 600;
 
 // the *window's* tick target. rulerTicks(view, n) picks the smallest "nice"
 // interval >= span/n, so scaling this by the neighbourhood's width in windows
@@ -139,12 +145,12 @@ function holdsForScene(frames: readonly FrameDto[]): Record<BitKey, Float64Array
 // this lane must track the playhead, not the replay as a whole). y = the
 // sample's share of the replay's peak velocity, so the trace reads at a
 // consistent scale as the window slides rather than auto-scaling to look
-// maxed-out during slow segments
+// maxed-out during slow segments. samples arrive already resampled to this
+// slice (velocityTraceWindow), straddling each edge by one pair, so the end
+// points may map slightly outside the 0..600 viewBox -- the svg clips them
 function velocityPoints(samples: readonly VelocitySample[], peak: number, view: TimeWindow): string | null {
-	if (peak <= 0) return null;
-	const inView = samples.filter((s) => s.time >= view.start && s.time <= view.end);
-	if (inView.length === 0) return null;
-	return inView
+	if (peak <= 0 || samples.length === 0) return null;
+	return samples
 		.map((s) => {
 			const x = windowFraction(view, s.time) * 600;
 			const y = 34 - Math.min(1, Math.max(0, s.velocity / peak)) * 34;
@@ -177,7 +183,6 @@ export function DetailLanes() {
 	// just keep the hooks below well-typed against the store's nullable
 	// fields, matching TopBar's own convention, not a real null-scene path
 	const bounds: TimeBounds = audioExtendedBounds(derived?.bounds ?? { minTime: 0, maxTime: 1 }, audioDurationMs);
-	const velocitySamples = derived?.analysis.velocity ?? [];
 	const peakVelocity = derived?.analysis.peakVelocity ?? 0;
 
 	// per-scene source lists: independent of the zoom window, recomputed only
@@ -325,6 +330,19 @@ export function DetailLanes() {
 	const rulerMinors = useMemo(
 		() => rulerMajors.slice(0, -1).map((tick, i) => (tick + rulerMajors[i + 1]) / 2),
 		[rulerMajors]
+	);
+	// the lane's own per-slice resample of the frame stream. the analysis
+	// panel's whole-replay trace is far too coarse here: a long replay left a
+	// slice only a handful of its VELOCITY_SAMPLES points and none near the
+	// slice's leading edge, so the line visibly cut off ahead of the playhead
+	// until the next re-slice. the peak stays the whole-replay figure so the
+	// scale does not breathe between slices
+	const velocitySamples = useMemo(
+		() =>
+			scene === null
+				? []
+				: velocityTraceWindow(scene.frames, neighbourhood.start, neighbourhood.end, VELOCITY_LANE_BUCKETS),
+		[scene, neighbourhood]
 	);
 	const velocityTrace = useMemo(
 		() => velocityPoints(velocitySamples, peakVelocity, neighbourhood),
