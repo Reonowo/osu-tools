@@ -5,7 +5,7 @@
 // fill, the zoom bracket, and the playhead are continuous consumers (decision
 // 6): one rAF loop reads playbackClock and writes straight to dom refs, never
 // through react state, so scrubbing at 60fps never triggers a react
-// re-render. only the discrete pieces (bounds, markers, the bracket's
+// re-render. only the discrete pieces (bounds, severity ticks, the bracket's
 // edit-mode gate) come from the store via useViewerStore
 
 import { useEffect, useMemo, useRef, type PointerEvent } from "react";
@@ -16,10 +16,16 @@ import { useViewerStore } from "@/state/store";
 import { Playhead, playheadTransform } from "./Playhead";
 import { useTrackMetrics } from "./use-track-metrics";
 
+// tick height means severity, not grade: at whole-replay zoom this strip is a
+// navigation surface for rough patches, so a miss towers, a meh reads at
+// half-height, and an ok stays a stub -- density and height together answer
+// "how bad is this section" at a glance. greats are excluded upstream
+// (derive.ts's severityTicks), so the marks being looked for are never buried
+// in a solid bar
 const TICK_CLASS: Record<"ok" | "meh" | "miss", string> = {
 	miss: "absolute bottom-0 w-0.5 top-0 bg-[#ed1121]",
-	meh: "absolute bottom-0 w-[1.5px] top-[30%] bg-[#ffcc22]",
-	ok: "absolute bottom-0 w-[1.5px] top-[40%] bg-[#88b300]"
+	meh: "absolute bottom-0 w-[1.5px] top-[45%] bg-[#ffcc22]",
+	ok: "absolute bottom-0 w-[1.5px] top-[65%] bg-[#88b300]"
 };
 
 export function OverviewStrip() {
@@ -27,6 +33,7 @@ export function OverviewStrip() {
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const mode = useViewerStore((s) => s.mode);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
+	const showSeverityTicks = useViewerStore((s) => s.timeline.severityTicks);
 
 	const track = useTrackMetrics();
 	const playedRef = useRef<HTMLDivElement>(null);
@@ -79,10 +86,15 @@ export function OverviewStrip() {
 		return () => cancelAnimationFrame(raf);
 	}, [bounds.minTime, bounds.maxTime, detailSpanMs]);
 
-	const markers = useMemo(
+	const severityTicks = useMemo(
 		() =>
-			(derived?.timelineMarkers ?? []).map((m) => ({ left: fractionFor(bounds, m.time) * 100, grade: m.grade })),
-		[derived, bounds.minTime, bounds.maxTime]
+			showSeverityTicks
+				? (derived?.severityTicks ?? []).map((m) => ({
+						left: fractionFor(bounds, m.time) * 100,
+						grade: m.grade
+					}))
+				: [],
+		[derived, bounds.minTime, bounds.maxTime, showSeverityTicks]
 	);
 	const leadInWidth = fractionFor(bounds, 0) * 100;
 	// task 15's detail lanes render on mode === "edit"; the bracket must never
@@ -127,9 +139,9 @@ export function OverviewStrip() {
 			/>
 			{/* 2: played tint, rAF-driven */}
 			<div ref={playedRef} className="absolute inset-y-0 left-0 bg-primary/5" />
-			{/* 3: judgement ticks, static per scene */}
-			{markers.map((m, i) => (
-				<div key={i} className={TICK_CLASS[m.grade]} style={{ left: `${m.left}%` }} />
+			{/* 3: severity ticks, static per scene */}
+			{severityTicks.map((tick, i) => (
+				<div key={i} className={TICK_CLASS[tick.grade]} style={{ left: `${tick.left}%` }} />
 			))}
 			{/* 4: progress rail, fill is rAF-driven */}
 			<div className="absolute inset-x-0 bottom-0 h-0.5 bg-border">
