@@ -2,6 +2,13 @@
 // layers, and per-object drawable lifecycles. all timing lives in the
 // drawables' pure state tracks; this class only forwards t
 
+// the release build runs under tauri.conf.json's csp, whose script-src has no
+// 'unsafe-eval', so pixi's default new Function uniform-sync codegen throws in
+// Application.init and nothing ever draws. this swap installs the static
+// implementation and must be imported before any renderer init. tauri dev
+// serves from the vite server where no csp is injected, so only the release
+// build exercises this
+import "pixi.js/unsafe-eval";
 import { Application, Container, RenderLayer, type Renderer } from "pixi.js";
 import { fromBytes, type Rgba } from "../engine/color";
 import { HIT_FADE_OUT_TIME } from "../engine/argon";
