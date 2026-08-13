@@ -3,12 +3,32 @@
 //! deliberate divergence from the pinned lazer encoder: lazer writes literal
 //! zeros for osu! geki/katu (`ScoreInfoExtensions.cs:71-141` returns null
 //! outside taiko/mania, so `LegacyScoreEncoder.cs:109-110` writes 0). stable
-//! populates them per combo section, and a zeroed pair on an edited stable
-//! replay is exactly the naive-editor signature TODO.md's case study
-//! documents -- so this module implements the stable burst rule (geki = a
-//! section judged entirely 300s; katu = a section of only 300s and 100s
-//! with at least one 100; a section containing a miss OR a 50 earns
-//! neither), with the NoMod corpus as the only oracle.
+//! populates them live, and a zeroed pair on an edited stable replay is
+//! exactly the naive-editor signature TODO.md's case study documents -- so
+//! this module ports stable's own accounting (engine parity pass, issue 14;
+//! reference: danser-go ruleset.go:564-608 `processGekiKatu`, the
+//! community-verified stable model), a TEMPORAL machine, not a per-section
+//! grade fold:
+//!
+//! - two counters accumulate per object-level result in emission order --
+//!   a 100 bumps the katu counter, a 50 or miss bumps the bad counter --
+//!   regardless of which section the object belongs to. a slider aggregate
+//!   landing after the next section already started poisons that section's
+//!   counters, not its own's.
+//! - the burst decision fires when the section-last object (next object
+//!   carries the stable new-combo flag, or end of map) produces its result:
+//!   geki if both counters are zero, katu if only the bad counter is zero --
+//!   and only if the result itself is a base hit (a missed section-ender
+//!   still resets the counters but can never award).
+//! - allClicked: at that moment, every earlier still-alive object back to
+//!   the nearest alive stable new-combo flag must already be hit; an
+//!   in-flight slider (aggregate pending while the section's last object is
+//!   judged early) withholds the burst entirely.
+//!
+//! section boundaries are stable's load-time flags
+//! (`ProcessedObject::stable_new_combo` -- raw new-combo with the first
+//! object after a spinner forced), never lazer's enforcement. the NoMod
+//! corpus and the sweep are the oracles.
 
 use crate::beatmap::difficulty::HitGrade;
 use crate::beatmap::{ProcessedBeatmap, ProcessedKind};
@@ -28,88 +48,137 @@ pub struct SectionTally {
     pub sections_without_burst: u32,
 }
 
-#[derive(Clone, Copy)]
-struct SectionState {
-    all_great: bool,
-    any_miss_or_meh: bool,
+/// one object's resolution facts, read off the timeline: when its
+/// object-level result was emitted (event index + time) and, for sliders,
+/// when the head resolved -- the drain in `simulation::drain` requires both
+struct Resolution {
+    final_event: Option<usize>,
+    final_time: f64,
+    head_time: Option<f64>,
 }
 
-/// folds each object's final grade into its combo section. circle and
-/// slider sections come from the processed objects' `combo_index` (the
-/// new-combo groupings after lazer's enforcement pass); every spinner is
-/// its own singleton section, because stable forces a new combo onto the
-/// spinner itself at load where lazer's enforcement leaves it on the
-/// previous combo for rendering. the stable rule is the one geki/katu are
-/// derived under (docs/adr/0001 -- the headers are the oracle): the
-/// 2026-08-12 sweep fit 824 of 825 spinner-map geki deltas exactly as the
-/// count of spinners sharing a lazer combo with earlier objects
+/// stable's geki/katu machine over the emitted timeline -- see the module
+/// doc for the semantics and the danser citation. events are consumed in
+/// emission order, which is the simulation's walk order (the same order
+/// danser's SendResult fires in)
 pub fn section_tally(processed: &ProcessedBeatmap, timeline: &JudgementTimeline) -> SectionTally {
-    // an object's final grade is its one aggregate event; heads, ticks,
-    // repeats, tails, and spins never grade a section
-    let mut grades: Vec<Option<HitGrade>> = vec![None; processed.objects.len()];
-    for event in &timeline.events {
+    let objects = &processed.objects;
+    // a never-resolved object (no object-level result in the timeline --
+    // unreachable via simulate, which judges everything, but this is a
+    // public api) stays alive forever: infinity keeps it on the walk's
+    // list, where its missing final result blocks the burst exactly as
+    // danser's unhit membership would
+    let mut resolutions: Vec<Resolution> = objects
+        .iter()
+        .map(|_| Resolution {
+            final_event: None,
+            final_time: f64::INFINITY,
+            head_time: None,
+        })
+        .collect();
+    for (k, event) in timeline.events.iter().enumerate() {
+        let Some(resolution) = resolutions.get_mut(event.object_index) else {
+            continue;
+        };
+        match event.kind {
+            JudgementKind::Circle(_) | JudgementKind::SliderAggregate(_) | JudgementKind::SpinnerFinal(_) => {
+                resolution.final_event = Some(k);
+                resolution.final_time = event.time;
+            }
+            JudgementKind::SliderHead { .. } => resolution.head_time = Some(event.time),
+            _ => {}
+        }
+    }
+
+    // sections are structural: one per section-last object. the identity
+    // sections - (geki + katsu) = sections_without_burst holds by
+    // construction, as before
+    let is_section_last =
+        |i: usize| i + 1 == objects.len() || objects[i + 1].stable_new_combo;
+    let sections = (0..objects.len()).filter(|&i| is_section_last(i)).count() as u32;
+
+    let mut tally = SectionTally {
+        sections,
+        count_geki: 0,
+        count_katsu: 0,
+        sections_without_burst: 0,
+    };
+
+    // ruleset.go:565-570 + 593-606 -- the counters and the trigger fold
+    let mut current_katu = 0u32;
+    let mut current_bad = 0u32;
+    for (k, event) in timeline.events.iter().enumerate() {
         let grade = match event.kind {
             JudgementKind::Circle(grade)
             | JudgementKind::SliderAggregate(grade)
             | JudgementKind::SpinnerFinal(grade) => grade,
             _ => continue,
         };
-        if let Some(slot) = grades.get_mut(event.object_index) {
-            *slot = Some(grade);
+        match grade {
+            HitGrade::Ok => current_katu += 1,
+            HitGrade::Meh | HitGrade::Miss => current_bad += 1,
+            HitGrade::Great => {}
         }
-    }
 
-    // combo_index only ever steps by one, so a plain vec keyed by it holds
-    // every non-spinner section; a leading spinner keeps index 0, everything
-    // else starts at 1. spinner singletons accumulate separately -- a lazer
-    // combo emptied by removing its spinner contributes no section
-    let mut states: Vec<Option<SectionState>> = Vec::new();
-    let mut spinner_sections: Vec<SectionState> = Vec::new();
-    for (object, grade) in processed.objects.iter().zip(&grades) {
-        // an unjudged object cannot certify a 300; treat it as the miss it
-        // would have decayed into (unreachable through simulate, which
-        // judges every object)
-        let grade = grade.unwrap_or(HitGrade::Miss);
-
-        if matches!(object.kind, ProcessedKind::Spinner(_)) {
-            spinner_sections.push(SectionState {
-                all_great: grade == HitGrade::Great,
-                any_miss_or_meh: matches!(grade, HitGrade::Miss | HitGrade::Meh),
-            });
+        let index = event.object_index;
+        if index >= objects.len() || !is_section_last(index) {
             continue;
         }
-
-        let index = object.combo_index.max(0) as usize;
-        if states.len() <= index {
-            states.resize(index + 1, None);
+        // a missed section-ender resets the counters without awarding
+        // (BaseHits excludes Miss, ruleset.go:593)
+        if grade != HitGrade::Miss && all_clicked(processed, &resolutions, index, k, event.time) {
+            if current_katu == 0 && current_bad == 0 {
+                tally.count_geki += 1;
+            } else if current_bad == 0 {
+                tally.count_katsu += 1;
+            }
         }
-        let state = states[index].get_or_insert(SectionState {
-            all_great: true,
-            any_miss_or_meh: false,
-        });
-        state.all_great &= grade == HitGrade::Great;
-        state.any_miss_or_meh |= matches!(grade, HitGrade::Miss | HitGrade::Meh);
+        current_katu = 0;
+        current_bad = 0;
     }
 
-    let mut tally = SectionTally {
-        sections: 0,
-        count_geki: 0,
-        count_katsu: 0,
-        sections_without_burst: 0,
-    };
-    for state in states.into_iter().flatten().chain(spinner_sections) {
-        tally.sections += 1;
-        // stable's burst rule: a 50 forfeits the section's burst exactly
-        // like a miss does -- katu is only-300s-and-100s, never "no miss"
-        if state.any_miss_or_meh {
-            tally.sections_without_burst += 1;
-        } else if state.all_great {
-            tally.count_geki += 1;
-        } else {
-            tally.count_katsu += 1;
-        }
-    }
+    tally.sections_without_burst = tally
+        .sections
+        .saturating_sub(tally.count_geki + tally.count_katsu);
     tally
+}
+
+/// ruleset.go:573-591 -- the withholding walk: backward from the trigger
+/// over objects still on stable's processed list at that moment, blocking
+/// on any unhit one and stopping at the first alive stable new-combo flag.
+/// membership is reconstructed from the timeline: an object has left the
+/// list once it finished strictly before the trigger's millisecond (the
+/// driver drains after each frame group); a drained object neither blocks
+/// nor stops the walk -- its flag is invisible, exactly as in the reference
+fn all_clicked(
+    processed: &ProcessedBeatmap,
+    resolutions: &[Resolution],
+    trigger_index: usize,
+    trigger_event: usize,
+    trigger_time: f64,
+) -> bool {
+    for j in (0..trigger_index).rev() {
+        let resolution = &resolutions[j];
+        let finished_time = match processed.objects[j].kind {
+            // slider drain waits for the head as well (slider.go:505-517)
+            ProcessedKind::Slider(_) => resolution.final_time.max(
+                resolution.head_time.unwrap_or(f64::INFINITY),
+            ),
+            _ => resolution.final_time,
+        };
+        if finished_time < trigger_time {
+            continue;
+        }
+        // alive: hit only if its object-level result already fired
+        let is_hit = resolution.final_event.is_some_and(|e| e <= trigger_event);
+        if !is_hit {
+            return false;
+        }
+        if processed.objects[j].stable_new_combo {
+            break;
+        }
+    }
+    true
 }
 
 /// the map's maximum achievable combo, counted stable-style: circles and
@@ -341,22 +410,21 @@ mod tests {
     }
 
     #[test]
-    fn spinners_form_their_own_stable_section() {
-        // lazer's combo enforcement leaves the spinner on the previous
-        // combo_index (rendering semantics), but stable forces a new combo
-        // onto the spinner itself at load, so for geki/katu accounting the
-        // spinner is always a singleton section: the objects before it
-        // grade on their own, and the spinner's grade grades its own
-        // section. oracle: the 2026-08-12 sweep -- 824/825 spinner-map geki
-        // deltas equal exactly the count of spinners sharing a lazer combo
-        // with earlier objects
+    fn a_spinner_without_its_own_flag_merges_backward_and_forces_a_boundary_after() {
+        // stable's load pass (danser parser.go:360-372) forces new-combo on
+        // the object AFTER a spinner but leaves the spinner's own flag as
+        // the file wrote it -- so an unflagged spinner belongs to the
+        // preceding section and its result is that section's trigger, while
+        // the next object always opens a fresh section. lazer's enforcement
+        // (combo_index) is untouched by this
         let processed = map_of(vec![circle(1000.0, true), spinner(2000.0), circle(3000.0, false)]);
+        assert!(processed.objects[0].stable_new_combo);
+        assert!(!processed.objects[1].stable_new_combo, "spinner keeps its raw flag");
+        assert!(processed.objects[2].stable_new_combo, "post-spinner force");
         assert_eq!(processed.objects[0].combo_index, processed.objects[1].combo_index);
-        assert_ne!(processed.objects[0].combo_index, processed.objects[2].combo_index);
 
-        // a missed spinner no longer poisons the interrupted section: the
-        // circle before it keeps its geki, the spinner is its own
-        // miss-section
+        // a missed spinner ends its merged section without a burst; the
+        // trailing circle's section is untouched
         let tally = section_tally(
             &processed,
             &timeline_of(&[
@@ -368,15 +436,15 @@ mod tests {
         assert_eq!(
             tally,
             SectionTally {
-                sections: 3,
-                count_geki: 2,
+                sections: 2,
+                count_geki: 1,
                 count_katsu: 0,
                 sections_without_burst: 1,
             }
         );
         assert_identity(&tally);
 
-        // and a great spinner is its own geki
+        // and an all-great merged section is one geki, not two
         let tally = section_tally(
             &processed,
             &timeline_of(&[
@@ -388,8 +456,8 @@ mod tests {
         assert_eq!(
             tally,
             SectionTally {
-                sections: 3,
-                count_geki: 3,
+                sections: 2,
+                count_geki: 2,
                 count_katsu: 0,
                 sections_without_burst: 0,
             }
@@ -399,11 +467,12 @@ mod tests {
 
     #[test]
     fn a_leading_spinner_forms_its_own_section() {
-        // nothing precedes it, so the spinner keeps combo_index 0 while the
-        // forced new combo after it starts section 1
+        // the spinner's successor carries the forced boundary, so the
+        // spinner is section-last for the opening section
         let processed = map_of(vec![spinner(1000.0), circle(2000.0, false)]);
         assert_eq!(processed.objects[0].combo_index, 0);
         assert_eq!(processed.objects[1].combo_index, 1);
+        assert!(processed.objects[1].stable_new_combo);
 
         let tally = section_tally(
             &processed,
@@ -419,6 +488,88 @@ mod tests {
                 count_geki: 1,
                 count_katsu: 1,
                 sections_without_burst: 0,
+            }
+        );
+        assert_identity(&tally);
+    }
+
+    /// a timeline with explicit event times, for the temporal behaviours
+    /// timeline_of's index-derived times cannot express
+    fn timeline_at(events: &[(usize, JudgementKind, f64)]) -> JudgementTimeline {
+        JudgementTimeline {
+            events: events
+                .iter()
+                .map(|&(object_index, kind, time)| JudgementEvent {
+                    time,
+                    object_index,
+                    kind,
+                    combo_after: 0,
+                    accuracy_after: 1.0,
+                })
+                .collect(),
+            totals: HitTotals::default(),
+            spinner_scoring: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_section_ending_before_its_slider_resolves_forfeits_the_burst() {
+        // ruleset.go:573-591 (allClicked): the section's last object is
+        // judged while an earlier slider of the same section is still in
+        // flight -- stable walks the alive list, finds the unhit slider,
+        // and withholds the burst even though every final grade is a 300
+        let processed = map_of(vec![slider(1000.0, true), circle(2000.0, false), circle(3000.0, true)]);
+        let tally = section_tally(
+            &processed,
+            &timeline_at(&[
+                (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+                // the section-ending circle resolves early, mid-slider
+                (1, JudgementKind::Circle(HitGrade::Great), 1900.0),
+                (0, JudgementKind::SliderTail { hit: true }, 2100.0),
+                (0, JudgementKind::SliderAggregate(HitGrade::Great), 2100.0),
+                (2, JudgementKind::Circle(HitGrade::Great), 3000.0),
+            ]),
+        );
+        // section [slider, circle]: withheld; section [circle]: geki
+        assert_eq!(
+            tally,
+            SectionTally {
+                sections: 2,
+                count_geki: 1,
+                count_katsu: 0,
+                sections_without_burst: 1,
+            }
+        );
+        assert_identity(&tally);
+    }
+
+    #[test]
+    fn a_late_aggregate_poisons_the_section_it_lands_in_not_its_own() {
+        // ruleset.go:565-570: the counters accumulate in emission order, so
+        // a slider aggregate arriving after its section's trigger already
+        // reset them charges the NEXT section -- the all-great trailing
+        // section derives katu, not geki
+        let processed = map_of(vec![slider(1000.0, true), circle(2000.0, false), circle(3000.0, true)]);
+        let tally = section_tally(
+            &processed,
+            &timeline_at(&[
+                (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+                (1, JudgementKind::Circle(HitGrade::Great), 1900.0),
+                (0, JudgementKind::SliderTail { hit: false }, 2100.0),
+                (0, JudgementKind::SliderAggregate(HitGrade::Ok), 2100.0),
+                (2, JudgementKind::Circle(HitGrade::Great), 3000.0),
+            ]),
+        );
+        // section [slider, circle]: withheld (in-flight slider at the
+        // trigger); section [circle]: its counters carry the slider's
+        // orphaned 100 -> katu
+        assert_eq!(
+            tally,
+            SectionTally {
+                sections: 2,
+                count_geki: 0,
+                count_katsu: 1,
+                sections_without_burst: 1,
             }
         );
         assert_identity(&tally);
