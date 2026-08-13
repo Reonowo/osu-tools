@@ -1,12 +1,9 @@
 // argon cursor + trail. citations: argoncursor.cs:16-80 (visual; the dot's
 // glow is additive per compositedrawable.drawnode.cs:142, EdgeEffectType.Glow),
 // skinnablecursor.cs:9-30 (press-expand), osucursor.cs:25 (size),
-// osuconfigmanager.cs:115-117 (cursor scale fixed at 1.0 by default),
-// cursortrail.cs + argoncursortrail.cs (distance-interval parts, additive
-// 0.8, pow-4 fade). cursortrail.cs's actual vertex/fragment shader
-// (sh_CursorTrail.vs/.fs) lives in an osu-framework nupkg, not the pinned
-// source checkout -- the fade formula below is inlined from the task brief,
-// cross-checked against cursortrail.cs's C#-side FadeClock/FadeExponent wiring
+// osuconfigmanager.cs:115-117 (cursor scale fixed at 1.0 by default). the
+// trail's own geometry and fade live in trail-parts.ts -- this drawable only
+// draws whatever that yields for the current time
 
 import { Container, Sprite } from "pixi.js";
 import { CURSOR_SIZE } from "../../engine/argon";
@@ -14,9 +11,10 @@ import { darken, fromHex, toNumber } from "../../engine/color";
 import { outElasticHalf, outQuad } from "../../engine/easing";
 import { cursorStateAt } from "../../engine/interpolation";
 import { isLeft, isRight } from "../../engine/buttons";
-import { jump, trackValueAt, tween, type Track } from "../../engine/transforms";
+import { jump, trackValueAt, tracksWithin, tween, type Track } from "../../engine/transforms";
 import type { FrameDto } from "../../lib/scene-types";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
+import { ARGON_TRAIL, buildTrailPath, trailPartsAt, type TrailPath } from "./trail-parts";
 
 export function holdIntervals(frames: FrameDto[]): { start: number; end: number }[] {
 	const intervals: { start: number; end: number }[] = [];
@@ -86,77 +84,10 @@ const DOT_SIZE = CURSOR_SIZE * DOT_RELATIVE_SCALE;
 /** the dot plus the glow's radius on either side */
 const DOT_GLOW_SIZE = DOT_SIZE + 2 * DOT_GLOW_RADIUS;
 
-/** osuconfigmanager.cs:115,117 -- GameplayCursorSize defaults to 1.0 and
- * AutoCursorSize defaults to false, so OsuCursor.CalculateCursorScale() is
- * always 1 for an unmodded replay viewer */
-const CURSOR_SCALE = 1;
-/** cursortrail.cs:129 -- FadeDuration */
-const TRAIL_FADE_DURATION = 300;
-/** argoncursortrail.cs:16 -- FadeExponent override (base CursorTrail is 1.7) */
-const TRAIL_FADE_EXPONENT = 4;
-/** argoncursortrail.cs:26 -- Alpha */
-const TRAIL_BASE_ALPHA = 0.8;
 /** argoncursortrail.cs:22 -- Scale = 0.8/Texture.ScaleAdjust, folded with an
  * assumed 64 osu!px DisplayWidth stand-in for the real Cursor/cursortrail
  * texture (not present in the pinned checkout; see the task brief) */
 const TRAIL_PART_SIZE = 64 * 0.8;
-/** cursortrail.cs:201 -- interval = Texture.DisplayWidth * CursorScale.X / 2.5 * IntervalMultiplier;
- * argoncursortrail.cs:14 -- IntervalMultiplier override is 0.4 (base is 1.0) */
-const TRAIL_INTERVAL = ((64 * CURSOR_SCALE) / 2.5) * 0.4;
-/** ample for a ~300ms fade window at ~10.24 osu!px spacing; spawnPart falls
- * back to recycling the oldest live part if this is ever exceeded */
-const TRAIL_POOL = 256;
-const SEEK_RESET_MS = 200;
-
-/** true when playback should discard the trail instead of extending it: a
- * backward seek, or a forward jump bigger than the reset threshold. a seek
- * is not cursor movement -- cursortrail.cs's AddTrail assumes a continuous
- * stream of mouse-move events, which scrubbing does not produce */
-export function isTrailReset(lastT: number | null, t: number, threshold: number): boolean {
-	return lastT === null || t < lastT || t - lastT > threshold;
-}
-
-/** cursortrail.cs:179-226 -- points spaced `interval` apart along the
- * straight segment from `from` to `to`, matching `for (d = interval; d <
- * stopAt; d += interval)` with `stopAt == distance` (AvoidDrawingNearCursor
- * is false for both the default and argon trails). `next` is the last spawn
- * point (or `from` if nothing spawned this call), so leftover sub-interval
- * distance carries into the following call exactly like the source's
- * `lastPosition` field, which the loop only reassigns on an actual spawn */
-export function advanceTrail(
-	from: [number, number],
-	to: [number, number],
-	interval: number
-): { spawns: [number, number][]; next: [number, number] } {
-	const [x1, y1] = from;
-	const [x2, y2] = to;
-	const dx = x2 - x1,
-		dy = y2 - y1;
-	const distance = Math.hypot(dx, dy);
-	const spawns: [number, number][] = [];
-	// guard the division, not just as a shortcut: at distance === interval
-	// exactly, `d = interval` already fails the loop's own `d < distance`, so
-	// running the loop unconditionally still yields zero spawns -- the guard
-	// only exists to avoid dividing by a zero distance
-	if (distance >= interval) {
-		const dirX = dx / distance,
-			dirY = dy / distance;
-		for (let d = interval; d < distance; d += interval) spawns.push([x1 + dirX * d, y1 + dirY * d]);
-	}
-	return { spawns, next: spawns.length > 0 ? spawns[spawns.length - 1] : from };
-}
-
-/** the trail shader's pow(clamp(m_Time - g_FadeClock, 0, 1), g_FadeExponent)
- * times the base alpha (argoncursortrail.cs:26); `age` is already
- * normalized to fade duration, i.e. (t - bornAt) / TRAIL_FADE_DURATION */
-export function trailAlpha(age: number): number {
-	return TRAIL_BASE_ALPHA * Math.max(0, Math.min(1, 1 - age)) ** TRAIL_FADE_EXPONENT;
-}
-
-interface TrailPart {
-	sprite: Sprite;
-	bornAt: number;
-}
 
 export class CursorDrawable implements ObjectDrawable {
 	readonly view = new Container();
@@ -164,23 +95,26 @@ export class CursorDrawable implements ObjectDrawable {
 	 * frame (see update()) */
 	private readonly cursorSprite = new Container();
 	private readonly expandTarget = new Container();
-	/** trail parts are positioned in the same absolute playfield space they
-	 * were spawned in, so this container is never itself moved -- unlike
-	 * cursorSprite, it stays a direct child of the unmoved `view` */
+	/** trail parts are positioned in absolute playfield space, so this
+	 * container is never itself moved -- unlike cursorSprite, it stays a
+	 * direct child of the unmoved `view` */
 	private readonly trailLayer = new Container();
 	/** the dot's additive glow, kept as a field only so the cursorGlow effect
 	 * can hide it -- the dot and ring underneath it never hide */
 	private readonly glow: Sprite;
 	private readonly expand: Track[];
 	private readonly frames: FrameDto[];
-	private readonly parts: TrailPart[] = [];
-	private readonly pool: Sprite[] = [];
-	private lastT: number | null = null;
-	private lastPos: [number, number] | null = null;
+	private readonly trail: TrailPath;
+	/** one sprite per part slot, grown on demand and reused frame to frame.
+	 * they carry no trail state of their own: every frame overwrites position,
+	 * size and alpha from trailPartsAt's output, which is what makes a
+	 * rebuilt drawable indistinguishable from one that has run all along */
+	private readonly partSprites: Sprite[] = [];
 
 	constructor(private readonly ctx: RenderContext) {
 		this.frames = ctx.scene.frames;
 		this.expand = expandTracks(holdIntervals(this.frames));
+		this.trail = buildTrailPath(this.frames);
 
 		// `view` itself is never repositioned and stays a real parent of both
 		// pieces, so a single destroy() call releases everything -- attaching
@@ -244,44 +178,27 @@ export class CursorDrawable implements ObjectDrawable {
 		this.cursorSprite.addChild(this.expandTarget, this.glow, dot);
 	}
 
-	private spawnPart(x: number, y: number, bornAt: number, scale: number): void {
-		let sprite = this.pool.pop();
+	private partSprite(index: number): Sprite {
+		let sprite = this.partSprites[index];
 		if (sprite === undefined) {
-			if (this.parts.length >= TRAIL_POOL) {
-				sprite = this.parts.shift()!.sprite;
-			} else {
-				sprite = new Sprite(this.ctx.textures.glowTexture(TRAIL_PART_SIZE, 0.1));
-				sprite.anchor.set(0.5);
-				sprite.blendMode = "add"; // argoncursortrail.cs:24 -- BlendingParameters.Additive
-				this.trailLayer.addChild(sprite);
-			}
+			sprite = new Sprite(this.ctx.textures.glowTexture(TRAIL_PART_SIZE, 0.1));
+			sprite.anchor.set(0.5);
+			sprite.blendMode = "add"; // argoncursortrail.cs:24 -- BlendingParameters.Additive
+			this.trailLayer.addChild(sprite);
+			this.partSprites[index] = sprite;
 		}
-		sprite.visible = true;
-		sprite.position.set(x, y);
-		sprite.width = sprite.height = TRAIL_PART_SIZE * scale;
-		this.parts.push({ sprite, bornAt });
+		return sprite;
 	}
 
-	private releasePart(index: number): void {
-		const [part] = this.parts.splice(index, 1);
-		part.sprite.visible = false;
-		this.pool.push(part.sprite);
-	}
-
-	private releaseAllParts(): void {
-		for (const part of this.parts) {
-			part.sprite.visible = false;
-			this.pool.push(part.sprite);
-		}
-		this.parts.length = 0;
+	private hidePartsFrom(index: number): void {
+		for (let i = index; i < this.partSprites.length; i += 1) this.partSprites[i].visible = false;
 	}
 
 	update(t: number): void {
 		const state = cursorStateAt(this.frames, t);
 		if (state === null) return;
 		this.cursorSprite.position.set(state.x, state.y);
-		const expandScale = trackValueAt(this.expand, t, 1);
-		this.expandTarget.scale.set(expandScale);
+		this.expandTarget.scale.set(trackValueAt(this.expand, t, 1));
 
 		// the ring, dot and press expansion above are the cursor itself and are
 		// never gated; only the glow and the trail are effects
@@ -289,31 +206,28 @@ export class CursorDrawable implements ObjectDrawable {
 		this.glow.visible = effects.cursorGlow;
 		this.trailLayer.visible = effects.cursorTrail;
 		if (!effects.cursorTrail) {
-			// a disabled trail is dropped rather than frozen -- parts left in
-			// place would replay a stale streak the instant it comes back. the
-			// position bookkeeping keeps advancing, so re-enabling picks up from
-			// `now` instead of spawning a line back to wherever it stopped
-			this.releaseAllParts();
-			this.lastPos = [state.x, state.y];
-			this.lastT = t;
+			// a disabled trail draws nothing rather than freezing the last set:
+			// the parts are recomputed from scratch anyway, so re-enabling picks
+			// up the trail behind wherever the cursor is now
+			this.hidePartsFrom(0);
 			return;
 		}
 
-		if (isTrailReset(this.lastT, t, SEEK_RESET_MS)) {
-			this.releaseAllParts();
-			this.lastPos = [state.x, state.y];
-		} else {
-			const { spawns, next } = advanceTrail(this.lastPos!, [state.x, state.y], TRAIL_INTERVAL);
-			for (const [x, y] of spawns) this.spawnPart(x, y, t, expandScale);
-			this.lastPos = next;
+		const parts = trailPartsAt(this.trail, t, ARGON_TRAIL);
+		// a part keeps the press expansion the cursor had when it passed, so a
+		// press leaves a visibly fatter streak behind it. narrowed to the fade
+		// window first: trackValueAt scans the whole track set, and a replay's
+		// hold intervals run to thousands while a window holds a handful
+		const expandInWindow = tracksWithin(this.expand, parts[0]?.bornAt ?? t, t);
+		for (let i = 0; i < parts.length; i += 1) {
+			const part = parts[i];
+			const sprite = this.partSprite(i);
+			sprite.visible = true;
+			sprite.position.set(part.x, part.y);
+			sprite.alpha = part.alpha;
+			sprite.width = sprite.height = TRAIL_PART_SIZE * trackValueAt(expandInWindow, part.bornAt, 1);
 		}
-		this.lastT = t;
-
-		for (let i = this.parts.length - 1; i >= 0; i--) {
-			const age = (t - this.parts[i].bornAt) / TRAIL_FADE_DURATION;
-			if (age >= 1) this.releasePart(i);
-			else this.parts[i].sprite.alpha = trailAlpha(age);
-		}
+		this.hidePartsFrom(parts.length);
 	}
 
 	destroy(): void {

@@ -28,7 +28,7 @@ export interface Press {
 }
 
 /** index of the first frame with time > t (frames sorted by time) */
-function partitionPoint(frames: FrameDto[], time: number): number {
+export function partitionPoint(frames: readonly FrameDto[], time: number): number {
 	let lo = 0;
 	let hi = frames.length;
 	while (lo < hi) {

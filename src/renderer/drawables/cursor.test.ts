@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Container, RenderLayer, Texture, type Renderer } from "pixi.js";
+import { Container, RenderLayer, Sprite, Texture, type Renderer } from "pixi.js";
 import { trackValueAt } from "../../engine/transforms";
 import type { EffectSettings } from "../../lib/scene-types";
 import { DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "../../state/defaults";
 import { testScene } from "../../test/scene";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
-import { advanceTrail, CursorDrawable, expandTracks, holdIntervals, isTrailReset, trailAlpha } from "./cursor";
+import { CursorDrawable, expandTracks, holdIntervals } from "./cursor";
 
 const frame = (time: number, buttons: number) => ({ time, x: 0, y: 0, buttons });
 
@@ -102,26 +102,6 @@ describe("expand tracks (skinnablecursor.cs:9-30)", () => {
 	});
 });
 
-describe("trail reset detection (cursortrail.cs's AddTrail assumes continuous mouse motion)", () => {
-	test("the very first update is always a reset", () => {
-		expect(isTrailReset(null, 0, 200)).toBe(true);
-	});
-
-	test("a backward seek resets, regardless of magnitude", () => {
-		expect(isTrailReset(500, 499, 200)).toBe(true);
-		expect(isTrailReset(500, 100, 200)).toBe(true);
-	});
-
-	test("a forward jump within the threshold is ordinary playback", () => {
-		expect(isTrailReset(500, 500, 200)).toBe(false);
-		expect(isTrailReset(500, 700, 200)).toBe(false);
-	});
-
-	test("a forward jump past the threshold resets", () => {
-		expect(isTrailReset(500, 701, 200)).toBe(true);
-	});
-});
-
 describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 	// a straight left-to-right sweep, far enough per step to spawn trail parts
 	// (TRAIL_INTERVAL is ~10.24 osu!px)
@@ -129,7 +109,7 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 
 	// a getter, not a value: the renderer reads the effects live, and the
 	// disable path below has to flip them between two update() calls
-	function stubContext(getEffects: () => EffectSettings): RenderContext {
+	function stubContext(getEffects: () => EffectSettings, sceneFrames = frames): RenderContext {
 		const noCanvas: TextureBaker = {
 			canvasTexture: () => Texture.WHITE,
 			glowTexture: () => Texture.WHITE,
@@ -139,7 +119,7 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 			approachCircleTexture: () => Texture.WHITE
 		};
 		return {
-			scene: { ...testScene(), frames },
+			scene: { ...testScene(), frames: sceneFrames },
 			derived: {} as RenderContext["derived"],
 			accents: [],
 			textures: noCanvas,
@@ -173,11 +153,49 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 		return { expandTarget, glow, dot };
 	}
 
-	test("both on: the glow shows and the trail accumulates parts", () => {
+	test("both on: the glow shows and the trail draws parts", () => {
 		const drawable = new CursorDrawable(stubContext(() => DEFAULT_EFFECTS));
 		for (const frame of frames) drawable.update(frame.time);
 		expect(liveTrailParts(drawable)).toBeGreaterThan(0);
 		expect(cursorPieces(drawable).glow.visible).toBe(true);
+	});
+
+	test("a fresh drawable draws the same trail as one that has played all the way there", () => {
+		// what a density rebake does mid-replay: the scene-lifetime drawables are
+		// destroyed and rebuilt, and the rebuilt cursor must land on exactly the
+		// scene the old one was showing -- paused, where no later update() would
+		// ever refill an emptied trail
+		const t = frames[frames.length - 1].time;
+		const played = new CursorDrawable(stubContext(() => DEFAULT_EFFECTS));
+		for (const frame of frames) played.update(frame.time);
+		const rebuilt = new CursorDrawable(stubContext(() => DEFAULT_EFFECTS));
+		rebuilt.update(t);
+
+		const describeParts = (drawable: CursorDrawable) =>
+			(drawable.view.children[0] as Container).children
+				.filter((c) => c.visible)
+				.map((c) => [c.x, c.y, c.alpha, (c as Sprite).width]);
+		expect(describeParts(rebuilt)).toEqual(describeParts(played));
+		expect(describeParts(rebuilt).length).toBeGreaterThan(0);
+	});
+
+	test("a part is drawn at the press expansion the cursor had when it passed", () => {
+		// the same sweep with a press held through it: the trail widens with the
+		// expansion instead of staying at the resting part size
+		const t = frames[frames.length - 1].time;
+		const held = frames.map((f) => ({ ...f, buttons: 1 }));
+		const pressed = new CursorDrawable(stubContext(() => DEFAULT_EFFECTS, held));
+		pressed.update(t);
+		const resting = new CursorDrawable(stubContext(() => DEFAULT_EFFECTS));
+		resting.update(t);
+
+		const partWidths = (drawable: CursorDrawable) =>
+			(drawable.view.children[0] as Container).children.filter((c) => c.visible).map((c) => (c as Sprite).width);
+		expect(partWidths(resting).length).toBeGreaterThan(0);
+		expect(partWidths(pressed)).toHaveLength(partWidths(resting).length);
+		for (const [i, width] of partWidths(pressed).entries()) {
+			expect(width).toBeGreaterThan(partWidths(resting)[i]);
+		}
 	});
 
 	test("cursorGlow off hides only the glow -- the ring and dot stay", () => {
@@ -190,10 +208,10 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 		expect(drawable.view.visible).toBe(true);
 	});
 
-	test("cursorTrail off hides the layer and releases every live part", () => {
-		// a trail left in place would replay a stale streak the instant the
-		// effect comes back, since every part sits where the cursor used to be,
-		// not where it is now
+	test("cursorTrail off hides the layer and every part with it", () => {
+		// the parts are recomputed from the frames each update, so re-enabling
+		// picks the trail back up behind wherever the cursor is by then -- what
+		// must not survive is a part still drawn while the effect is off
 		let effects: EffectSettings = DEFAULT_EFFECTS;
 		const drawable = new CursorDrawable(stubContext(() => effects));
 		for (const frame of frames) drawable.update(frame.time);
@@ -203,53 +221,5 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 		drawable.update(frames[frames.length - 1].time + 16);
 		expect((drawable.view.children[0] as Container).visible).toBe(false);
 		expect(liveTrailParts(drawable)).toBe(0);
-	});
-});
-
-describe("trail spawn spacing (cursortrail.cs:179-226)", () => {
-	test("spawns at each interval strictly before the segment end, carrying the remainder forward", () => {
-		// 3-4-5 triangle scaled by the interval: distance is exactly 5x interval
-		const { spawns, next } = advanceTrail([0, 0], [30.72, 40.96], 10.24);
-		expect(spawns.length).toBe(4); // strict '<' excludes the exact 5th multiple
-		expect(spawns[0][0]).toBeCloseTo(6.144, 6); // 0.6 * 10.24
-		expect(spawns[0][1]).toBeCloseTo(8.192, 6); // 0.8 * 10.24
-		expect(spawns[3][0]).toBeCloseTo(24.576, 6); // 0.6 * 40.96
-		expect(spawns[3][1]).toBeCloseTo(32.768, 6); // 0.8 * 40.96
-		expect(next[0]).toBeCloseTo(spawns[3][0], 10);
-		expect(next[1]).toBeCloseTo(spawns[3][1], 10);
-	});
-
-	test("movement under one interval spawns nothing and leaves the reference point unchanged", () => {
-		const { spawns, next } = advanceTrail([0, 0], [5, 0], 10.24);
-		expect(spawns).toEqual([]);
-		expect(next).toEqual([0, 0]);
-	});
-
-	test("movement exactly one interval spawns nothing (strict '<' excludes the boundary too)", () => {
-		const { spawns, next } = advanceTrail([0, 0], [10.24, 0], 10.24);
-		expect(spawns).toEqual([]);
-		expect(next).toEqual([0, 0]);
-	});
-
-	test("standing still spawns nothing (no direction to divide by)", () => {
-		const { spawns, next } = advanceTrail([12, 34], [12, 34], 10.24);
-		expect(spawns).toEqual([]);
-		expect(next).toEqual([12, 34]);
-	});
-});
-
-describe("trail fade alpha (argoncursortrail.cs:16,26 -- 0.8 * clamp(1-age,0,1)^4)", () => {
-	test("a fresh part renders at the base alpha", () => {
-		expect(trailAlpha(0)).toBe(0.8);
-	});
-
-	test("a part halfway through its fade is dimmed by the fourth power, not linearly", () => {
-		expect(trailAlpha(0.5)).toBeCloseTo(0.8 * 0.5 ** 4, 10);
-		expect(trailAlpha(0.5)).not.toBeCloseTo(0.8 * 0.5, 3);
-	});
-
-	test("a fully aged part is invisible, and age past 1 clamps rather than going negative", () => {
-		expect(trailAlpha(1)).toBe(0);
-		expect(trailAlpha(1.5)).toBe(0);
 	});
 });
