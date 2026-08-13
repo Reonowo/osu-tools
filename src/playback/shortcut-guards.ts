@@ -19,7 +19,9 @@ const NATIVE_WHEEL_SLOTS = new Set(["popover-content", "scroll-area-viewport", "
  * be clicked and tab-reached, and none of its own keys collide with the
  * playback shortcuts: the frames panel's rows (FramesPanel.tsx), where a
  * click focuses the row and suppressing the shortcuts for as long as it holds
- * focus would be exactly backwards */
+ * focus would be exactly backwards. the keyboard guard honours it under
+ * either focus modality -- stepping with `,` `.` while walking the rows is
+ * the point of the rows, tab-focused or clicked */
 const SHORTCUT_PASSTHROUGH_ATTR = "data-shortcut-passthrough";
 
 function asGuardElement(target: unknown): GuardElement | null {
@@ -29,18 +31,94 @@ function asGuardElement(target: unknown): GuardElement | null {
 	return candidate as GuardElement;
 }
 
-/** true when the event target sits inside an interactive control: a focused
- * button must keep space activation, a slider thumb its arrow keys, a dialog
- * its own keyboard handling. an element marked `data-shortcut-passthrough`
- * declines the guard for itself and its subtree; the innermost declaration
- * wins either way, so a real control nested inside a passthrough element is
- * still guarded */
+/** true when the event target sits inside an interactive control. this is
+ * the pointer-path guard (use-edit-tools' gestures): a press on a button is
+ * that button's click whatever holds focus, so it stays structural with no
+ * modality in it. keydown guarding lives in controlOwnsKeydown. an element
+ * marked `data-shortcut-passthrough` declines the guard for itself and its
+ * subtree; the innermost declaration wins either way, so a real control
+ * nested inside a passthrough element is still guarded */
 export function withinInteractiveControl(target: unknown): boolean {
 	for (let element = asGuardElement(target); element !== null; element = element.parentElement) {
 		if (element.getAttribute(SHORTCUT_PASSTHROUGH_ATTR) !== null) return false;
 		if (INTERACTIVE_TAGS.has(element.tagName)) return true;
 		const role = element.getAttribute("role");
 		if (role !== null && INTERACTIVE_ROLES.has(role)) return true;
+	}
+	return false;
+}
+
+/** the keys a roving-focus composite or a slider consumes for its own
+ * navigation, whatever put focus on it. exported because these are also the
+ * keys (with Tab) that move focus, which is what focus-modality.ts watches */
+export const NAV_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+const NAV_OWNING_ROLES = new Set(["tab", "tablist", "slider"]);
+const NAV_OWNING_SLOTS = new Set(["toggle-group"]);
+
+/** text entry and modal surfaces own every key under any focus modality: a
+ * click into a text field is still typing, and a dialog's keys never leak to
+ * the viewer behind it. inputs are text-like except the sliders' hidden
+ * range input, which owns only its nav keys (below) */
+function ownsEveryKey(element: GuardElement): boolean {
+	if (element.tagName === "TEXTAREA" || element.tagName === "SELECT") return true;
+	if (element.tagName === "INPUT" && element.getAttribute("type") !== "range") return true;
+	const editable = element.getAttribute("contenteditable");
+	if (editable !== null && editable !== "false") return true;
+	return element.getAttribute("role") === "dialog";
+}
+
+function ownsNavKeys(element: GuardElement, role: string | null): boolean {
+	// only the range input reaches here; text-likes returned in ownsEveryKey
+	if (element.tagName === "INPUT") return true;
+	if (role !== null && NAV_OWNING_ROLES.has(role)) return true;
+	const slot = element.getAttribute("data-slot");
+	return slot !== null && NAV_OWNING_SLOTS.has(slot);
+}
+
+/** true when a keydown belongs to the control holding focus rather than to
+ * the viewer's shortcuts. focus modality is the pivot: keyboard-acquired
+ * focus (tabbing, composite arrow roving) keeps every native key so a
+ * keyboard user can still space-activate the button they tabbed to, while
+ * the residue focus a mouse click leaves behind hands the keys back --
+ * otherwise space after clicking the zoom reset re-fires the reset instead
+ * of panning, and the same for every control in the chrome.
+ *
+ * keyboardFocus is a parameter, recorded at focus-acquisition time by
+ * focus-modality.ts, because the obvious signal is a trap: chromium promotes
+ * the focused element to :focus-visible on any keydown -- including the very
+ * space press being reclaimed -- so reading the pseudo-class from inside a
+ * key handler always answers "keyboard" for the click-focused button this
+ * predicate exists to expose. there is exactly one focus per document, so a
+ * single boolean covers the walk; it only ever decides for the target
+ * itself, since ancestors of the focused element were not focused.
+ *
+ * two things modality never unlocks: text entry and dialogs (ownsEveryKey),
+ * and the nav keys of a click-focused composite or slider (ownsNavKeys) --
+ * the tab rail and the toggle groups act on arrows through their own
+ * element-level roving handlers, upstream of this document-level guard, so
+ * seeking on those same keydowns would switch tab and scrub on one keystroke */
+export function controlOwnsKeydown(e: { key: string; target: unknown }, keyboardFocus: boolean): boolean {
+	const navKey = NAV_KEYS.has(e.key);
+	for (let element = asGuardElement(e.target); element !== null; element = element.parentElement) {
+		if (element.getAttribute(SHORTCUT_PASSTHROUGH_ATTR) !== null) return false;
+		if (ownsEveryKey(element)) return true;
+		const role = element.getAttribute("role");
+		if (keyboardFocus && (element.tagName === "BUTTON" || element.tagName === "INPUT" || role === "slider")) {
+			return true;
+		}
+		if (navKey && ownsNavKeys(element, role)) return true;
+	}
+	return false;
+}
+
+/** true when the target sits inside a dialog (base-ui gives its popovers the
+ * same role, which is right here too). the click-residue blur consults this:
+ * inside a modal, focus falling to the body would put the keydown target
+ * outside the dialog subtree and controlOwnsKeydown's dialog arm with it,
+ * letting space toggle playback behind an open modal */
+export function withinDialog(target: unknown): boolean {
+	for (let element = asGuardElement(target); element !== null; element = element.parentElement) {
+		if (element.getAttribute("role") === "dialog") return true;
 	}
 	return false;
 }

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	asksViewportReset,
+	controlOwnsKeydown,
 	wheelFrameStep,
+	withinDialog,
 	withinInteractiveControl,
 	withinNativeWheelUi,
 	withinViewportChrome,
@@ -56,6 +58,111 @@ describe("withinInteractiveControl", () => {
 	test("allows null and non-element targets like window", () => {
 		expect(withinInteractiveControl(null)).toBe(false);
 		expect(withinInteractiveControl({})).toBe(false);
+	});
+});
+
+describe("controlOwnsKeydown", () => {
+	// the second parameter is the focus-modality stamp (focus-modality.ts):
+	// false is the residue focus of a click, true is keyboard-acquired focus
+	const clickFocused = (target: unknown, key: string) => controlOwnsKeydown({ key, target }, false);
+	const keyboardFocused = (target: unknown, key: string) => controlOwnsKeydown({ key, target }, true);
+
+	test("a click-focused button hands every bound key back to the viewer", () => {
+		// the reported bug: click the zoom reset, hold space to pan, and the
+		// reset fires again instead. the residue focus of a click owns nothing
+		const button = el("button");
+		for (const key of [" ", ",", ".", "ArrowLeft", "ArrowRight", "Home", "0", "Delete", "Escape"]) {
+			expect(clickFocused(button, key)).toBe(false);
+		}
+	});
+
+	test("a keyboard-focused button keeps its native keys", () => {
+		// tabbing to a control is a statement of intent a click is not: space
+		// and enter must activate what the focus ring is on
+		const button = el("button");
+		expect(keyboardFocused(button, " ")).toBe(true);
+		expect(keyboardFocused(button, "ArrowLeft")).toBe(true);
+		expect(keyboardFocused(button, ",")).toBe(true);
+	});
+
+	test("text entries own every key under either modality", () => {
+		for (const target of [el("input"), el("input", { type: "text" }), el("textarea"), el("select")]) {
+			expect(clickFocused(target, " ")).toBe(true);
+			expect(clickFocused(target, ",")).toBe(true);
+			expect(clickFocused(target, "ArrowLeft")).toBe(true);
+			expect(clickFocused(target, "Backspace")).toBe(true);
+		}
+		expect(clickFocused(el("div", { contenteditable: "" }), " ")).toBe(true);
+		expect(clickFocused(el("div", { contenteditable: "false" }), " ")).toBe(false);
+	});
+
+	test("a click-focused slider keeps its nav keys but yields space", () => {
+		// the slider's hidden range input holds focus after a drag; arrows and
+		// home still nudge the thumb through its own handler, so seeking on the
+		// same keydown would double-fire -- but space is not a slider key
+		for (const thumb of [el("input", { type: "range" }), el("div", { role: "slider" })]) {
+			expect(clickFocused(thumb, "ArrowLeft")).toBe(true);
+			expect(clickFocused(thumb, "Home")).toBe(true);
+			expect(clickFocused(thumb, " ")).toBe(false);
+			expect(clickFocused(thumb, ".")).toBe(false);
+		}
+		expect(keyboardFocused(el("input", { type: "range" }), " ")).toBe(true);
+	});
+
+	test("click-focused composites keep the arrows their roving handlers act on", () => {
+		// the tab rail (role=tab) and the toggle groups act on arrows at the
+		// element itself, upstream of the document-level shortcuts: acting here
+		// too would switch tab and seek on one keystroke
+		const railTab = el("button", { role: "tab" });
+		const paletteTool = el("button", {}, el("div", { "data-slot": "toggle-group" }));
+		for (const member of [railTab, paletteTool]) {
+			expect(clickFocused(member, "ArrowLeft")).toBe(true);
+			expect(clickFocused(member, "ArrowUp")).toBe(true);
+			expect(clickFocused(member, "Home")).toBe(true);
+			expect(clickFocused(member, " ")).toBe(false);
+			expect(clickFocused(member, ".")).toBe(false);
+		}
+	});
+
+	test("a dialog owns everything, even over a click-focused button inside it", () => {
+		// space on a settings-dialog button must never toggle playback behind
+		// the modal; the walk continues past the undecided button to the dialog
+		const dialogButton = el("button", {}, el("div", { role: "dialog" }));
+		expect(clickFocused(dialogButton, " ")).toBe(true);
+		expect(clickFocused(dialogButton, "Escape")).toBe(true);
+	});
+
+	test("the passthrough opt-out wins under either modality", () => {
+		// the frames panel's rows: stepping with `,` `.` while walking the rows
+		// is what the rows are for, tab-focused or clicked
+		const row = el("button", { "data-shortcut-passthrough": "" });
+		expect(clickFocused(row, " ")).toBe(false);
+		expect(keyboardFocused(row, " ")).toBe(false);
+		expect(keyboardFocused(row, "ArrowLeft")).toBe(false);
+	});
+
+	test("a real control nested inside an opt-out still owns its keys", () => {
+		const input = el("input", {}, el("div", { "data-shortcut-passthrough": "" }));
+		expect(clickFocused(input, " ")).toBe(true);
+	});
+
+	test("null and non-element targets own nothing", () => {
+		expect(clickFocused(null, " ")).toBe(false);
+		expect(clickFocused({}, " ")).toBe(false);
+		expect(keyboardFocused(null, " ")).toBe(false);
+	});
+});
+
+describe("withinDialog", () => {
+	test("finds a dialog anywhere up the chain", () => {
+		expect(withinDialog(el("div", { role: "dialog" }))).toBe(true);
+		expect(withinDialog(el("button", {}, el("div", {}, el("div", { role: "dialog" }))))).toBe(true);
+	});
+
+	test("plain chrome and page targets are outside", () => {
+		expect(withinDialog(el("button", {}, el("nav")))).toBe(false);
+		expect(withinDialog(null)).toBe(false);
+		expect(withinDialog({})).toBe(false);
 	});
 });
 

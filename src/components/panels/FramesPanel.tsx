@@ -78,8 +78,10 @@ export function FrameRow({
 			onClick={onActivate}
 			onKeyDown={suppressSpaceActivation}
 			// a row is a button to be clickable and tab-reachable, not because it
-			// wants the keyboard: withinInteractiveControl would otherwise kill
-			// `,` `.` space arrows home for as long as a clicked row keeps focus
+			// wants the keyboard: without the opt-out, controlOwnsKeydown would
+			// kill `,` `.` space arrows home while a tab-focused row holds
+			// keyboard-visible focus -- stepping frames while walking the rows
+			// is what the rows are for
 			data-shortcut-passthrough=""
 			className="grid w-full grid-cols-[40px_1fr_52px_52px_30px] items-center gap-1.5 px-[9px] py-[3px] text-left font-mono text-[10px] text-[#e4e4e7] data-[state=center]:bg-primary/[.07] data-[state=offlattice]:bg-[#ffcc22]/[.05]"
 		>
