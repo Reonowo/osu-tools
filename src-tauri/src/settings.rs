@@ -116,6 +116,10 @@ pub struct OverlayPrefs {
     pub cursor_path: bool,
     pub click_markers: bool,
     pub frame_markers: bool,
+    /// darkens idle (no-button) frame markers so they read against the cursor
+    /// path -- this viewer's own pref with no lazer counterpart (lazer's
+    /// framemarker.cs paints them path-pink), so it ships off
+    pub tint_idle_markers: bool,
     pub hide_cursor: bool,
     pub key_overlay: bool,
     /// ms of replay either side of `now` the analysis overlays cover
@@ -132,6 +136,7 @@ impl Default for OverlayPrefs {
             cursor_path: false,
             click_markers: false,
             frame_markers: false,
+            tint_idle_markers: false,
             hide_cursor: false,
             key_overlay: true,
             display_length: DISPLAY_LENGTH_DEFAULT,
@@ -284,6 +289,7 @@ mod tests {
                 cursor_path: true,
                 click_markers: true,
                 frame_markers: false,
+                tint_idle_markers: true,
                 hide_cursor: true,
                 key_overlay: false,
                 display_length: 1200.0,
@@ -398,6 +404,7 @@ mod tests {
                     "cursorPath": true,
                     "clickMarkers": true,
                     "frameMarkers": false,
+                    "tintIdleMarkers": true,
                     "hideCursor": true,
                     "keyOverlay": false,
                     "displayLength": 1200.0,
@@ -432,6 +439,7 @@ mod tests {
                     "cursorPath": false,
                     "clickMarkers": false,
                     "frameMarkers": false,
+                    "tintIdleMarkers": false,
                     "hideCursor": false,
                     "keyOverlay": true,
                     "displayLength": 800.0,
