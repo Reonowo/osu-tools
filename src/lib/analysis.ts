@@ -155,6 +155,95 @@ export function velocityTrace(
 	return { samples, peak, mean: elapsed <= 0 ? 0 : (distance / elapsed) * 1000 };
 }
 
+/** index of the first frame with time >= t. frames arrive sorted by time,
+ * the codec's own order -- editor/smooth.ts leans on the same invariant */
+function lowerBoundByTime(frames: readonly FrameDto[], time: number): number {
+	let lo = 0;
+	let hi = frames.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (frames[mid].time < time) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
+// a pair's velocity is attributed at its later frame's time, and a
+// duplicate-time (or out-of-order) pair carries none -- velocityTrace's own
+// conventions, kept identical so the two traces can never disagree on a value
+function pairVelocity(previous: FrameDto, frame: FrameDto): number {
+	const dt = frame.time - previous.time;
+	if (dt <= 0) return 0;
+	return (Math.hypot(frame.x - previous.x, frame.y - previous.y) / dt) * 1000;
+}
+
+/** the detail lane's per-slice velocity trace: the same px/s-between-frames
+ * measure as velocityTrace, resampled over one [startMs, endMs] slice at the
+ * slice's own resolution.
+ *
+ * velocityTrace's whole-replay samples spread VELOCITY_SAMPLES points over the
+ * full duration, so on a long replay a timeline slice held only a handful of
+ * them -- and none near the slice's leading edge, which left the lane's trace
+ * visibly cut off ahead of the playhead until the next re-slice caught up.
+ * buckets here are uniform in time (the lane places x by time, not by index)
+ * and keep their first maximum, velocityTrace's downsampling rationale; one
+ * raw pair past each edge rides along so the polyline spans the slice
+ * edge-to-edge instead of stopping at the last interior sample. at most
+ * bucketCount + 2 samples come back, whatever the frame density */
+export function velocityTraceWindow(
+	frames: readonly FrameDto[],
+	startMs: number,
+	endMs: number,
+	bucketCount: number
+): VelocitySample[] {
+	if (frames.length < 2 || !(endMs > startMs) || bucketCount < 1) return [];
+	// a stream entirely to one side of the slice draws nothing: the audio tail
+	// can outlive the frame stream, and resurrecting the stream's outermost
+	// pair as a lone off-slice sample would hand the lane's fill polygon a
+	// fabricated wedge over a slice that holds no data at all
+	if (frames[0].time > endMs) return [];
+	const bucketSpan = (endMs - startMs) / bucketCount;
+	const samples: VelocitySample[] = [];
+	const pushPair = (i: number) =>
+		samples.push({ time: frames[i].time, velocity: pairVelocity(frames[i - 1], frames[i]) });
+	// the walk starts at the binary-searched slice edge, so a re-slice on a
+	// capped multi-million-frame replay pays for the slice's frames, not the
+	// stream's
+	const firstInside = Math.max(1, lowerBoundByTime(frames, startMs));
+	// the mirror of the guard above: every frame precedes the slice
+	if (firstInside >= frames.length) return [];
+	if (firstInside >= 2) pushPair(firstInside - 1);
+	let bucket = -1;
+	let bestTime = 0;
+	let bestVelocity = -1;
+	const flush = () => {
+		if (bestVelocity >= 0) samples.push({ time: bestTime, velocity: bestVelocity });
+		bestVelocity = -1;
+	};
+	for (let i = firstInside; i < frames.length; i++) {
+		const time = frames[i].time;
+		if (time > endMs) {
+			flush();
+			pushPair(i);
+			return samples;
+		}
+		const inBucket = Math.min(bucketCount - 1, Math.floor((time - startMs) / bucketSpan));
+		if (inBucket !== bucket) {
+			flush();
+			bucket = inBucket;
+		}
+		const velocity = pairVelocity(frames[i - 1], frames[i]);
+		// strict comparison keeps the bucket's first maximum, velocityTrace's
+		// own tie rule
+		if (velocity > bestVelocity) {
+			bestVelocity = velocity;
+			bestTime = time;
+		}
+	}
+	flush();
+	return samples;
+}
+
 /** peak press density expressed as bpm, counting four presses to the beat --
  * the convention osu! players read stream speed in. density is measured as
  * intervals between presses inside the window, not raw press count: an

@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { aimTime, errorHistogram, hitErrors, meanHold, medianFrameDelta, peakTapBpm, velocityTrace } from "./analysis";
+import {
+	aimTime,
+	errorHistogram,
+	hitErrors,
+	meanHold,
+	medianFrameDelta,
+	peakTapBpm,
+	velocityTrace,
+	velocityTraceWindow
+} from "./analysis";
 import type { FrameDto, JudgementEventDto, RenderObject } from "./scene-types";
+import { windowAround } from "./timeline-view";
 
 function circleAt(startTime: number): RenderObject {
 	return {
@@ -183,6 +193,94 @@ describe("velocityTrace", () => {
 		const { samples } = velocityTrace(frames, 3);
 		expect(samples.map((s) => s.velocity)).toEqual([9000, 3000, 8000]);
 		expect(samples.map((s) => s.time)).toEqual([200, 400, 500]);
+	});
+});
+
+describe("velocityTraceWindow", () => {
+	test("resamples one slice at its own resolution, keeping each time bucket's maximum", () => {
+		// per-100ms velocities 1000/9000/2000/3000/8000/4000 px/s, attributed at
+		// times 100..600. slice [150, 550] in two buckets of 200ms: bucket one
+		// holds the pairs at 200 and 300, bucket two those at 400 and 500; the
+		// pairs at 100 and 600 straddle the edges and ride along raw
+		const speeds = [1000, 9000, 2000, 3000, 8000, 4000];
+		let x = 0;
+		const frames = [frame(0, 0, 0)];
+		speeds.forEach((v, i) => {
+			x += v / 10;
+			frames.push(frame((i + 1) * 100, x, 0));
+		});
+		const samples = velocityTraceWindow(frames, 150, 550, 2);
+		expect(samples.map((s) => s.velocity)).toEqual([1000, 9000, 8000, 4000]);
+		expect(samples.map((s) => s.time)).toEqual([100, 200, 500, 600]);
+	});
+
+	test("the slice's trace covers the window's leading edge at every playhead position between re-slices", () => {
+		// the reported symptom: the whole-replay downsample left a long replay's
+		// slice with no sample near its leading edge, so the lane's line ended
+		// short of the visible window until the next re-slice. mirror the lane's
+		// cycle -- slice a 3x-span neighbourhood, slide the window until the
+		// re-slice guard fires -- and require the trace to reach past the
+		// window's right edge the whole way
+		const durationMs = 360_000;
+		const stepMs = 15;
+		const frames: FrameDto[] = [];
+		for (let t = 0; t <= durationMs; t += stepMs) {
+			frames.push(frame(t, 256 + 100 * Math.cos(t / 300), 192 + 100 * Math.sin(t / 300)));
+		}
+		const bounds = { minTime: 0, maxTime: durationMs };
+		const spanMs = 20_000;
+		const tSlice = 180_000;
+		const neighbourhood = windowAround(bounds, tSlice, spanMs * 3);
+		const samples = velocityTraceWindow(frames, neighbourhood.start, neighbourhood.end, 600);
+		expect(samples.length).toBeGreaterThan(0);
+		const firstCovered = samples[0].time;
+		const lastCovered = samples[samples.length - 1].time;
+		expect(firstCovered).toBeLessThanOrEqual(neighbourhood.start);
+		for (let t = tSlice; ; t += 100) {
+			const view = windowAround(bounds, t, spanMs);
+			if (view.start < neighbourhood.start || view.end > neighbourhood.end) break;
+			expect(lastCovered).toBeGreaterThanOrEqual(view.end);
+		}
+	});
+
+	test("no phantom samples past the stream's own ends", () => {
+		// a slice wider than the stream gets exactly the stream's pairs (buckets
+		// narrow enough that neither downsamples away)
+		const frames = [frame(0, 0, 0), frame(100, 50, 0), frame(200, 100, 0)];
+		const samples = velocityTraceWindow(frames, -1000, 1000, 40);
+		expect(samples.map((s) => s.time)).toEqual([100, 200]);
+	});
+
+	test("a slice with no stream overlap yields nothing to draw", () => {
+		// the audio tail can outlive the frame stream; a slice out there must
+		// not resurrect the stream's outermost pair as a lone off-slice sample
+		// -- the lane's fill polygon would render it as a fabricated wedge over
+		// a slice that holds no data at all. both directions guard the same way
+		const frames = [frame(0, 0, 0), frame(100, 50, 0), frame(200, 100, 0)];
+		expect(velocityTraceWindow(frames, 1000, 2000, 4)).toEqual([]);
+		expect(velocityTraceWindow(frames, -2000, -1000, 4)).toEqual([]);
+	});
+
+	test("a slice between two frames still draws the crossing pair", () => {
+		// no pair lands inside [2000, 3000]; the straddling pairs on each side
+		// must come back so the line crosses the window instead of vanishing
+		const frames = [frame(0, 0, 0), frame(100, 50, 0), frame(5000, 100, 0)];
+		const samples = velocityTraceWindow(frames, 2000, 3000, 3);
+		expect(samples.map((s) => s.time)).toEqual([100, 5000]);
+	});
+
+	test("duplicate-time pairs carry zero velocity, never NaN", () => {
+		const frames = [frame(0, 0, 0), frame(0, 50, 0), frame(100, 50, 0)];
+		const samples = velocityTraceWindow(frames, 0, 100, 2);
+		expect(samples.every((s) => Number.isFinite(s.velocity))).toBe(true);
+		expect(samples.map((s) => s.velocity)).toEqual([0, 0]);
+	});
+
+	test("degenerate inputs yield an empty trace", () => {
+		expect(velocityTraceWindow([], 0, 100, 4)).toEqual([]);
+		expect(velocityTraceWindow([frame(0, 0, 0)], 0, 100, 4)).toEqual([]);
+		expect(velocityTraceWindow([frame(0, 0, 0), frame(10, 5, 0)], 100, 100, 4)).toEqual([]);
+		expect(velocityTraceWindow([frame(0, 0, 0), frame(10, 5, 0)], 0, 100, 0)).toEqual([]);
 	});
 });
 
