@@ -35,10 +35,10 @@ import { pressRunAt, pressRunFromIndex } from "@/editor/press-runs";
 import { pressLabel } from "@/editor/tool-commits";
 import { physicalButton, PHYSICAL_BUTTONS, type PhysicalKey } from "@/engine/buttons";
 import { holdSpansFlat, sliceSpansFlat } from "@/engine/interpolation";
-import { aimTime, velocityTraceWindow, type VelocitySample } from "@/lib/analysis";
+import { velocityTraceWindow, type VelocitySample } from "@/lib/analysis";
 import type { ObjectLaneEntry } from "@/lib/derive";
 import { formatTime } from "@/lib/format";
-import type { FrameDto, Grade, RenderObject } from "@/lib/scene-types";
+import type { FrameDto, RenderObject } from "@/lib/scene-types";
 import { audioExtendedBounds, type TimeBounds } from "@/lib/timeline";
 import {
 	clampSpan,
@@ -53,6 +53,8 @@ import {
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore, viewerStore } from "@/state/store";
+import { objectLaneClick } from "./object-lane-click";
+import { ObjectLane } from "./ObjectLane";
 import { Playhead, playheadTransform } from "./Playhead";
 import { useTrackMetrics } from "./use-track-metrics";
 
@@ -89,17 +91,6 @@ const HOLD_ORDER: readonly BitKey[] = PHYSICAL_BUTTONS.map((button) => button.ed
 /** px around a span edge where a pointer-down grabs that edge alone */
 const EDGE_ZONE_PX = 5;
 
-// osu!'s hit colours, demoted onto small elements rather than full-height
-// bars so colour carries the grade without dominating the row; null grade
-// (NotSimulated) draws neutral rather than fabricating an outcome
-const GRADE_HEX: Record<Grade, string> = {
-	great: "#66ccff",
-	ok: "#88b300",
-	meh: "#ffcc22",
-	miss: "#ed1121"
-};
-const UNGRADED_HEX = "#8a8a93";
-
 // the lane rows' pixel stack, top of the layer down: ruler, object lane,
 // K1/K2/M1/M2, velocity. the extended tether draws across rows and needs
 // these offsets; keep them in lockstep with the row classNames below
@@ -113,21 +104,6 @@ const TETHER_REST_Y_PX = RULER_ROW_PX + OBJECT_ROW_PX - 3;
 function holdRowCentreY(bit: BitKey): number {
 	const rowTop = RULER_ROW_PX + OBJECT_ROW_PX + HOLD_ORDER.indexOf(bit) * HOLD_ROW_PX;
 	return rowTop + Math.floor(HOLD_ROW_PX / 2);
-}
-
-/** the hover readout: type, grade, and the exact hit error. a miss states
- * the absent hit error without claiming the object was never pressed -- the
- * event stream cannot reliably tell a press-caused miss from a timeout */
-function objectTitle(object: RenderObject, entry: ObjectLaneEntry): string {
-	const type = object.kind.type;
-	if (entry.grade === null) return type;
-	if (entry.tether !== null) {
-		const error = entry.tether.toTime - entry.tether.fromTime;
-		const value = Number.isInteger(error) ? `${error}` : error.toFixed(1);
-		return `${type} · ${entry.grade} · ${error >= 0 ? "+" : ""}${value} ms`;
-	}
-	if (entry.grade === "miss") return `${type} · miss · no hit error`;
-	return `${type} · ${entry.grade}`;
 }
 
 // spans are retained per scene in holdSpansFlat's pair-packed form so a
@@ -507,29 +483,43 @@ export function DetailLanes() {
 		return Number.isInteger(index) ? index : null;
 	};
 
+	/** the same ancestor walk the two markers above get, scoping the click
+	 * handler's clear to the object lane's own row */
+	const withinObjectLane = (target: EventTarget | null): boolean =>
+		target instanceof Element && target.closest("[data-object-lane]") !== null;
+
 	// "fix this note": a single click on a tethered object selects its
 	// judging press and raises the keypress tab (opening the panel if it is
 	// closed, so the click never lands invisibly). the tether's stored rise
 	// frame index resolves the click through the existing press-run lookup --
 	// nothing is re-derived, and the index (not a time search) is what keeps
 	// duplicate-time streams honest: a release and re-press at one
-	// millisecond are two runs, and only the index names the judging one --
-	// and a tetherless object (a miss, a spinner, any object on a
-	// NotSimulated scene) does nothing rather than selecting something
-	// arbitrary. single clicks never seek, the detail tier's one rule.
-	// deliberately not behind the frame-edit gate: selection is inspection,
-	// and on a non-editable-but-simulated scene the keypress panel opens
-	// with its controls disabled, which is that panel's own job to say
+	// millisecond are two runs, and only the index names the judging one.
+	// a click on a genuine gap in the lane lets the press selection go, the
+	// same rule as the hold lane directly below it; the branches themselves
+	// are object-lane-click.ts's. single clicks never seek, the detail tier's
+	// one rule. deliberately not behind the frame-edit gate: selection is
+	// inspection, and on a non-editable-but-simulated scene the keypress
+	// panel opens with its controls disabled, which is that panel's own job
+	// to say
 	const onLaneClick = (e: ReactMouseEvent<HTMLDivElement>) => {
 		const state = viewerStore.getState();
 		if (state.mode !== "edit" || state.scene === null || state.derived === null) return;
 		const objectIndex = objectIndexForEvent(e.target);
-		if (objectIndex === null) return;
-		const tether = state.derived.objectLane[objectIndex]?.tether ?? null;
-		if (tether === null) return;
-		const run = pressRunFromIndex(state.scene.frames, tether.key, tether.pressFrameIndex);
-		if (run === null) return;
-		state.setPressSelection({ key: tether.key, startIndex: run.startIndex });
+		const tether = objectIndex === null ? null : (state.derived.objectLane[objectIndex]?.tether ?? null);
+		const run = tether === null ? null : pressRunFromIndex(state.scene.frames, tether.key, tether.pressFrameIndex);
+		const decision = objectLaneClick({
+			insideObjectLane: withinObjectLane(e.target),
+			objectIndex,
+			tether,
+			pressRunStartIndex: run?.startIndex ?? null
+		});
+		if (decision.kind === "nothing") return;
+		if (decision.kind === "clear") {
+			state.setPressSelection(null);
+			return;
+		}
+		state.setPressSelection(decision.selection);
 		state.setPanelTab("keys");
 	};
 
@@ -668,112 +658,14 @@ export function DetailLanes() {
 						))}
 					</div>
 
-					{/* the object lane: the beatmap's own objects at their own times,
-					the dock's fixed frame of reference -- nothing in this row moves
-					under editing. circles are marks, sliders and spinners spans with
-					head/repeat/tail marks inside them, each coloured by its grade.
-					hit-window bands sit behind the marks and at-rest tethers between
-					the two, every layer positioned once in neighbourhood percent */}
-					<div className="relative h-[17px] border-b border-[#101013]">
-						{timeline.hitWindowBands &&
-							hitWindowBand !== null &&
-							slicedObjects.map(({ index, object }) => {
-								const centre = aimTime(object);
-								if (centre === null) return null;
-								const width =
-									((2 * hitWindowBand.mehMs) / (neighbourhood.end - neighbourhood.start)) * 100;
-								return (
-									<div
-										key={index}
-										className="pointer-events-none absolute inset-y-[2px] rounded-[1px]"
-										style={{
-											left: percentOf(centre - hitWindowBand.mehMs),
-											width: `${width}%`,
-											background: hitWindowBand.background
-										}}
-									/>
-								);
-							})}
-						{timeline.tethers &&
-							slicedObjects.map(({ index, entry }) => {
-								// the at-rest tether: a hairline whose length is the hit
-								// error, drawn inside the lane so a dense stream never
-								// becomes a hatched mess; sub-pixel at coarse zoom by design
-								const tether = entry.tether;
-								if (tether === null) return null;
-								const errorMs = Math.abs(tether.toTime - tether.fromTime);
-								const width = (errorMs / (neighbourhood.end - neighbourhood.start)) * 100;
-								return (
-									<div
-										key={index}
-										className="pointer-events-none absolute bottom-[2px] h-px bg-[#e4e4e7]/70"
-										style={{
-											left: percentOf(Math.min(tether.fromTime, tether.toTime)),
-											width: `${width}%`
-										}}
-									/>
-								);
-							})}
-						{slicedObjects.map(({ index, object, entry }) => {
-							const colour = entry.grade === null ? UNGRADED_HEX : GRADE_HEX[entry.grade];
-							const title = objectTitle(object, entry);
-							const clickable = entry.tether !== null;
-							if (object.kind.type === "circle") {
-								return (
-									<div
-										key={index}
-										data-object-index={index}
-										title={title}
-										className={`absolute inset-y-0 -ml-[3.5px] w-[7px] ${clickable ? "cursor-pointer" : ""}`}
-										style={{ left: percentOf(object.startTime) }}
-									>
-										<div
-											className="absolute inset-y-[4px] left-[2px] w-[3px] rounded-[1px]"
-											style={{ background: colour }}
-										/>
-									</div>
-								);
-							}
-							const left = windowFraction(neighbourhood, object.startTime);
-							const right = windowFraction(neighbourhood, object.endTime);
-							const spinner = object.kind.type === "spinner";
-							return (
-								<div
-									key={index}
-									data-object-index={index}
-									title={title}
-									className={`absolute inset-y-0 min-w-[3px] ${clickable ? "cursor-pointer" : ""}`}
-									style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
-								>
-									<div
-										className="absolute inset-x-0 inset-y-[5px] rounded-[2px]"
-										style={
-											// spin sections read differently from tap sections:
-											// a spinner's span is hatched where a slider's is solid
-											spinner
-												? {
-														background: `repeating-linear-gradient(45deg, ${colour}8c 0 2px, transparent 2px 5px)`
-													}
-												: { background: `${colour}66` }
-										}
-									/>
-									{!spinner &&
-										timeline.nestedMarks &&
-										entry.nestedMarks.map((time, i) => {
-											const span = object.endTime - object.startTime;
-											const fraction = span > 0 ? (time - object.startTime) / span : 0;
-											return (
-												<div
-													key={i}
-													className="absolute inset-y-[3px] -ml-px w-[2px] rounded-[1px]"
-													style={{ left: `${fraction * 100}%`, background: colour }}
-												/>
-											);
-										})}
-								</div>
-							);
-						})}
-					</div>
+					<ObjectLane
+						objects={slicedObjects}
+						neighbourhood={neighbourhood}
+						hitWindowBand={hitWindowBand}
+						showHitWindowBands={timeline.hitWindowBands}
+						showTethers={timeline.tethers}
+						showNestedMarks={timeline.nestedMarks}
+					/>
 
 					{/* all four rows share one neutral span tone -- hue stays reserved
 					for judgement meaning, and only the gutter labels distinguish the
