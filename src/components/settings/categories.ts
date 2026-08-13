@@ -56,6 +56,7 @@ export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]
 	analysis: [
 		"overlays.clickMarkers",
 		"overlays.frameMarkers",
+		"overlays.tintIdleMarkers",
 		"overlays.cursorPath",
 		"overlays.hideCursor",
 		"overlays.keyOverlay",

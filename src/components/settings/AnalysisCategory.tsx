@@ -22,6 +22,11 @@ export const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string; descr
 		description: "draws one dot per replay frame, so sample density and pauses are visible"
 	},
 	{
+		key: "tintIdleMarkers",
+		label: "tint idle frame markers",
+		description: "darkens the dot of a frame with no button held, which otherwise blends into the cursor path"
+	},
+	{
 		key: "cursorPath",
 		label: "show cursor path",
 		description: "traces the line the cursor travelled through the display length below"
