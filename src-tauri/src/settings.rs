@@ -32,6 +32,17 @@ pub const DISPLAY_LENGTH_MIN: f64 = 200.0;
 pub const DISPLAY_LENGTH_MAX: f64 = 2000.0;
 pub const DISPLAY_LENGTH_DEFAULT: f64 = 800.0;
 
+/// the playfield grid's allowed spacings in osu!px, `0` meaning off -- the
+/// four sizes osu!'s own beatmap editor offers. anything else in the file is
+/// a hand edit or a newer build's value, and falls back to off
+pub const GRID_SPACINGS: [u32; 5] = [0, 4, 8, 16, 32];
+
+/// the beatmap background's black scrim, percent; 100 is fully black,
+/// matching osu!'s own dim control. the default is what the viewer drew
+/// hardcoded before the control existed
+pub const BACKGROUND_DIM_MAX: u32 = 100;
+pub const BACKGROUND_DIM_DEFAULT: u32 = 70;
+
 /// how many recently opened replays the start screen keeps
 pub const MAX_RECENTS: usize = 12;
 
@@ -109,6 +120,10 @@ pub struct OverlayPrefs {
     pub key_overlay: bool,
     /// ms of replay either side of `now` the analysis overlays cover
     pub display_length: f64,
+    /// the playfield grid's spacing in osu!px, one of `GRID_SPACINGS`, `0`
+    /// meaning off. one field rather than a flag plus a size, so the setting
+    /// cannot reach an incoherent state
+    pub playfield_grid: u32,
 }
 
 impl Default for OverlayPrefs {
@@ -120,6 +135,9 @@ impl Default for OverlayPrefs {
             hide_cursor: false,
             key_overlay: true,
             display_length: DISPLAY_LENGTH_DEFAULT,
+            // off: a grid the user never asked for must not appear over their
+            // replay
+            playfield_grid: 0,
         }
     }
 }
@@ -156,6 +174,10 @@ pub struct EffectPrefs {
     pub cursor_glow: bool,
     pub cursor_trail: bool,
     pub follow_points: bool,
+    /// percent 0-100, 100 fully black. it rides on this group for where it
+    /// belongs in the settings dialog, not because `enabled` gates it -- the
+    /// background dim is not an effect and applies whatever the master says
+    pub background_dim: u32,
 }
 
 impl Default for EffectPrefs {
@@ -167,6 +189,7 @@ impl Default for EffectPrefs {
             cursor_glow: true,
             cursor_trail: true,
             follow_points: true,
+            background_dim: BACKGROUND_DIM_DEFAULT,
         }
     }
 }
@@ -203,12 +226,16 @@ impl Settings {
     /// audio element or the renderer would choke on
     pub fn sanitize(&mut self) {
         self.volume = self.volume.min(100);
+        self.effects.background_dim = self.effects.background_dim.min(BACKGROUND_DIM_MAX);
         let length = self.overlays.display_length;
         self.overlays.display_length = if length.is_finite() {
             length.clamp(DISPLAY_LENGTH_MIN, DISPLAY_LENGTH_MAX)
         } else {
             DISPLAY_LENGTH_DEFAULT
         };
+        if !GRID_SPACINGS.contains(&self.overlays.playfield_grid) {
+            self.overlays.playfield_grid = 0;
+        }
         self.recents.truncate(MAX_RECENTS);
         for recent in &mut self.recents {
             recent.accuracy = if recent.accuracy.is_finite() {
@@ -260,6 +287,7 @@ mod tests {
                 hide_cursor: true,
                 key_overlay: false,
                 display_length: 1200.0,
+                playfield_grid: 16,
             },
             recents: Vec::new(),
             editing: EditingPrefs::default(),
@@ -270,6 +298,7 @@ mod tests {
                 cursor_glow: false,
                 cursor_trail: true,
                 follow_points: false,
+                background_dim: 35,
             },
             timeline: TimelinePrefs {
                 hit_window_bands: false,
@@ -333,6 +362,7 @@ mod tests {
                 cursor_glow: true,
                 cursor_trail: true,
                 follow_points: true,
+                background_dim: BACKGROUND_DIM_DEFAULT,
             },
             "every effect ships enabled, master included"
         );
@@ -371,6 +401,7 @@ mod tests {
                     "hideCursor": true,
                     "keyOverlay": false,
                     "displayLength": 1200.0,
+                    "playfieldGrid": 16,
                 },
                 "recents": [],
                 "editing": { "snapToLattice": true, "warnOnOverwrite": true },
@@ -381,6 +412,7 @@ mod tests {
                     "cursorGlow": false,
                     "cursorTrail": true,
                     "followPoints": false,
+                    "backgroundDim": 35,
                 },
                 "timeline": {
                     "hitWindowBands": false,
@@ -403,6 +435,7 @@ mod tests {
                     "hideCursor": false,
                     "keyOverlay": true,
                     "displayLength": 800.0,
+                    "playfieldGrid": 0,
                 },
                 "recents": [],
                 "editing": { "snapToLattice": true, "warnOnOverwrite": true },
@@ -413,6 +446,7 @@ mod tests {
                     "cursorGlow": true,
                     "cursorTrail": true,
                     "followPoints": true,
+                    "backgroundDim": 70,
                 },
                 "timeline": {
                     "hitWindowBands": true,
@@ -684,6 +718,53 @@ mod tests {
         assert_eq!(
             load_settings(dir.path()).overlays.display_length,
             DISPLAY_LENGTH_MAX
+        );
+    }
+
+    #[test]
+    fn a_playfield_grid_spacing_outside_the_allowed_set_falls_back_to_off() {
+        // same shape as the non-finite display length above: an unrecognised
+        // value is a hand edit or a newer build's, and off is the inert answer
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"overlays":{"playfieldGrid":24}}"#,
+        )
+        .unwrap();
+        assert_eq!(load_settings(dir.path()).overlays.playfield_grid, 0);
+
+        for spacing in GRID_SPACINGS {
+            let mut settings = Settings {
+                overlays: OverlayPrefs {
+                    playfield_grid: spacing,
+                    ..OverlayPrefs::default()
+                },
+                ..Settings::default()
+            };
+            settings.sanitize();
+            assert_eq!(settings.overlays.playfield_grid, spacing);
+        }
+    }
+
+    #[test]
+    fn a_hand_edited_background_dim_clamps_to_fully_black() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"effects":{"backgroundDim":900}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_settings(dir.path()).effects.background_dim,
+            BACKGROUND_DIM_MAX
+        );
+
+        // an untouched effects object keeps the default, which is what a fresh
+        // install renders the background at
+        std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
+        assert_eq!(
+            load_settings(dir.path()).effects.background_dim,
+            BACKGROUND_DIM_DEFAULT
         );
     }
 
