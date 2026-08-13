@@ -1,48 +1,52 @@
 //! deterministic judgement simulation over (processed beatmap, replay frames).
 //!
-//! semantics are the legacy/stable ruleset path -- classic slider behaviour,
-//! legacy note lock -- which is what lazer applies to every pre-lazer .osr
-//! via the auto-appended classic mod (legacyscoredecoder.cs:91-92).
+//! semantics are stable's own replay-time rules, ported from danser-go
+//! (`@ 8331b0ff`, the community-verified stable port) -- the legacy path a
+//! pre-lazer `.osr` was actually scored under. per docs/adr/0001 stable
+//! end-values are the oracle: where the pinned lazer source disagrees with
+//! what stable wrote into `.osr` headers, this module follows stable and the
+//! divergence from lazer is documented at the site. the reference map (file,
+//! line, and semantics per mechanism) is
+//! `.scratch/engine-parity-pass/stable-tracking-reference.md`.
+//!
+//! # the frame-driven walk
+//!
+//! stable judges everything at replay frame times (danser
+//! rcontroller.go:541-642, post-20190506 handling): per frame, in order --
+//! button machinery, the click walk over the processed objects, the normal
+//! walk (slider tracking with the one-unfinished-slider gate, spinner
+//! segments), the post walk (slider head timeout and end aggregate, circle
+//! timeout, spinner finalize) -- all with that frame's RAW cursor sample,
+//! never an interpolated one. between frames nothing is judged. after the
+//! last frame a synthetic once-per-millisecond walk with released buttons
+//! and the frozen cursor resolves whatever remains (rcontroller.go:630-641).
+//!
+//! a per-millisecond cadence between frames (zero-order-held cursor) was
+//! built and measured against the full sweep during the parity pass: it
+//! rescued elements the live client demonstrably dropped (held positions
+//! outlive the real cursor's departure) and lost 13 points of all-eight
+//! parity -- the frame-batch model is the validated one. its known cost is
+//! intra-frame ordering: two deadlines landing on one frame apply in walk
+//! order, not due-time order (the L033 residual class, triaged in
+//! `.scratch/engine-parity-pass/`).
+//!
+//! objects live on a `processed` list from their fade-in time
+//! (`start - preempt`) until judged, and leave it at millisecond
+//! granularity -- after the frame group that judged them, not within it
+//! (danser drains in `OsuRuleSet.Update` after the frame's processing).
+//! membership drives the note lock and the stack shield, which is what
+//! resolves the note-lock predecessor lifetime question (parity issue 06)
+//! on this path: see `presses::can_be_hit_stable`.
 //!
 //! # event time conventions
 //!
-//! lazer applies time-gated results on the first render frame after their
-//! condition holds; a deterministic simulator has no render frames, so each
-//! such event lands exactly at its boundary: circle and slider-head auto-miss
-//! at `start_time + meh`, ticks/repeats at their own time, the tail from
-//! `end - 36` (TAIL_LENIENCY), the aggregate and spinner results at the first
-//! instant they become decidable. windows end in .5ms while replay frames are
-//! integral, so boundary equality cannot arise from encoder-written input.
-//!
-//! # instant sweep
-//!
-//! the simulator walks a merged, time-sorted list of instants: every replay
-//! frame time plus every judgement deadline (circle auto-miss at
-//! `start_time + meh`; a slider's head auto-miss at the same offset, each
-//! tick/repeat's own time, the tail-leniency instant at `end_time +
-//! TAIL_LENIENCY`, and `end_time` itself for the classic aggregate; a
-//! spinner's own `end_time` for its final result). every frame entry runs
-//! one full update cycle -- presses, spinner rotation segment, tracking
-//! sweep over that frame's OWN cursor sample, nested-object drain --
-//! because that is lazer's frame-stability shape: one replay frame per
-//! step, one full update per step, duplicate timestamps included
-//! (spinner rotation only advances between consecutive frame instants; a
-//! trailing flush at the spinner's own end-of-window deadline covers
-//! whatever partial segment no frame instant ever swept, see
-//! `simulation::spinner`'s module doc for why one delta per segment
-//! reproduces lazer's per-render sum). deadline entries have no update of
-//! their own in lazer, so the deadline entries at one timestamp share one
-//! group: a settled-sample tracking sweep (the interpolated cursor keeps
-//! moving between frames), then each entry's due checks (circle and
-//! slider-head auto-miss, plus a spinner's final result), then one drain
-//! deciding nested ticks/repeats/tail and the classic aggregate. ties
-//! inside a phase resolve in beatmap order.
-//!
-//! presses occur only at frame times with the cursor at that frame's
-//! position (frame-accurate playback: `MousePositionAbsoluteInput` precedes
-//! `ReplayState` in `CollectPendingInputs`). two buttons newly down in one
-//! frame are two presses, left first (`press_edges`'s replay order)
+//! every judgement lands at the update that decided it -- a replay frame
+//! time, or a whole-millisecond tick of the post-replay walk. an unjudged
+//! object whose window closes mid-gap therefore resolves at the NEXT frame.
+//! real stable input has frames every few milliseconds throughout, so these
+//! times sit within one frame gap of the live client's
 
+pub(crate) mod buttons;
 pub(crate) mod presses;
 pub mod score;
 pub(crate) mod slider;
@@ -51,12 +55,11 @@ pub(crate) mod spinner;
 use std::cell::Cell;
 
 use crate::beatmap::difficulty::HitGrade;
-use crate::beatmap::slider_events::TAIL_LENIENCY;
-use crate::beatmap::{NestedKind, ProcessedBeatmap, ProcessedKind};
+use crate::beatmap::{ProcessedBeatmap, ProcessedKind};
 use crate::error::{resource_limit, EngineError, Result};
 use crate::limits;
-use crate::replay::frames::ReplayFrame;
-use crate::replay::interpolation::{cursor_state_at, press_edges, CursorSample};
+use crate::replay::frames::{Buttons, ReplayFrame};
+use buttons::ButtonMachine;
 use score::{JudgementKind, ScoreState};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -114,49 +117,35 @@ pub(crate) struct Ctx<'a> {
     pub states: Vec<ObjectState>,
     pub score: ScoreState,
     pub events: Vec<JudgementEvent>,
-    /// every slider's object index, computed once so the per-instant
-    /// tracking and drain sweeps never walk circles and spinners -- with
-    /// half a million objects and millions of instants both inside the
-    /// documented caps, a full born-suffix walk per instant multiplies into
-    /// crafted-input denial of service. what remains per instant is work
-    /// proportional to the born, unfinished sliders, the same set lazer
-    /// itself updates every render frame
-    pub slider_indices: Vec<usize>,
-    /// monotonic cursor into `slider_indices` below which every slider is
-    /// permanently finished -- advanced by slider::advance_first_active,
-    /// never rewound (`finished()` never reverts to false). keeps
-    /// update_tracking_all/drain_pending from re-scanning a settled prefix
-    /// at every single instant
-    pub first_active_slider: usize,
-    /// monotonic lower bound below which every object is permanently
-    /// fully judged -- advanced by presses::advance_first_unjudged, never
-    /// rewound. safe for the same reason as first_active_slider: fully_judged
-    /// never reverts to false once true, so this cursor only ever moves
-    /// forward, amortising the total scan cost of the receptor and note-lock
-    /// walks in simulation::presses across the whole sweep instead of
-    /// re-walking a settled prefix on every single press
-    pub first_unjudged: usize,
+    /// stable's processed list: object indices born (`start - preempt <=
+    /// now`) and not yet drained, in start-time order. every walk -- clicks,
+    /// note lock, tracking, post -- iterates this, so its length bounds the
+    /// per-update cost the way lazer's alive list bounds its own
+    pub processed: Vec<usize>,
+    /// index of the first object not yet born; objects are start-time
+    /// ordered, so this cursor only moves forward
+    pub next_born: usize,
+    /// the per-frame gameplay-button machinery (danser difficultyPlayer)
+    pub buttons: ButtonMachine,
+    /// stable's circle radius (danser difficulty.go:126-127): the f64 range
+    /// times the 1.00041 allowance, narrowed to f32 once. deliberately not
+    /// the renderer's lazer scale -- the two round differently in the last
+    /// f32 bit for fractional circle sizes, and the x87 follow compare needs
+    /// stable's exact input
+    pub stable_radius: f32,
     /// every spinner's object index, computed once so the frame-instant
-    /// rotation sweep never scans the full object list. nothing bounds how
-    /// many spinners a map declares (MAX_HIT_OBJECTS admits hundreds of
-    /// thousands), so the sweep additionally keeps a finished-prefix cursor
-    /// and breaks at the first spinner not yet born -- without those, the
-    /// frame-times-spinners product from a crafted file reaches the
-    /// trillions
+    /// rotation sweep never scans the full object list (see spinner.rs)
     pub spinner_indices: Vec<usize>,
     /// monotonic cursor into `spinner_indices` below which every spinner is
-    /// permanently finished -- advanced by spinner::advance_first_active,
-    /// never rewound (`finished` is one-way), mirroring first_active_slider
+    /// permanently finished -- advanced by spinner::advance_first_active
     pub first_active_spinner: usize,
-    /// per-instant walk steps spent so far -- press receptor and note-lock
-    /// walks, the slider tracking sweep, the drain's per-slider scan, and
-    /// the spinner rotation sweep -- charged against
-    /// limits::MAX_SIMULATION_SWEEP_STEPS by the instant loop. a Cell
-    /// because check_hittable walks under a shared borrow
+    /// per-update walk steps spent so far, charged against
+    /// limits::MAX_SIMULATION_SWEEP_STEPS by the driver. a Cell because
+    /// can_be_hit_stable walks under a shared borrow
     pub sweep_steps: Cell<u64>,
 }
 
-impl<'a> Ctx<'a> {
+impl Ctx<'_> {
     pub fn emit(&mut self, time: f64, object_index: usize, kind: JudgementKind) {
         self.score.apply(&kind);
         self.events.push(JudgementEvent {
@@ -168,56 +157,18 @@ impl<'a> Ctx<'a> {
         });
     }
 
-    pub fn fully_judged(&self, index: usize) -> bool {
-        match &self.states[index] {
-            ObjectState::Circle(c) => c.judged,
-            ObjectState::Slider(s) => s.finished(),
-            ObjectState::Spinner(s) => s.finished,
-        }
-    }
-
-    /// one per-instant walk step (receptor, note-lock, tracking, drain, or
-    /// spinner sweep), charged against limits::MAX_SIMULATION_SWEEP_STEPS
-    /// by the instant loop
+    /// one walk step (click, note-lock, tracking, post, or spinner sweep),
+    /// charged against limits::MAX_SIMULATION_SWEEP_STEPS by the driver
     pub fn charge_sweep_step(&self) {
         self.sweep_steps.set(self.sweep_steps.get() + 1);
     }
-
-    /// born and not fully judged; with a uniform map preempt an earlier
-    /// object is always born whenever a later one is, so candidates at or
-    /// before a target reduce to the unjudged test. this deliberately
-    /// conflates "alive" with "unjudged", unlike lazer's own AliveObjects
-    /// (DrawableRuleset.cs), which keeps a judged object alive through its
-    /// fade-out animation. a judged object can never gate or consume a press
-    /// itself, but its *presence* in lazer's alive list can still matter:
-    /// legacyhitpolicy.cs:44-49 consults only `aliveObjects[index - 1]`, so
-    /// a judged-but-still-fading circle occupying that slot shields the
-    /// target from an older unjudged stacked object that this definition
-    /// finds instead (see TODO.md, "note-lock predecessor lifetime"). every
-    /// other use of alive() is unaffected; closing the gap needs a
-    /// per-kind/per-result drawable-lifetime model, not a tweak here
-    pub fn alive(&self, index: usize, time: f64) -> bool {
-        !self.fully_judged(index) && time >= self.beatmap.objects[index].start_time - self.beatmap.preempt
-    }
-
-    /// the settled cursor sample at an arbitrary instant, for the
-    /// cursor-dependent phase (slider tracking, spinner rotation) in the
-    /// sweep. panics only if frames is empty, which simulate() already
-    /// rejects before a Ctx is ever built
-    pub fn cursor_at(&self, time: f64) -> CursorSample {
-        cursor_state_at(self.frames, time).expect("simulate() rejects empty frame lists")
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Phase {
-    Frame(usize),
-    Deadline(usize),
 }
 
 /// frames must be time-sorted ascending -- `replay::frames::convert_frames`
-/// guarantees this for every replay this crate decodes; an empty frame list
-/// is rejected below rather than assumed away
+/// guarantees this for every replay this crate decodes (and already applies
+/// stable's own first-frame fixups, intro-frame removal and seed-frame drop,
+/// so the walk consumes the converted stream as-is); an empty frame list is
+/// rejected below rather than assumed away
 pub fn simulate(beatmap: &ProcessedBeatmap, frames: &[ReplayFrame]) -> Result<JudgementTimeline> {
     simulate_with_sweep_budget(beatmap, frames, limits::MAX_SIMULATION_SWEEP_STEPS)
 }
@@ -240,17 +191,9 @@ fn simulate_with_sweep_budget(
         .iter()
         .map(|obj| match &obj.kind {
             ProcessedKind::Circle => ObjectState::Circle(CircleState::default()),
-            ProcessedKind::Slider(s) => ObjectState::Slider(slider::SliderState::new(s.nested.len())),
+            ProcessedKind::Slider(s) => ObjectState::Slider(slider::SliderState::new(obj.start_time, s)),
             ProcessedKind::Spinner(_) => ObjectState::Spinner(spinner::SpinnerState::default()),
         })
-        .collect();
-
-    let slider_indices: Vec<usize> = beatmap
-        .objects
-        .iter()
-        .enumerate()
-        .filter(|(_, obj)| matches!(obj.kind, ProcessedKind::Slider(_)))
-        .map(|(i, _)| i)
         .collect();
 
     let spinner_indices: Vec<usize> = beatmap
@@ -261,169 +204,77 @@ fn simulate_with_sweep_budget(
         .map(|(i, _)| i)
         .collect();
 
+    // stable's integer 50-window (danser Hit50 = int64 of the f64 range):
+    // meh() is floor(range) - 0.5, so + 0.5 recovers the truncated integer.
+    // circle timeout and slider head timeout compare strictly against it
+    let hit50 = beatmap.windows.meh() + 0.5;
+
     let mut ctx = Ctx {
         beatmap,
         frames,
         states,
         score: ScoreState::default(),
         events: Vec::new(),
-        slider_indices,
-        first_active_slider: 0,
-        first_unjudged: 0,
+        processed: Vec::new(),
+        next_born: 0,
+        buttons: ButtonMachine::default(),
+        stable_radius: beatmap.stable_radius,
         spinner_indices,
         first_active_spinner: 0,
         sweep_steps: Cell::new(0),
     };
 
-    // merged instants: frames (phase 0 at a timestamp) then deadlines (phase 1)
-    let mut instants: Vec<(f64, u8, Phase)> = Vec::new();
-    for (i, frame) in frames.iter().enumerate() {
-        instants.push((frame.time, 0, Phase::Frame(i)));
-    }
-    for (i, obj) in beatmap.objects.iter().enumerate() {
-        match &obj.kind {
-            ProcessedKind::Circle => {
-                instants.push((obj.start_time + beatmap.windows.meh(), 1, Phase::Deadline(i)));
-            }
-            ProcessedKind::Slider(s) => {
-                // head auto-miss, same boundary as a plain circle's
-                instants.push((obj.start_time + beatmap.windows.meh(), 1, Phase::Deadline(i)));
-                // each tick/repeat's own due time (head and tail are handled
-                // by the two entries around them instead)
-                for nested in &s.nested {
-                    if matches!(nested.kind, NestedKind::Tick | NestedKind::Repeat) {
-                        instants.push((nested.time, 1, Phase::Deadline(i)));
-                    }
-                }
-                // tail leniency window open, then its close/aggregate instant
-                instants.push((obj.end_time + TAIL_LENIENCY, 1, Phase::Deadline(i)));
-                instants.push((obj.end_time, 1, Phase::Deadline(i)));
-            }
-            ProcessedKind::Spinner(_) => {
-                // the spinner-end deadline: drawablespinner.cs:247-273
-                instants.push((obj.end_time, 1, Phase::Deadline(i)));
-            }
-        }
-    }
-    instants.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-
-    let presses = press_edges(frames);
-    let mut press_cursor = 0usize;
-
-    // instants sharing a timestamp are handled as one group. every frame
-    // entry gets its own full update cycle -- presses, spinner segment,
-    // tracking sweep, drain -- because that is lazer's frame-stability
-    // shape: framedreplayinputhandler.cs:138-146 advances one replay frame
-    // per step and framestabilitycontainer.cs:107-122 runs a full update
-    // per step, so duplicate-timestamp frames each observe their OWN
-    // cursor sample, not the settled last-at-timestamp sample. deadline
-    // entries have no lazer-side update of their own (lazer decides them
-    // inside the checkforresult of whatever update is current), so their
-    // group shares one settled-sample sweep and one drain -- running those
-    // per duplicate deadline entry would multiply the sweeps' cost by the
-    // number of same-time entries (every slider sharing a start time
-    // contributes an identical deadline instant, which a crafted map turns
-    // quadratic). the sweep-step budget bounds what either shape can spend
+    // the frame walk: frames sharing a timestamp form one group -- each
+    // frame gets its own full update, the drain runs once per group (danser
+    // drains per millisecond, after that millisecond's frames). between
+    // groups, every whole millisecond runs the intermediate walks with the
+    // held cursor and settled (edge-free) buttons -- the live cadence the
+    // module doc describes
     let mut group_start = 0usize;
-    while group_start < instants.len() {
-        let time = instants[group_start].0;
+    while group_start < frames.len() {
+        let time = frames[group_start].time;
         let mut group_end = group_start + 1;
-        let mut has_deadline = matches!(instants[group_start].2, Phase::Deadline(_));
-        let mut has_frame = matches!(instants[group_start].2, Phase::Frame(_));
-        while group_end < instants.len() && instants[group_end].0 == time {
-            has_deadline |= matches!(instants[group_end].2, Phase::Deadline(_));
-            has_frame |= matches!(instants[group_end].2, Phase::Frame(_));
+        while group_end < frames.len() && frames[group_end].time == time {
             group_end += 1;
         }
-
-        // phase 1: one full update cycle per frame entry, in frame order
-        for &(_, _, phase) in &instants[group_start..group_end] {
-            if let Phase::Frame(frame_index) = phase {
-                // this frame's own sample, not cursor_at(time): with
-                // duplicate timestamps the latter would resolve every
-                // entry to the last frame's state
-                let sample = CursorSample {
-                    pos: frames[frame_index].pos,
-                    buttons: frames[frame_index].buttons,
-                };
-                while press_cursor < presses.len() && presses[press_cursor].frame_index <= frame_index {
-                    let press = presses[press_cursor];
-                    if press.frame_index == frame_index {
-                        presses::handle_press(&mut ctx, press.time, press.action, sample);
-                    }
-                    press_cursor += 1;
-                }
-                spinner::process_frame_segment(&mut ctx, frame_index);
-                spinner::process_stable_scoring_frame(&mut ctx, frame_index);
-                slider::update_tracking_all_with_cursor(&mut ctx, time, sample);
-                slider::drain_pending(&mut ctx, time);
-                // checked per frame entry rather than per group: a group
-                // can hold arbitrarily many zero-delta frames, so a
-                // per-group check would let one group overshoot unboundedly
-                if ctx.sweep_steps.get() > sweep_budget {
-                    return Err(resource_limit(
-                        "MAX_SIMULATION_SWEEP_STEPS",
-                        sweep_budget,
-                        ctx.sweep_steps.get(),
-                    ));
-                }
+        birth(&mut ctx, time);
+        for frame_index in group_start..group_end {
+            ctx.buttons.update(frames[frame_index].buttons);
+            let cursor_pos = frames[frame_index].pos;
+            presses::update_clicks(&mut ctx, time, cursor_pos);
+            update_normal(&mut ctx, time, cursor_pos, Some(frame_index));
+            update_post(&mut ctx, time, hit50);
+            // checked per frame entry rather than per group: a group can
+            // hold arbitrarily many zero-delta frames, so a per-group check
+            // would let one group overshoot unboundedly
+            if ctx.sweep_steps.get() > sweep_budget {
+                return Err(resource_limit(
+                    "MAX_SIMULATION_SWEEP_STEPS",
+                    sweep_budget,
+                    ctx.sweep_steps.get(),
+                ));
             }
         }
+        drain(&mut ctx);
+        group_start = group_end;
+    }
 
-        if !has_deadline {
-            group_start = group_end;
-            continue;
-        }
-
-        // phase 2: the settled-sample slider sweep, deadline-only
-        // timestamps only -- the interpolated cursor keeps moving between
-        // frames, so such a timestamp must resample. after a frame entry at
-        // this same timestamp, tracking already reflects the settled state
-        // (the last frame's own sample IS the settled sample), and running
-        // a second update here would diverge from lazer's one-update-per-
-        // frame shape: update_tracking_with_validity reads last_pressed_*
-        // as the previous update's buttons, so a same-time re-run would see
-        // this frame's freshly written buttons as if a frame had elapsed
-        // and could start the any-key acceptance window one frame early
-        if !has_frame {
-            slider::update_tracking_all(&mut ctx, time);
-        }
-
-        // phase 3: due deadlines
-        for &(_, _, phase) in &instants[group_start..group_end] {
-            let Phase::Deadline(object_index) = phase else {
-                continue;
-            };
-            let circle_due = matches!(&ctx.states[object_index], ObjectState::Circle(c) if !c.judged);
-            if circle_due {
-                // presses at this same instant already ran (phase order
-                // above); past it the window is unreachable, so the miss
-                // is fact -- recorded at the scheduled boundary per this
-                // module's event-time conventions
-                match &mut ctx.states[object_index] {
-                    ObjectState::Circle(c) => c.judged = true,
-                    _ => unreachable!("circle_due only matches ObjectState::Circle"),
-                }
-                ctx.emit(time, object_index, JudgementKind::Circle(HitGrade::Miss));
-            }
-
-            let start = ctx.beatmap.objects[object_index].start_time;
-            let head_due = time >= start + ctx.beatmap.windows.meh()
-                && matches!(&ctx.states[object_index], ObjectState::Slider(s) if !s.head_judged());
-            if head_due {
-                slider::judge_nested(&mut ctx, object_index, 0, time, false);
-            }
-
-            let spinner_due = time >= ctx.beatmap.objects[object_index].end_time
-                && matches!(&ctx.states[object_index], ObjectState::Spinner(s) if !s.finished);
-            if spinner_due {
-                spinner::finalize(&mut ctx, object_index, time);
-            }
-        }
-
-        // phase 4: slider nested-object drain and classic aggregate, once
-        // per deadline group
-        slider::drain_pending(&mut ctx, time);
+    // the post-replay walk (rcontroller.go:630-641): once per millisecond
+    // with released buttons and the frozen last cursor position, until every
+    // object resolves. terminates because every object has a fixed terminal
+    // time (timeout, end, or finalize), all bounded by the last end_time
+    // plus the 50-window; the sweep budget backstops it regardless
+    let last = frames.last().expect("emptiness rejected above");
+    let mut time = last.time.floor() + 1.0;
+    while ctx.next_born < beatmap.objects.len() || !ctx.processed.is_empty() {
+        birth(&mut ctx, time);
+        ctx.buttons.update(Buttons::default());
+        // released buttons produce no click edges, so the click walk is
+        // skipped outright
+        update_normal(&mut ctx, time, last.pos, None);
+        update_post(&mut ctx, time, hit50);
+        drain(&mut ctx);
+        ctx.charge_sweep_step();
         if ctx.sweep_steps.get() > sweep_budget {
             return Err(resource_limit(
                 "MAX_SIMULATION_SWEEP_STEPS",
@@ -431,8 +282,7 @@ fn simulate_with_sweep_budget(
                 ctx.sweep_steps.get(),
             ));
         }
-
-        group_start = group_end;
+        time += 1.0;
     }
 
     let totals = HitTotals {
@@ -460,6 +310,98 @@ fn simulate_with_sweep_budget(
         totals,
         spinner_scoring,
     })
+}
+
+/// moves every object whose fade-in time has arrived onto the processed
+/// list (danser ruleset.go:306-319 queue drain). objects are start-time
+/// ordered with a uniform preempt, so the cursor never skips
+fn birth(ctx: &mut Ctx<'_>, time: f64) {
+    while ctx.next_born < ctx.beatmap.objects.len()
+        && ctx.beatmap.objects[ctx.next_born].start_time - ctx.beatmap.preempt <= time
+    {
+        ctx.processed.push(ctx.next_born);
+        ctx.next_born += 1;
+    }
+}
+
+/// the normal walk: spinner rotation for frame updates, then slider tracking
+/// under stable's one-unfinished-slider gate (ruleset.go:444-472 -- only
+/// the FIRST slider with an unjudged end receives tracking per update;
+/// every later slider is skipped that pass)
+fn update_normal(ctx: &mut Ctx<'_>, time: f64, cursor_pos: crate::math::Vec2, frame_index: Option<usize>) {
+    if let Some(frame_index) = frame_index {
+        spinner::process_frame_segment(ctx, frame_index);
+        spinner::process_stable_scoring_frame(ctx, frame_index);
+    }
+    let mut unfinished_slider_seen = false;
+    let mut idx = 0;
+    while idx < ctx.processed.len() {
+        let index = ctx.processed[idx];
+        idx += 1;
+        if !matches!(ctx.beatmap.objects[index].kind, ProcessedKind::Slider(_)) {
+            continue;
+        }
+        ctx.charge_sweep_step();
+        if unfinished_slider_seen {
+            continue;
+        }
+        let is_hit = matches!(&ctx.states[index], ObjectState::Slider(s) if s.is_hit);
+        if !is_hit {
+            unfinished_slider_seen = true;
+            // slider.go:244 -- tracking begins at the TRUNCATED start time
+            // (`time >= int64(GetStartTime())`)
+            if time >= (ctx.beatmap.objects[index].start_time as i64) as f64 {
+                slider::update_for(ctx, index, time, cursor_pos);
+            }
+        }
+    }
+}
+
+/// the post walk (ruleset.go:474-484): every processed object's end-of-life
+/// checks at this update's time, in list order
+fn update_post(ctx: &mut Ctx<'_>, time: f64, hit50: f64) {
+    let mut idx = 0;
+    while idx < ctx.processed.len() {
+        let index = ctx.processed[idx];
+        idx += 1;
+        ctx.charge_sweep_step();
+        match &ctx.beatmap.objects[index].kind {
+            ProcessedKind::Circle => {
+                // circle.go:104 -- timeout strictly past int64(end) + hit50
+                let judged = matches!(&ctx.states[index], ObjectState::Circle(c) if c.judged);
+                if !judged && time > (ctx.beatmap.objects[index].end_time as i64) as f64 + hit50 {
+                    match &mut ctx.states[index] {
+                        ObjectState::Circle(c) => c.judged = true,
+                        _ => unreachable!("kind matched circle above"),
+                    }
+                    ctx.emit(time, index, JudgementKind::Circle(HitGrade::Miss));
+                }
+            }
+            ProcessedKind::Slider(_) => slider::update_post_for(ctx, index, time, hit50),
+            ProcessedKind::Spinner(_) => {
+                let finished = matches!(&ctx.states[index], ObjectState::Spinner(s) if s.finished);
+                if !finished && time >= ctx.beatmap.objects[index].end_time {
+                    // finalize flushes the segment between the last frame and
+                    // its own clamp at end_time, so a late first-update-past-
+                    // the-end loses no rotation
+                    spinner::finalize(ctx, index, time);
+                }
+            }
+        }
+    }
+}
+
+/// removes judged objects from the processed list (danser
+/// ruleset.go:289-304 UpdatePost drain). runs after a frame group, never
+/// inside one: an object judged this millisecond still occupies its slot
+/// for the rest of the millisecond's processing
+fn drain(ctx: &mut Ctx<'_>) {
+    let states = &ctx.states;
+    ctx.processed.retain(|&index| match &states[index] {
+        ObjectState::Circle(c) => !c.judged,
+        ObjectState::Slider(s) => !s.finished(),
+        ObjectState::Spinner(s) => !s.finished,
+    });
 }
 
 /// shared test-map builders and replay-frame helpers, split out so both
@@ -491,7 +433,7 @@ pub(crate) mod test_support {
             stack_leniency: 0.7,
             hp_drain_rate: 5.0,
             circle_size: 4.0,
-            overall_difficulty: 5.0, // windows 49.5 / 99.5 / 149.5
+            overall_difficulty: 5.0, // windows 49.5 / 99.5 / 149.5 (stable ints 50/100/150)
             approach_rate: 9.0,      // preempt 600
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
@@ -672,7 +614,9 @@ pub(crate) mod test_support {
     }
 
     /// idle frame well before everything plus a trailing idle frame, so
-    /// button edges are unambiguous
+    /// button edges are unambiguous and late timeouts have a frame to land
+    /// on (stable resolves everything at update times; the trailing frame
+    /// at 100_000 is where a wholly-unattended object's timeout lands)
     pub(crate) fn wrap(frames: Vec<ReplayFrame>) -> Vec<ReplayFrame> {
         let mut all = vec![frame(-1000.0, 0.0, 0.0, 0)];
         all.extend(frames);
@@ -698,30 +642,21 @@ mod tests {
 
     #[test]
     fn sweep_step_budget_boundary() {
-        // 40 same-start circles far from the cursor: every press walks all
-        // 40 born, unjudged receptors and consumes nothing, so each press
-        // charges exactly 40 steps and nothing else charges at all (no
-        // sliders or spinners, so the tracking, drain, and spinner sweeps
-        // iterate nothing; an unconsumed press never reaches the note-lock
-        // walks). 25 presses land exactly on a budget of 1000
-        let circles: Vec<(f64, f32, f32)> = (0..40).map(|i| (5000.0, i as f32 * 8.0, 0.0)).collect();
-        let beatmap = circle_map(&circles);
+        // one circle, one press frame. hand-count of charged steps:
+        // frame -1000 (wrap lead): nothing born, no edges -> 0.
+        // frame 1000 (press): birth -> processed [0]; click walk: 1 per-
+        // object step + can_be_hit_stable's shield-position walk (1) and
+        // note-lock walk breaking at the target (1) = 3; normal walk 0 (no
+        // sliders); post walk 1 (the circle's visit). = 4.
+        // frame 100_000: circle drained, everything resolved -> 0.
+        // post-replay walk: never entered (nothing left). total = 4
+        let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
+        let frames = wrap(vec![frame(1000.0, 256.0, 192.0, Buttons::LEFT_1)]);
 
-        // born from 4400 (preempt 600); alternating frames every 2ms from
-        // 4402 produce one left-press edge per held frame, all before any
-        // judgement deadline
-        let mut raw_frames = Vec::new();
-        for press in 0..25 {
-            let t = 4402.0 + press as f64 * 4.0;
-            raw_frames.push(frame(t, 5000.0, 5000.0, Buttons::LEFT_1));
-            raw_frames.push(frame(t + 2.0, 5000.0, 5000.0, 0));
-        }
-        let frames = wrap(raw_frames);
+        let timeline = simulate_with_sweep_budget(&beatmap, &frames, 4).unwrap();
+        assert_eq!(timeline.totals.count_300, 1);
 
-        let timeline = simulate_with_sweep_budget(&beatmap, &frames, 1000).unwrap();
-        assert_eq!(timeline.totals.count_miss, 40); // nothing was ever hit
-
-        match simulate_with_sweep_budget(&beatmap, &frames, 999) {
+        match simulate_with_sweep_budget(&beatmap, &frames, 3) {
             Err(EngineError::ResourceLimit {
                 cap: "MAX_SIMULATION_SWEEP_STEPS",
                 ..
@@ -750,10 +685,16 @@ mod tests {
 
     #[test]
     fn window_edges_step_through_ok_meh_and_early_miss() {
+        // stable windows at od 5 are the truncated integers 50/100/150 with
+        // strict less-than (danser GetResultForDelta), which the half-ms
+        // windows reproduce exactly for the integral deltas real input
+        // produces: 49 -> 300, 50 -> 100, 100 -> 50, 149 -> 50, 150 -> miss
         for (offset, expected) in [
             (49.0, JudgementKind::Circle(HitGrade::Great)),
             (50.0, JudgementKind::Circle(HitGrade::Ok)),
             (100.0, JudgementKind::Circle(HitGrade::Meh)),
+            (149.0, JudgementKind::Circle(HitGrade::Meh)),
+            (150.0, JudgementKind::Circle(HitGrade::Miss)), // a late click inside 400 judges miss
             (-160.0, JudgementKind::Circle(HitGrade::Miss)), // early press inside 400
         ] {
             let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
@@ -767,47 +708,61 @@ mod tests {
     }
 
     #[test]
-    fn an_unclicked_circle_misses_when_the_meh_window_closes() {
+    fn an_unclicked_circle_misses_at_the_first_update_past_the_window() {
+        // stable resolves timeouts at update times only: with no frames
+        // between the window's close and the trailing wrap frame, the miss
+        // lands on that trailing frame -- and a frame exactly at end + 150
+        // is NOT yet a miss (strict greater-than, circle.go:104)
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(&beatmap, &wrap(vec![])).unwrap();
+        let timeline = simulate(&beatmap, &wrap(vec![frame(1150.0, 50.0, 50.0, 0)])).unwrap();
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
-        // convention: the miss lands exactly when can_be_hit turns false
-        assert_eq!(timeline.events[0].time, 1000.0 + 149.5);
+        assert_eq!(timeline.events[0].time, 100_000.0);
+
+        let timeline = simulate(&beatmap, &wrap(vec![frame(1151.0, 50.0, 50.0, 0)])).unwrap();
+        assert_eq!(timeline.events[0].time, 1151.0);
         assert_eq!(timeline.totals.count_miss, 1);
     }
 
     #[test]
     fn a_press_far_outside_the_miss_window_shakes_and_consumes_nothing_judgeable() {
-        // result_for is none past 400ms -> policy shake, no judgement; the
-        // circle still misses on its own later
+        // 600ms early is at-or-past the 400ms hittable range -> shake, no
+        // judgement; the circle still times out on its own later
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
         let timeline = simulate(&beatmap, &wrap(vec![frame(400.0, 256.0, 192.0, Buttons::LEFT_1)])).unwrap();
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
-        assert_eq!(timeline.events[0].time, 1149.5);
+        assert_eq!(timeline.events[0].time, 100_000.0);
     }
 
     #[test]
-    fn note_lock_shakes_a_later_circle_while_an_earlier_one_is_hittable() {
-        // legacyhitpolicy.cs:54-67: b is blocked while a (endtime + 3 < b's
-        // start) is alive and unjudged; the press is consumed by b's receptor
-        // and judges nothing. spacing keeps a's meh window (closing 1349.5)
-        // open across the first press and closed before the second
+    fn note_lock_shakes_a_press_while_an_earlier_object_is_unhit() {
+        // ruleset.go:650-660: b is locked while a (end + 3 < b's start) is
+        // unhit. the lock reads batch with the frame: a's timeout lands in
+        // the POST walk of the frame past its window, and the click walk
+        // runs first -- so a press for b on that very frame is still
+        // locked; only a later press can hit b. (an expiry-aware read was
+        // measured and rejected -- see the note in presses.rs)
         let beatmap = circle_map(&[(1200.0, 100.0, 100.0), (1300.0, 300.0, 100.0)]);
         let timeline = simulate(
             &beatmap,
             &wrap(vec![
-                frame(1250.0, 300.0, 100.0, Buttons::LEFT_1), // blocked: a unjudged
+                frame(1250.0, 300.0, 100.0, Buttons::LEFT_1), // locked: a unhit
                 frame(1260.0, 300.0, 100.0, 0),
-                frame(1360.0, 300.0, 100.0, Buttons::LEFT_1), // a missed at 1349.5 -> b hittable
+                frame(1360.0, 300.0, 100.0, Buttons::LEFT_1), // still locked: a times out post-click this frame
+                frame(1370.0, 300.0, 100.0, 0),
+                frame(1380.0, 300.0, 100.0, Buttons::LEFT_1), // a resolved and drained -> b hittable
             ]),
         )
         .unwrap();
+        let a_events: Vec<_> = timeline.events.iter().filter(|e| e.object_index == 0).collect();
+        assert_eq!(a_events.len(), 1);
+        assert_eq!(a_events[0].kind, JudgementKind::Circle(HitGrade::Miss));
+        assert_eq!(a_events[0].time, 1360.0);
         let b_events: Vec<_> = timeline.events.iter().filter(|e| e.object_index == 1).collect();
         assert_eq!(b_events.len(), 1);
-        assert_eq!(b_events[0].kind, JudgementKind::Circle(HitGrade::Ok)); // 60ms late
-        assert_eq!(b_events[0].time, 1360.0);
+        assert_eq!(b_events[0].kind, JudgementKind::Circle(HitGrade::Ok)); // 80ms late
+        assert_eq!(b_events[0].time, 1380.0);
     }
 
     #[test]
@@ -832,7 +787,10 @@ mod tests {
     }
 
     #[test]
-    fn two_buttons_in_one_frame_are_two_presses_left_first() {
+    fn two_buttons_in_one_frame_are_two_edges_left_first() {
+        // one click walk sees both edges: the earlier circle consumes left,
+        // the later circle consumes right in the same pass (the earlier one
+        // is judged mid-walk, so it neither locks nor shields the later)
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0), (1049.0, 256.0, 192.0)]);
         let timeline = simulate(
             &beatmap,
@@ -844,27 +802,28 @@ mod tests {
             )]),
         )
         .unwrap();
-        // left press hits circle 0 (great), right press falls through to
-        // circle 1 (49ms early -> still great at od5)
         assert_eq!(timeline.events.len(), 2);
         assert_eq!(timeline.events[0].object_index, 0);
         assert_eq!(timeline.events[1].object_index, 1);
-        assert_eq!(timeline.events[1].kind, JudgementKind::Circle(HitGrade::Great));
+        assert_eq!(timeline.events[1].kind, JudgementKind::Circle(HitGrade::Great)); // 49ms early
     }
 
     #[test]
     fn a_press_off_every_circle_hits_nothing() {
+        // out of range with a clickable action is a positional miss: edges
+        // are kept, nothing judges, the circle times out on the trailing frame
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
         let timeline = simulate(&beatmap, &wrap(vec![frame(1000.0, 500.0, 50.0, Buttons::LEFT_1)])).unwrap();
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
+        assert_eq!(timeline.events[0].time, 100_000.0);
     }
 
     #[test]
     fn previous_object_already_judged_does_not_block_the_press() {
-        // legacyhitpolicy.cs:44-49: the note-lock gate only fires while the
-        // stacked previous object is still alive; once it is judged, the
-        // backward search for a blocking predecessor comes up empty and the
-        // press proceeds normally
+        // a judged predecessor leaves the processed list at the end of its
+        // frame group (drain at millisecond granularity), so by the later
+        // press it neither locks nor shields -- the stable-membership
+        // answer to what lazer models with drawable lifetimes
         let beatmap = circle_map(&[
             (1200.0, 256.0, 192.0),
             (1250.0, 256.0, 192.0),
@@ -876,7 +835,7 @@ mod tests {
             &wrap(vec![
                 frame(1200.0, 256.0, 192.0, Buttons::LEFT_1), // hits circle 0
                 frame(1210.0, 256.0, 192.0, 0),
-                frame(1290.0, 256.0, 192.0, Buttons::LEFT_1), // circle 0 is judged, so circle 1 proceeds
+                frame(1290.0, 256.0, 192.0, Buttons::LEFT_1), // circle 0 drained, so circle 1 proceeds
             ]),
         )
         .unwrap();
@@ -887,10 +846,10 @@ mod tests {
 
     #[test]
     fn stacked_unjudged_previous_object_ignores_the_press() {
-        // legacyhitpolicy.cs:44-49: the object immediately before the target
-        // (alive, unjudged, stack height > 0) swallows the press entirely --
-        // no shake, no judgement -- even though it sits nowhere near the
-        // cursor: the gate is index/state-based, not geometric
+        // ruleset.go:636-648 -- the immediate predecessor in the processed
+        // list (stacked, unhit) swallows the press entirely -- no shake, no
+        // judgement -- even though it sits nowhere near the cursor: the
+        // shield is list/state-based, not geometric
         let beatmap = circle_map(&[
             (1200.0, 100.0, 100.0), // "prev": far from the target, stacks with the object below
             (1250.0, 300.0, 100.0), // target: under the cursor
@@ -902,25 +861,25 @@ mod tests {
             &wrap(vec![frame(1250.0, 300.0, 100.0, Buttons::LEFT_1)]),
         )
         .unwrap();
-        // the press is swallowed entirely: every object still auto-misses on
-        // its own deadline, none of them from the press itself
+        // the press is swallowed entirely: every object still times out on
+        // the trailing frame, none of them from the press itself
         assert_eq!(timeline.events.len(), 3);
         for e in &timeline.events {
             assert_eq!(e.kind, JudgementKind::Circle(HitGrade::Miss));
+            assert_eq!(e.time, 100_000.0);
         }
         assert_eq!(timeline.events[0].object_index, 0);
-        assert_eq!(timeline.events[0].time, 1200.0 + 149.5);
         assert_eq!(timeline.events[1].object_index, 1);
-        assert_eq!(timeline.events[1].time, 1250.0 + 149.5);
         assert_eq!(timeline.events[2].object_index, 2);
-        assert_eq!(timeline.events[2].time, 1290.0 + 149.5);
     }
 
     #[test]
     fn a_mixed_map_produces_the_exact_hand_derived_timeline() {
         // map: circle at 1000 (256,192) -- slider at 2000 (100,100), length
         // 100, tick rate 2 (one tick) -- spinner 4000-6000 -- circle at 6500
-        // replay: hit everything cleanly
+        // replay: hit everything cleanly. an idle frame after the spinner's
+        // end gives its finalize an update to land on before the last press
+        // (real input always has one -- stable records frames continuously)
         let beatmap = test_support::mixed_map();
         let end_t = beatmap.objects[1].end_time;
         let mut frames = vec![
@@ -932,6 +891,7 @@ mod tests {
             frame(end_t + 20.0, 200.0, 100.0, 0),
         ];
         frames.extend(test_support::spin_frames_for(&beatmap, 2, 8.0));
+        frames.push(frame(6010.0, 0.0, 100.0, 0)); // idle frame past spinner end
         frames.push(frame(6500.0, 256.0, 192.0, Buttons::LEFT_1)); // circle 3: great
         let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
 
@@ -1006,20 +966,31 @@ mod tests {
     }
 
     #[test]
-    fn presses_at_a_deadline_instant_resolve_before_the_deadline() {
-        // a press exactly at start + meh is inside the (inclusive) meh window
-        // and must land before the auto-miss deadline at the same timestamp.
-        // window edges are half-integral, so force the press onto the
-        // boundary with a fractional frame time -- unreachable from real
-        // .osr input but exactly what pins the phase order
+    fn a_click_on_the_window_edge_judges_before_the_timeout_can() {
+        // at exactly start + 150 the timeout has not fired (strict >) and a
+        // click still lands -- as a miss, since 150 is outside the meh
+        // window: the click walk decides the circle, not the post walk
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let meh = beatmap.windows.meh();
         let timeline = simulate(
             &beatmap,
-            &wrap(vec![frame(1000.0 + meh, 256.0, 192.0, Buttons::LEFT_1)]),
+            &wrap(vec![frame(1150.0, 256.0, 192.0, Buttons::LEFT_1)]),
         )
         .unwrap();
         assert_eq!(timeline.events.len(), 1);
-        assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Meh));
+        assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
+        assert_eq!(timeline.events[0].time, 1150.0);
+    }
+
+    #[test]
+    fn everything_resolves_in_the_post_replay_walk_when_frames_end_early() {
+        // the replay ends before the circle's window: the timeout lands on a
+        // whole-millisecond tick of the post-replay walk, strictly past
+        // start + 150
+        let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
+        let frames = vec![frame(-1000.0, 0.0, 0.0, 0), frame(500.0, 0.0, 0.0, 0)];
+        let timeline = simulate(&beatmap, &frames).unwrap();
+        assert_eq!(timeline.events.len(), 1);
+        assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
+        assert_eq!(timeline.events[0].time, 1151.0);
     }
 }

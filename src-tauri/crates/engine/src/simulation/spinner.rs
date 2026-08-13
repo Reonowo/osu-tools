@@ -533,7 +533,11 @@ mod tests {
         assert_eq!(spins.min(7), spins, "spin events cap at required + 2");
         let final_event = timeline.events.last().unwrap();
         assert_eq!(final_event.kind, JudgementKind::SpinnerFinal(HitGrade::Great));
-        assert_eq!(final_event.time, 3000.0);
+        // stable resolves at update times: no frame lands between the
+        // spinner's end (3000) and wrap's trailing frame, so the final
+        // result fires there -- finalize's own flush clamps the rotation
+        // segment at end_time, so the late landing loses nothing
+        assert_eq!(final_event.time, 100_000.0);
         assert_eq!(timeline.totals.count_300, 1);
         // combo: only the final result increments
         assert_eq!(timeline.totals.max_combo, 1);

@@ -1,59 +1,127 @@
-//! slider tracking and nested judgement: ports sliderinputmanager.cs
-//! (tracking state machine, postprocessheadjudgement, tryjudgenestedobject),
-//! drawablesliderhead.cs (classic head results), drawableslider.cs:293-315
-//! (classic aggregate). cursor-dependent state is sampled at instants per the
-//! module conventions
+//! stable's slider machine: head clicks, the frame-sampled tracking state,
+//! one-point-per-update nested judgement, and the end aggregate. ports
+//! danser-go `Slider` (slider.go) on its stable (non-lazer) path -- the
+//! community-verified port of stable's own tracking; reference map and pin
+//! in `.scratch/engine-parity-pass/stable-tracking-reference.md`.
+//!
+//! this replaced the lazer `SliderInputManager` port when the legacy path
+//! moved to stable semantics (engine parity pass, issue 05): stable samples
+//! tracking once per replay frame with the raw cursor, judges at most one
+//! nested point per update at the first frame at-or-past its time, gates a
+//! point on the slide having begun at or before that point's time (a late
+//! re-entry cannot rescue an already-passed point -- no lazer-style
+//! forceful post-head hit), compares the follow radius with f64-promoted
+//! f32 arithmetic and STRICT less-than, and folds the whole-slider result
+//! from the scored rate with the head counted in
 
-use crate::beatmap::difficulty::{HitGrade, OBJECT_RADIUS};
-use crate::beatmap::slider_events::TAIL_LENIENCY;
+use crate::beatmap::difficulty::HitGrade;
 use crate::beatmap::{NestedKind, ProcessedKind, ProcessedObject, ProcessedSlider};
 use crate::math::Vec2;
-use crate::replay::interpolation::{CursorSample, OsuAction};
+use crate::simulation::buttons::ActionMask;
+use crate::simulation::presses::{can_be_hit_stable, ClickAction};
 use crate::simulation::score::JudgementKind;
 use crate::simulation::{Ctx, ObjectState};
 
-/// drawablesliderball.cs:19
+/// drawablesliderball.cs:19 / slider.go:276-285 -- the follow-circle
+/// expansion while sliding
 const FOLLOW_AREA: f32 = 2.4;
+
+/// slider.go:282 -- x87 promotion: f32 operands, f64 intermediate, f32
+/// result (math87.go). .net framework computed these on the x87 unit, which
+/// danser models exactly this way; rust reproduces it bit-for-bit with casts
+fn mul87(a: f32, b: f32) -> f32 {
+    (f64::from(a) * f64::from(b)) as f32
+}
+
+/// vector2f.go:95-100 -- f32 subtraction first, then f64 squares and sum,
+/// rounded back to f32
+fn dst_sq_87(a: Vec2, b: Vec2) -> f32 {
+    let x = f64::from(b.x - a.x);
+    let y = f64::from(b.y - a.y);
+    (x * x + y * y) as f32
+}
+
+/// one scoreable point (tick/repeat/tail), carrying stable's own floored
+/// score time from `beatmap::stable_points` (engine parity pass, issue 13 --
+/// tick existence, times, and span phase all follow stable's accumulated
+/// track walk, not the lazer nested list), with the final point
+/// repositioned to `max(start + duration/2, end - 36)` in integer
+/// arithmetic (slider.go:99-111)
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TickPoint {
+    pub time: f64,
+    pub kind: NestedKind,
+}
 
 #[derive(Debug)]
 pub(crate) struct SliderState {
-    /// per nested-object result, indexed like ProcessedSlider::nested;
-    /// none = pending. head lives at its sorted position (always 0)
-    pub nested_results: Vec<Option<bool>>,
-    pub next_unjudged: usize,
-    pub aggregate: Option<HitGrade>,
-    pub tracking: bool,
-    /// sliderinputmanager.cs:45 -- set when every other key was seen released
-    pub time_to_accept_any_key_after: Option<f64>,
-    pub head_hit_action: Option<OsuAction>,
-    pub last_pressed_left: bool,
-    pub last_pressed_right: bool,
+    /// tick/repeat/tail in judgement order; the head is not a point --
+    /// it contributes to the rate via start_result_hit instead
+    pub points: Vec<TickPoint>,
+    pub down_button: ActionMask,
+    pub is_start_hit: bool,
+    /// the end aggregate has been judged (danser `isHit`) -- what the note
+    /// lock and the tracking gate read
+    pub is_hit: bool,
+    /// startResult != Miss (danser records the full grade; only this bit is
+    /// ever read back)
+    pub start_result_hit: bool,
+    pub sliding: bool,
+    pub slide_start: f64,
+    pub scored: u32,
+    pub missed: u32,
 }
 
 impl SliderState {
-    pub fn new(nested_count: usize) -> SliderState {
+    pub fn new(obj_start_time: f64, slider: &ProcessedSlider) -> SliderState {
+        // slider.go:99-106 -- danser builds the judgement points as
+        // SliderPoint/SliderRepeat only (the generation-side end marker is
+        // just another non-reverse point here), then re-kinds the SORTED
+        // last one to SliderEnd below. on a pathological slider whose f32
+        // tick arithmetic sorts a final-span tick past the end point, the
+        // tail semantics follow the list position, not the generator's
+        // marker
+        let mut points: Vec<TickPoint> = slider
+            .stable_points
+            .iter()
+            .map(|p| TickPoint {
+                time: p.time,
+                kind: match p.kind {
+                    NestedKind::Repeat => NestedKind::Repeat,
+                    _ => NestedKind::Tick,
+                },
+            })
+            .collect();
+        // slider.go:108-111 -- the final (time-sorted) point becomes the
+        // slider end: repositioned to 36ms before stable's end (never
+        // before the midpoint) in truncated integer milliseconds
+        if let Some(last) = points.last_mut() {
+            let start = obj_start_time as i64;
+            let end = slider.stable_end_time as i64;
+            let duration = end - start;
+            last.time = (start + duration / 2).max(end - 36) as f64;
+            last.kind = NestedKind::Tail;
+        }
         SliderState {
-            nested_results: vec![None; nested_count],
-            next_unjudged: 0,
-            aggregate: None,
-            tracking: false,
-            time_to_accept_any_key_after: None,
-            head_hit_action: None,
-            last_pressed_left: false,
-            last_pressed_right: false,
+            points,
+            down_button: ActionMask::NONE,
+            is_start_hit: false,
+            is_hit: false,
+            start_result_hit: false,
+            sliding: false,
+            slide_start: 0.0,
+            scored: 0,
+            missed: 0,
         }
     }
 
-    pub fn head_judged(&self) -> bool {
-        self.nested_results[0].is_some()
-    }
-
+    /// drain condition (slider.go:505-517 UpdatePost): a slider leaves the
+    /// processed list once both the end aggregate and the head resolved
     pub fn finished(&self) -> bool {
-        self.aggregate.is_some()
+        self.is_hit && self.is_start_hit
     }
 }
 
-/// helper: the slider parts of an object, panicking on misuse (internal only)
 fn slider_of(obj: &ProcessedObject) -> &ProcessedSlider {
     match &obj.kind {
         ProcessedKind::Slider(s) => s,
@@ -61,375 +129,242 @@ fn slider_of(obj: &ProcessedObject) -> &ProcessedSlider {
     }
 }
 
-fn state_of(states: &mut [ObjectState], index: usize) -> &mut SliderState {
+fn state_of(states: &mut [crate::simulation::ObjectState], index: usize) -> &mut SliderState {
     match &mut states[index] {
         ObjectState::Slider(s) => s,
         _ => unreachable!("slider fns are only called for slider states"),
     }
 }
 
-pub(crate) fn attempt_head_hit(
-    ctx: &mut Ctx<'_>,
-    index: usize,
-    time: f64,
-    action: OsuAction,
-    cursor: CursorSample,
-) {
-    // hitreceptor.onpressed sets hitaction ??= for every consumed press
-    // (drawablehitcircle.cs:297-301), shaken and post-judgement ones included --
-    // but lazer's real order is hit() (-> checkforresult -> postprocesshead-
-    // judgement's own tracking update, which reads the old hitaction, still
-    // null on a first press) and only then hitaction ??=, so this must stay
-    // unset until after the judge/post-process block below: a press that
-    // both hits the head and shares its replay frame with another
-    // newly-pressed key must not see its own action during that internal
-    // tracking call, or the key-restriction check that call performs would
-    // read a one-instant-stale (pre-press) lastpressedactions snapshot
-    if !state_of(&mut ctx.states, index).head_judged() {
-        let obj = &ctx.beatmap.objects[index];
-        // drawablesliderhead.cs:60-75 -- every window outcome maps to hit/miss,
-        // so the policy's result is never none for a head
-        let grade = ctx.beatmap.windows.result_for(time - obj.start_time);
-        let click_action = crate::simulation::presses::check_hittable(ctx, index, time, true, true);
-        if click_action == crate::simulation::presses::ClickAction::Hit {
-            let hit = matches!(grade, Some(g) if g != HitGrade::Miss);
-            judge_nested(ctx, index, 0, time, hit);
-            if hit {
-                post_process_head_judgement(ctx, index, time, cursor);
+/// the ball's absolute position at `time`: the engine's f32 curve walk over
+/// the folded span progress, stack-adjusted. danser walks stable's
+/// int64-timed piecewise score path instead (objects/slider.go:288-309) --
+/// the cheapest remaining fidelity lever if sweep residuals point at follow
+/// radius boundaries
+fn ball_position(obj: &ProcessedObject, slider: &ProcessedSlider, time: f64) -> Vec2 {
+    let progress = ((time - obj.start_time) / slider.duration).clamp(0.0, 1.0);
+    obj.stacked_position + slider.curve_position_at(progress)
+}
+
+/// slider.go:117-184 -- the head's view of the frame's click edges, called
+/// from the click walk while `!is_start_hit && !is_hit`
+pub(crate) fn try_click_head(ctx: &mut Ctx<'_>, index: usize, time: f64, cursor_pos: Vec2, radius: f32) {
+    let obj = &ctx.beatmap.objects[index];
+    let in_range = Vec2::distance(cursor_pos, obj.stacked_position) <= radius;
+    let action = can_be_hit_stable(ctx, index, time);
+    if in_range {
+        match action {
+            ClickAction::Click => {
+                ctx.buttons.consume_one_edge();
+                let down_button = ctx.buttons.latch_down_button();
+                // truncated delta, as in the circle path (GetResultForDelta)
+                let delta = ((time - obj.start_time).abs() as i64) as f64;
+                let grade = ctx.beatmap.windows.result_for(delta).unwrap_or(HitGrade::Miss);
+                let hit = grade != HitGrade::Miss;
+                let state = state_of(&mut ctx.states, index);
+                state.down_button = down_button;
+                state.start_result_hit = hit;
+                state.is_start_hit = true;
+                ctx.emit(time, index, JudgementKind::SliderHead { hit });
             }
+            ClickAction::Shake | ClickAction::Ignored => ctx.buttons.consume_both_edges(),
         }
     }
-    // classic block: once the head is judged the press still consumes (no
-    // further judging), but it always still counts as a hit action
-    state_of(&mut ctx.states, index)
-        .head_hit_action
-        .get_or_insert(action);
 }
 
-/// advances a slider's next_unjudged past any already-resolved prefix
-fn advance_next_unjudged(state: &mut SliderState) {
-    while state.next_unjudged < state.nested_results.len()
-        && state.nested_results[state.next_unjudged].is_some()
-    {
-        state.next_unjudged += 1;
-    }
-}
+/// slider.go:222-313 UpdateFor on the stable path: the button-acceptance
+/// machine, the x87 follow-radius test, and the one-point tick walk. the
+/// caller enforces `time >= start_time && !is_hit` and stable's
+/// one-unfinished-slider gate (ruleset.go:444-472)
+pub(crate) fn update_for(ctx: &mut Ctx<'_>, index: usize, time: f64, cursor_pos: Vec2) {
+    let obj = &ctx.beatmap.objects[index];
+    let slider = slider_of(obj);
+    let ball = ball_position(obj, slider, time);
+    let radius = ctx.stable_radius;
 
-/// records a nested result and emits its event
-pub(crate) fn judge_nested(ctx: &mut Ctx<'_>, index: usize, nested_index: usize, time: f64, hit: bool) {
-    let kind = slider_of(&ctx.beatmap.objects[index]).nested[nested_index].kind;
+    // the acceptance machine (slider.go:245-269): which held buttons may
+    // carry the slide, with the swap rule that lets a fresh button replace
+    // the one the head was hit with
+    let m = &ctx.buttons;
+    let (game_down, mouse_down, last_button, last_button2) =
+        (m.game_down_state, m.mouse_down_button, m.last_button, m.last_button2);
+    let latch = m.latch_down_button();
+
     let state = state_of(&mut ctx.states, index);
-    // advance past any already-judged prefix before the guard below, so a
-    // guard hit still leaves next_unjudged making forward progress -- drain_pending's
-    // loop only ever exits via next_unjudged reaching the end or a break, so a
-    // stalled pointer here would hang forever, which this crate's docs record
-    // as worse than the panic the guard is replacing
-    advance_next_unjudged(state);
-    // invariant: each nested object is judged exactly once. a debug_assert
-    // here would let the same bug through silently in release (this crate's
-    // docs record that happening once already), so guard instead of assert
-    if state.nested_results[nested_index].is_some() {
-        return;
+    let swap_acceptable = game_down && !(last_button == ActionMask::BOTH && last_button2 == mouse_down);
+    let mut mouse_down_acceptable = false;
+    if game_down {
+        if state.down_button == ActionMask::NONE || (mouse_down != ActionMask::BOTH && swap_acceptable) {
+            state.down_button = latch;
+            mouse_down_acceptable = true;
+        } else if mouse_down.intersects(state.down_button) {
+            mouse_down_acceptable = true;
+        }
+    } else {
+        state.down_button = ActionMask::NONE;
     }
-    state.nested_results[nested_index] = Some(hit);
-    advance_next_unjudged(state);
-    let event = match kind {
-        NestedKind::Head => JudgementKind::SliderHead { hit },
-        NestedKind::Tick => JudgementKind::SliderTick { hit },
-        NestedKind::Repeat => JudgementKind::SliderRepeat { hit },
-        NestedKind::Tail => JudgementKind::SliderTail { hit },
+    mouse_down_acceptable |= swap_acceptable;
+
+    // slider.go:280-286 -- the x87 radius comparison, STRICT less-than
+    let radius_needed = if state.sliding {
+        mul87(radius, FOLLOW_AREA)
+    } else {
+        radius
     };
-    ctx.emit(time, index, event);
+    let allowable =
+        mouse_down_acceptable && dst_sq_87(cursor_pos, ball) < mul87(radius_needed, radius_needed);
+
+    if allowable && !state.sliding {
+        state.sliding = true;
+        state.slide_start = time;
+    }
+
+    process_ticks_stable(ctx, index, time, allowable);
+
+    // slider.go:303-309 -- leaving the follow area kills the slide only
+    // while points remain
+    let state = state_of(&mut ctx.states, index);
+    if !allowable && state.sliding && state.scored + state.missed < state.points.len() as u32 {
+        state.sliding = false;
+    }
 }
 
-/// sliderinputmanager.cs:184-210
-fn is_in_follow_area(
-    scale: f32,
-    obj: &ProcessedObject,
-    slider: &ProcessedSlider,
-    time: f64,
-    cursor: Vec2,
-    expanded: bool,
-) -> bool {
-    // osuhitobject.cs:94 computes radius in double; getfollowradius narrows
-    let mut radius = (f64::from(OBJECT_RADIUS) * f64::from(scale)) as f32;
-    if expanded {
-        radius *= FOLLOW_AREA;
-    }
-    let follow_progress = ((time - obj.start_time) / slider.duration).clamp(0.0, 1.0);
-    let follow_position = slider.curve_position_at(follow_progress);
-    let mouse_in_slider = cursor - obj.stacked_position;
-    (mouse_in_slider - follow_position).length_squared() <= radius * radius
-}
-
-/// sliderinputmanager.cs:78-140. the cursor sample is the pressing frame's
-/// own, threaded from the press path -- resampling `cursor_at(time)` here
-/// would resolve a duplicate-timestamp press to the last frame's state
-fn post_process_head_judgement(ctx: &mut Ctx<'_>, index: usize, time: f64, cursor: CursorSample) {
-    let obj = &ctx.beatmap.objects[index];
-    let slider = slider_of(obj);
-    if !is_in_follow_area(ctx.beatmap.scale, obj, slider, time, cursor.pos, true) {
-        return;
-    }
-
-    let expanded_radius = (f64::from(OBJECT_RADIUS) * f64::from(ctx.beatmap.scale)) as f32 * FOLLOW_AREA;
-    let mouse_in_slider = cursor.pos - obj.stacked_position;
-
-    // pass 1: is every passed unjudged nested position within the expanded
-    // area of the current cursor position
-    let mut all_in_range = true;
-    let mut passed: Vec<usize> = Vec::new();
-    {
-        let state = state_of(&mut ctx.states, index);
-        for (i, nested) in slider.nested.iter().enumerate() {
-            if state.nested_results[i].is_some() {
-                continue;
-            }
-            if nested.time > time {
-                break;
-            }
-            let progress = ((nested.time - obj.start_time) / slider.duration).clamp(0.0, 1.0);
-            let position = slider.curve_position_at(progress);
-            if (position - mouse_in_slider).length_squared() > expanded_radius * expanded_radius {
-                all_in_range = false;
-                passed.clear();
-                break;
-            }
-            passed.push(i);
-        }
-        if !all_in_range {
-            // pass 1 rebuilt: on any out-of-range object every passed nested
-            // is missed instead (sliderinputmanager.cs:110-134)
-            for (i, nested) in slider.nested.iter().enumerate() {
-                if state.nested_results[i].is_some() {
-                    continue;
-                }
-                if nested.time > time {
-                    break;
-                }
-                passed.push(i);
-            }
-        }
-    }
-    for i in passed {
-        judge_nested(ctx, index, i, time, all_in_range);
-    }
-
-    // sliderinputmanager.cs:139 -- re-enable tracking with the position
-    // validity overridden
-    let obj = &ctx.beatmap.objects[index];
-    let slider = slider_of(obj);
-    let position_valid =
-        all_in_range || is_in_follow_area(ctx.beatmap.scale, obj, slider, time, cursor.pos, false);
-    update_tracking_with_validity(ctx, index, time, cursor, position_valid);
-}
-
-/// advances ctx.first_active_slider past ctx.slider_indices' settled prefix
-/// -- sliders whose classic aggregate already resolved. safe because
-/// `finished()` never reverts to false once true, so a slider found finished
-/// here stays finished for the rest of the run; the cursor only ever moves
-/// forward, amortising the total scan cost across the whole sweep instead of
-/// re-walking a settled prefix at every single instant
-fn advance_first_active(ctx: &mut Ctx<'_>) {
-    while ctx.first_active_slider < ctx.slider_indices.len() {
-        let index = ctx.slider_indices[ctx.first_active_slider];
-        let finished = match &ctx.states[index] {
-            ObjectState::Slider(s) => s.finished(),
-            _ => unreachable!("slider_indices only holds slider objects"),
-        };
-        if !finished {
+/// slider.go:315-355 -- the point walk: each due point scored iff the
+/// follow state allows it and the slide began at or before the point's
+/// time.
+///
+/// deliberate divergence from the danser reference: danser judges at most
+/// ONE point per update (`if`, not `while` -- stable's own Update scores
+/// one point per game tick), which at live render rates never matters but
+/// at replay frame rates starves points denser than the frame cadence --
+/// the starved point loses its flat scorev1 value and its combo increment,
+/// and the header this engine is oracled against (docs/adr/0001) was
+/// written by LIVE stable, where updates were dense enough that no point
+/// ever starved. judging every due point per update models the live
+/// client the header recorded; the frame-sampled `allowable` and the
+/// slide_start gate -- the parts that carry the real divergence classes --
+/// are unchanged by the pacing
+fn process_ticks_stable(ctx: &mut Ctx<'_>, index: usize, time: f64, allowable: bool) {
+    let state = state_of(&mut ctx.states, index);
+    let mut points_passed = 0usize;
+    for point in &state.points {
+        // processSliderEndsAhead is hard-disabled at the danser pin
+        // (rcontroller.go:564), so the plain time test is the whole rule
+        if point.time > time {
             break;
         }
-        ctx.first_active_slider += 1;
+        points_passed += 1;
     }
-}
-
-/// the settled-sample sweep for deadline groups: samples the interpolated
-/// cursor at `time` and updates every born, unfinished slider
-pub(crate) fn update_tracking_all(ctx: &mut Ctx<'_>, time: f64) {
-    let cursor = ctx.cursor_at(time);
-    update_tracking_all_with_cursor(ctx, time, cursor);
-}
-
-/// frame entries pass their frame's own sample instead of the settled one:
-/// with duplicate timestamps, `cursor_at` would resolve every entry to the
-/// last frame's state (see the instant loop's frame-stability note)
-pub(crate) fn update_tracking_all_with_cursor(ctx: &mut Ctx<'_>, time: f64, cursor: CursorSample) {
-    advance_first_active(ctx);
-    for i in ctx.first_active_slider..ctx.slider_indices.len() {
-        let index = ctx.slider_indices[i];
-        ctx.charge_sweep_step();
-        let obj = &ctx.beatmap.objects[index];
-        if obj.start_time - ctx.beatmap.preempt > time {
-            break; // objects are start-time ordered: nothing later is born either
-        }
-        if state_of(&mut ctx.states, index).finished() {
-            continue;
-        }
-        let obj = &ctx.beatmap.objects[index];
-        let slider = slider_of(obj);
-        let position_valid = is_in_follow_area(
-            ctx.beatmap.scale,
-            obj,
-            slider,
-            time,
-            cursor.pos,
-            state_of(&mut ctx.states, index).tracking,
-        );
-        update_tracking_with_validity(ctx, index, time, cursor, position_valid);
-    }
-}
-
-/// sliderinputmanager.cs:216-274 (forward playback branch)
-fn update_tracking_with_validity(
-    ctx: &mut Ctx<'_>,
-    index: usize,
-    time: f64,
-    cursor: CursorSample,
-    position_valid: bool,
-) {
-    let end_time = ctx.beatmap.objects[index].end_time;
-    let state = state_of(&mut ctx.states, index);
-
-    let head_action = state.head_hit_action;
-    if head_action.is_none() {
-        state.time_to_accept_any_key_after = None;
-    }
-    if let Some(action) = head_action {
-        if state.time_to_accept_any_key_after.is_none() {
-            let other_was_pressed = match action {
-                OsuAction::Left => state.last_pressed_right,
-                OsuAction::Right => state.last_pressed_left,
-            };
-            // any key becomes acceptable once every other key has been seen
-            // released in the previous update
-            if !other_was_pressed {
-                state.time_to_accept_any_key_after = Some(time);
-            }
-        }
-    }
-
-    let is_valid_action = |action: OsuAction| -> bool {
-        // sliderinputmanager.cs:281-290
-        if let Some(hit_action) = state.head_hit_action {
-            let restricted = match state.time_to_accept_any_key_after {
-                None => true,
-                Some(after) => time <= after,
-            };
-            if restricted {
-                return action == hit_action;
-            }
-        }
-        true
-    };
-    let left = cursor.buttons.left();
-    let right = cursor.buttons.right();
-    let valid_action =
-        (left && is_valid_action(OsuAction::Left)) || (right && is_valid_action(OsuAction::Right));
-
-    // sliderinputmanager.cs:216-274 -- this is a direct transcription of
-    // lazer's own `Tracking = (!AggregateJudged || Time.Current <= EndTime)
-    // && ...`. the first disjunct is provably always true on every reachable
-    // path through this port specifically: both callers (update_tracking_all,
-    // post_process_head_judgement) only reach this function while
-    // `!finished()` holds, i.e. state.aggregate is still none, so it never
-    // gates anything here -- kept rather than dropped to stay a faithful,
-    // line-for-line port of the cited condition
-    state.tracking = (state.aggregate.is_none() || time <= end_time) && position_valid && valid_action;
-    state.last_pressed_left = left;
-    state.last_pressed_right = right;
-}
-
-/// tryjudgenestedobject (sliderinputmanager.cs:142-178) applied to every
-/// pending nested object, then the classic aggregate (drawableslider.cs:298-315)
-pub(crate) fn drain_pending(ctx: &mut Ctx<'_>, time: f64) {
-    advance_first_active(ctx);
-    for i in ctx.first_active_slider..ctx.slider_indices.len() {
-        let index = ctx.slider_indices[i];
-        ctx.charge_sweep_step();
-        if ctx.beatmap.objects[index].start_time - ctx.beatmap.preempt > time {
-            break; // objects are start-time ordered: nothing later is born either
-        }
-        if state_of(&mut ctx.states, index).finished() {
-            continue;
-        }
-        if !state_of(&mut ctx.states, index).head_judged() {
-            continue; // sliderinputmanager.cs:171 -- nothing judges before the head
-        }
-
-        loop {
-            let obj = &ctx.beatmap.objects[index];
-            let slider = slider_of(obj);
-            let state = state_of(&mut ctx.states, index);
-            let i = state.next_unjudged;
-            if i >= slider.nested.len() {
-                break;
-            }
-            let nested = &slider.nested[i];
-            let tracking = state.tracking;
-            let due = match nested.kind {
-                NestedKind::Head => unreachable!("head precedes next_unjudged once judged"),
-                NestedKind::Tick | NestedKind::Repeat => time >= nested.time,
-                // the tail activates within the leniency window, but only
-                // after every earlier tick/repeat resolved -- which
-                // next_unjudged pointing at it already guarantees
-                NestedKind::Tail => time - nested.time >= TAIL_LENIENCY,
-            };
-            if !due {
-                break;
-            }
-            if tracking {
-                judge_nested(ctx, index, i, time, true);
-            } else if time >= nested.time {
-                judge_nested(ctx, index, i, time, false);
-            } else {
-                break; // tail inside the leniency window: wait for tracking or the end
-            }
-        }
-
-        // aggregate once everything nested resolved and the end has passed
-        let obj = &ctx.beatmap.objects[index];
+    while ((state_of(&mut ctx.states, index).scored + state_of(&mut ctx.states, index).missed) as usize)
+        < points_passed
+    {
         let state = state_of(&mut ctx.states, index);
-        if time >= obj.end_time && state.nested_results.iter().all(|r| r.is_some()) {
-            let total = state.nested_results.len();
-            let hit = state.nested_results.iter().filter(|r| **r == Some(true)).count();
-            let grade = if hit == total {
-                HitGrade::Great
-            } else if hit == 0 {
-                HitGrade::Miss
-            } else if hit as f64 / total as f64 >= 0.5 {
-                HitGrade::Ok
-            } else {
-                HitGrade::Meh
-            };
-            state.aggregate = Some(grade);
-            ctx.emit(time, index, JudgementKind::SliderAggregate(grade));
+        let judged_so_far = (state.scored + state.missed) as usize;
+        let point = state.points[judged_so_far];
+        let hit = allowable && state.slide_start <= point.time;
+        if hit {
+            state.scored += 1;
+        } else {
+            state.missed += 1;
         }
+        let kind = match point.kind {
+            NestedKind::Tick => JudgementKind::SliderTick { hit },
+            NestedKind::Repeat => JudgementKind::SliderRepeat { hit },
+            // the tail's combo semantics (+1 on hit, no break on miss --
+            // danser's end-point Hold) live in ScoreState::apply
+            NestedKind::Tail => JudgementKind::SliderTail { hit },
+            NestedKind::Head => unreachable!("stable score points never contain the head"),
+        };
+        ctx.emit(time, index, kind);
+    }
+}
+
+/// slider.go:412-474 UpdatePostFor (stable branch): the head timeout first,
+/// then the end aggregate at the first update at-or-past the truncated end
+/// time. `hit50` is the truncated integer 50-window
+pub(crate) fn update_post_for(ctx: &mut Ctx<'_>, index: usize, time: f64, hit50: f64) {
+    process_head_miss(ctx, index, time, hit50);
+
+    let obj = &ctx.beatmap.objects[index];
+    // stable's own end time (already floored), not lazer's -- the two can
+    // sit on different milliseconds (beatmap::stable_points, issue 13)
+    let end_int = slider_of(obj).stable_end_time;
+    let already_hit = matches!(&ctx.states[index], ObjectState::Slider(s) if s.is_hit);
+    if time >= end_int && !already_hit {
+        let state = state_of(&mut ctx.states, index);
+        if state.start_result_hit {
+            state.scored += 1;
+        }
+        // slider.go:428-467 -- the whole-slider result from the scored rate,
+        // head included in both numerator (above) and denominator
+        let rate = f64::from(state.scored) / (state.points.len() as f64 + 1.0);
+        let grade = if rate == 1.0 {
+            HitGrade::Great
+        } else if rate >= 0.5 {
+            HitGrade::Ok
+        } else if rate > 0.0 {
+            HitGrade::Meh
+        } else {
+            HitGrade::Miss
+        };
+        state.is_hit = true;
+        ctx.emit(time, index, JudgementKind::SliderAggregate(grade));
+    }
+}
+
+/// slider.go:476-503 -- the head times out at the first update strictly
+/// past `start + hit50`, latching the down button from the current held
+/// state. gated only on the head being unresolved, so on a sub-50ms slider
+/// this can legitimately land after the end aggregate
+fn process_head_miss(ctx: &mut Ctx<'_>, index: usize, time: f64, hit50: f64) {
+    // slider.go:479 -- `time > int64(start) + Hit50`, truncated start
+    let start = (ctx.beatmap.objects[index].start_time as i64) as f64;
+    let unresolved = matches!(&ctx.states[index], ObjectState::Slider(s) if !s.is_start_hit);
+    if unresolved && time > start + hit50 {
+        let latch = ctx.buttons.latch_down_button();
+        let state = state_of(&mut ctx.states, index);
+        state.down_button = latch;
+        state.is_start_hit = true;
+        state.start_result_hit = false;
+        ctx.emit(time, index, JudgementKind::SliderHead { hit: false });
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{dst_sq_87, mul87};
     use crate::beatmap::difficulty::HitGrade;
+    use crate::math::Vec2;
     use crate::replay::frames::Buttons;
     use crate::simulation::score::JudgementKind;
     use crate::simulation::simulate;
-    use crate::simulation::test_support::{
-        beatmap_tick_time, frame, slider_map, slider_map_with_circle_size, wrap,
-    };
+    use crate::simulation::test_support::{beatmap_tick_time, frame, slider_map, wrap};
 
     // slider_map builds: od 5, ar 9, cs 4, sm 1.4, beat 500 (velocity 0.28),
     // tick rate configurable; one linear slider at (100, 100), length 100,
-    // repeat_count configurable => head (0,0-rel), optional ticks, tail at
-    // (200, 100). duration = 100 / 0.28 = 357.142857... per span
+    // repeat_count configurable => head, optional ticks, tail at (200, 100).
+    // duration = 100 / 0.28 = 357.142857... per span; end 1357.142857;
+    // the tail POINT sits at max(1000 + 357/2, 1357 - 36) = 1321 (integer
+    // truncation per danser's tickpoint construction)
+
+    #[test]
+    fn x87_helpers_promote_through_f64_and_round_once() {
+        // math87.go / vector2f.go:95-100 -- f64 intermediates, one f32
+        // rounding at the boundary
+        assert_eq!(mul87(1.1, 2.2), ((1.1f32 as f64) * (2.2f32 as f64)) as f32);
+        let a = Vec2::new(0.1, 0.2);
+        let b = Vec2::new(3.3, 4.4);
+        let dx = f64::from(b.x - a.x);
+        let dy = f64::from(b.y - a.y);
+        assert_eq!(dst_sq_87(a, b), (dx * dx + dy * dy) as f32);
+    }
 
     #[test]
     fn held_tracked_slider_full_combos() {
-        // tick rate 2 -> one tick at 70 (t = head + 250)
+        // tick rate 2 -> one tick at 70px (t = 1250); tail point at 1321
         let beatmap = slider_map(2.0, 0);
         let head_t = 1000.0;
         let end_t = beatmap.objects[0].end_time;
-        // press on the head, hold and ride the ball to the end
         let frames = wrap(vec![
             frame(head_t, 100.0, 100.0, Buttons::LEFT_1),
             frame(head_t + 250.0, 170.0, 100.0, Buttons::LEFT_1),
@@ -447,25 +382,32 @@ mod tests {
                 JudgementKind::SliderAggregate(HitGrade::Great),
             ]
         );
-        // stable combo: head, tick and tail each +1; aggregate none
+        // stable combo: head, tick and tail each +1; aggregate holds
         assert_eq!(timeline.totals.max_combo, 3);
         assert_eq!(timeline.totals.count_300, 1);
-        // tail leniency: judged at the first instant >= end - 36
-        let tail_event = &timeline.events[2];
-        assert!(tail_event.time >= end_t + crate::beatmap::slider_events::TAIL_LENIENCY);
-        assert!(tail_event.time <= end_t);
+        // the tail point (1321) resolves on the end-time frame, and the
+        // aggregate on that same update
+        assert_eq!(timeline.events[2].time, end_t);
+        assert_eq!(timeline.events[3].time, end_t);
     }
 
     #[test]
-    fn dropping_tracking_misses_the_tick_but_not_the_tail() {
+    fn a_late_slide_start_cannot_rescue_a_passed_tick() {
+        // slider.go:340 -- a point scores only if the slide began at or
+        // before the point's time. head hit, tracking lost over the tick,
+        // re-entered after it: the tick is judged at the re-entry frame but
+        // the fresh slide_start postdates it -> miss. (lazer classic would
+        // have force-hit it via postprocessheadjudgement -- this is the
+        // stable-vs-lazer divergence behind the sweep's dominant zero-miss
+        // class, the engine tracking elements stable dropped)
         let beatmap = slider_map(2.0, 0);
         let head_t = 1000.0;
         let end_t = beatmap.objects[0].end_time;
-        // hit the head, wander far away over the tick, come back for the tail
         let frames = wrap(vec![
             frame(head_t, 100.0, 100.0, Buttons::LEFT_1),
-            frame(head_t + 100.0, 400.0, 300.0, Buttons::LEFT_1),
-            frame(head_t + 300.0, 195.0, 100.0, Buttons::LEFT_1),
+            frame(head_t + 100.0, 400.0, 300.0, Buttons::LEFT_1), // far away: slide killed
+            frame(head_t + 300.0, 184.0, 100.0, Buttons::LEFT_1), // re-entry past the tick (1250)
+            frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
         let timeline = simulate(&beatmap, &frames).unwrap();
@@ -474,31 +416,31 @@ mod tests {
             kinds,
             vec![
                 JudgementKind::SliderHead { hit: true },
-                JudgementKind::SliderTick { hit: false },
-                JudgementKind::SliderTail { hit: true },
-                // head + tail hit, tick missed: 2/3 >= 0.5 -> ok
-                JudgementKind::SliderAggregate(HitGrade::Ok),
+                JudgementKind::SliderTick { hit: false }, // judged at 1300, slide_start 1300 > 1250
+                JudgementKind::SliderTail { hit: true },  // slide_start 1300 <= 1321
+                JudgementKind::SliderAggregate(HitGrade::Ok), // head + tail = 2/3
             ]
         );
-        // tick miss broke combo; tail rebuilt it to 1
+        assert_eq!(timeline.events[1].time, head_t + 300.0);
         assert_eq!(timeline.totals.max_combo, 1);
         assert_eq!(timeline.totals.count_100, 1);
     }
 
     #[test]
-    fn unpressed_head_misses_but_any_key_tracks_the_body() {
-        // no press within the head windows; hold from mid-body onward. the
-        // head misses at start + meh, and tracking (any key, since no head
-        // action was recorded) still collects the tick and tail
+    fn unpressed_head_misses_but_a_held_body_still_tracks() {
+        // no press within the head window; right held from mid-body. the
+        // head times out at the first update past start + 150 (the 1200
+        // frame), and the acceptance machine latches the held button for
+        // the body -- stable tracks ticks with no head hit at all
         let beatmap = slider_map(2.0, 0);
         let head_t = 1000.0;
         let end_t = beatmap.objects[0].end_time;
         let frames = wrap(vec![
-            // cursor away from the head receptor so no press consumes it
             frame(head_t + 200.0, 156.0, 100.0, 0),
             frame(head_t + 220.0, 160.0, 100.0, Buttons::RIGHT_1),
             frame(head_t + 250.0, 170.0, 100.0, Buttons::RIGHT_1),
-            frame(end_t + 50.0, 200.0, 100.0, Buttons::RIGHT_1),
+            frame(end_t, 200.0, 100.0, Buttons::RIGHT_1),
+            frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
         let timeline = simulate(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
@@ -508,29 +450,27 @@ mod tests {
                 JudgementKind::SliderHead { hit: false },
                 JudgementKind::SliderTick { hit: true },
                 JudgementKind::SliderTail { hit: true },
-                JudgementKind::SliderAggregate(HitGrade::Ok),
+                JudgementKind::SliderAggregate(HitGrade::Ok), // tick + tail = 2/3
             ]
         );
+        assert_eq!(timeline.events[0].time, 1200.0); // first update past 1150
     }
 
     #[test]
-    fn late_head_hit_force_hits_passed_ticks_when_cursor_stayed_in_range() {
-        // tick at head + 250; head hit at +140 (meh window) with the cursor on
-        // the ball path: sliderinputmanager.cs:78-140 forcefully hits the
-        // passed tick. use tick rate 4 -> tick distance 35 -> ticks at 35, 70
-        // (t = +125, +250). head centre (100,100), radius = 64 * scale(cs4)
-        // ~= 36.49 -- (134,100) sits 34px away, inside the head receptor and
-        // (being 1px from the passed tick at (135,100)) trivially inside its
-        // 2.4x-expanded follow area too
-        let beatmap = slider_map(4.0, 0);
+    fn the_held_prior_key_alone_cannot_carry_the_slide() {
+        // the z, z+x, z case through stable's acceptance machine
+        // (slider.go:245-269): left held from before, right pressed at the
+        // head (down_button latches right), right released mid-body. left
+        // alone fails both the swap rule (last_button == both and
+        // last_button2 == the current left mean no fresh state) and the
+        // down-button intersection -> the tick misses
+        let beatmap = slider_map(2.0, 0);
         let head_t = 1000.0;
         let end_t = beatmap.objects[0].end_time;
         let frames = wrap(vec![
-            // cursor rides near the ball but nothing is pressed yet
-            frame(head_t + 125.0, 130.0, 100.0, 0),
-            // press lands on the head receptor (cursor within 64*scale of the
-            // head) while also within 2.4x follow radius of the passed tick
-            frame(head_t + 140.0, 134.0, 100.0, Buttons::LEFT_1),
+            frame(head_t - 500.0, 400.0, 400.0, Buttons::LEFT_1), // left held early, off the head
+            frame(head_t, 100.0, 100.0, Buttons::LEFT_1 | Buttons::RIGHT_1), // right press hits head
+            frame(head_t + 100.0, 128.0, 100.0, Buttons::LEFT_1), // right released; left still invalid
             frame(head_t + 250.0, 170.0, 100.0, Buttons::LEFT_1),
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
@@ -538,178 +478,103 @@ mod tests {
         let timeline = simulate(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(kinds[0], JudgementKind::SliderHead { hit: true });
-        // the passed tick was force-hit at the head-press instant
-        assert_eq!(kinds[1], JudgementKind::SliderTick { hit: true });
-        assert_eq!(timeline.events[1].time, head_t + 140.0);
+        assert_eq!(kinds[1], JudgementKind::SliderTick { hit: false });
+        assert_eq!(kinds[2], JudgementKind::SliderTail { hit: false });
+        assert_eq!(kinds[3], JudgementKind::SliderAggregate(HitGrade::Meh)); // head only, 1/3
+    }
+
+    #[test]
+    fn releasing_the_other_key_swaps_acceptance_to_the_survivor() {
+        // same setup, but LEFT releases instead: the state change from both
+        // down to right-only satisfies the swap rule (last_button == both,
+        // last_button2 == left != right), so the surviving right keeps the
+        // slide -- stable accepts here where lazer's key restriction would
+        // not, one of the enumerated lazer-vs-stable differences
+        let beatmap = slider_map(2.0, 0);
+        let head_t = 1000.0;
+        let end_t = beatmap.objects[0].end_time;
+        let frames = wrap(vec![
+            frame(head_t - 500.0, 400.0, 400.0, Buttons::LEFT_1),
+            frame(head_t, 100.0, 100.0, Buttons::LEFT_1 | Buttons::RIGHT_1),
+            frame(head_t + 100.0, 128.0, 100.0, Buttons::RIGHT_1), // left released; right survives
+            frame(head_t + 250.0, 170.0, 100.0, Buttons::RIGHT_1),
+            frame(end_t, 200.0, 100.0, Buttons::RIGHT_1),
+            frame(end_t + 50.0, 200.0, 100.0, 0),
+        ]);
+        let timeline = simulate(&beatmap, &frames).unwrap();
+        let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(
-            *kinds.last().unwrap(),
-            JudgementKind::SliderAggregate(HitGrade::Great)
+            kinds,
+            vec![
+                JudgementKind::SliderHead { hit: true },
+                JudgementKind::SliderTick { hit: true },
+                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderAggregate(HitGrade::Great),
+            ]
         );
     }
 
     #[test]
-    fn late_head_hit_with_cursor_away_force_misses_passed_ticks() {
-        // head is hit late from a press on the head's far edge, with the
-        // cursor genuinely outside the expanded follow area of the passed
-        // tick's position. with the standard cs4 head radius (~36.49) this
-        // is geometrically unreachable for tick_rate 4's first tick (35px
-        // out): even the farthest on-head point is only 35 + 36.49 = 71.49px
-        // from it, comfortably inside the 2.4x-expanded 87.59px area no
-        // matter where on the head you press. a bigger circle size (cs9,
-        // radius ~14.09, expanded ~33.81) shrinks the receptor enough that
-        // a press at (88,100) -- 12px from the head centre, within its
-        // ~14.09px radius, but 47px from the tick at (135,100) -- clears the
-        // expanded 33.81px area; ticks/positions/times are otherwise
-        // identical to slider_map since circle size doesn't affect velocity
-        // or tick placement
-        let beatmap = slider_map_with_circle_size(4.0, 0, 9.0);
-        let head_t = 1000.0;
-        let end_t = beatmap.objects[0].end_time;
-        let frames = wrap(vec![
-            frame(head_t + 125.0, 88.0, 100.0, 0),
-            frame(head_t + 140.0, 88.0, 100.0, Buttons::LEFT_1),
-            frame(end_t + 50.0, 88.0, 100.0, 0),
-        ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
-        let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
-        assert_eq!(kinds[0], JudgementKind::SliderHead { hit: true });
-        assert_eq!(kinds[1], JudgementKind::SliderTick { hit: false });
-    }
-
-    #[test]
-    fn key_restriction_blocks_the_prior_held_key_until_release() {
-        // the z, z+x, z case (sliderinputmanager.cs:31-44): left held from
-        // before the slider, head hit with right, right released mid-body.
-        // left alone must not track until it is released and repressed --
-        // here it never is, so the tick misses.
-        //
-        // the early left press must land off the head receptor's radius:
-        // hitreceptor.onpressed sets hitaction unconditionally whenever a
-        // press merely hovers the receptor (drawablehitcircle.cs:297-301),
-        // before the hit window is even checked, so a press on the head --
-        // even one far outside the miss window that only shakes -- would
-        // still lock head_hit_action to left and defeat this test. placed
-        // well away from (100,100), it only changes the held button state
-        // (which is what the z+x restriction check actually reads back via
-        // last_pressed_left/right), leaving head_hit_action untouched
-        let beatmap = slider_map(2.0, 0);
-        let head_t = 1000.0;
-        let end_t = beatmap.objects[0].end_time;
-        let frames = wrap(vec![
-            frame(head_t - 500.0, 400.0, 400.0, Buttons::LEFT_1), // left held from before, off the head
-            frame(head_t, 100.0, 100.0, Buttons::LEFT_1 | Buttons::RIGHT_1), // right press hits head
-            frame(head_t + 100.0, 128.0, 100.0, Buttons::LEFT_1), // right released; left still invalid
-            frame(end_t + 50.0, 200.0, 100.0, Buttons::LEFT_1),
-        ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
-        // the right press at head time hits it, recording head_hit_action as
-        // right (the first and only press to reach the receptor). from then
-        // on only right tracks; right vanished at +100, so the tick (t +250)
-        // misses
-        let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
-        assert_eq!(kinds[0], JudgementKind::SliderHead { hit: true });
-        assert_eq!(kinds[1], JudgementKind::SliderTick { hit: false });
-        // the tail also misses: left is still the only key down at end - 36
-        assert_eq!(kinds[2], JudgementKind::SliderTail { hit: false });
-        assert_eq!(kinds[3], JudgementKind::SliderAggregate(HitGrade::Meh)); // 1/3 hit
-    }
-
-    #[test]
-    fn a_deadline_sharing_a_frame_timestamp_adds_no_extra_tracking_update() {
-        // regression: the instant loop once re-ran the settled-sample sweep
-        // for a deadline group even when a frame at the same timestamp had
-        // already run its own update. update_tracking_with_validity reads
-        // last_pressed_* as the previous update's buttons, so that second
-        // same-time update saw the frame's own right-release as "released
-        // in the previous update" and opened the any-key acceptance window
-        // one frame early. here the release lands exactly on the slider's
-        // head-deadline instant (start + meh = 1149.5, a frame+deadline
-        // group); acceptance must open AT the repress update, not before
-        // it, so the right repress at the tick is still restricted and the
-        // tick misses
-        let beatmap = slider_map(2.0, 0);
-        let head_t = 1000.0;
-        let end_t = beatmap.objects[0].end_time;
-        let head_deadline = head_t + 149.5; // od 5 meh window
-        let frames = wrap(vec![
-            frame(head_t - 500.0, 400.0, 400.0, Buttons::RIGHT_1), // right held from before, off the head
-            frame(head_t, 100.0, 100.0, Buttons::LEFT_1 | Buttons::RIGHT_1), // left press hits the head
-            frame(head_deadline, 142.0, 100.0, Buttons::LEFT_1),   // right released on the deadline instant
-            frame(head_t + 250.0, 170.0, 100.0, Buttons::RIGHT_1), // right repressed at the tick, left gone
-            frame(end_t + 50.0, 200.0, 100.0, Buttons::RIGHT_1),
-        ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
-        let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
-        assert_eq!(kinds[0], JudgementKind::SliderHead { hit: true });
-        assert_eq!(kinds[1], JudgementKind::SliderTick { hit: false });
-        // the acceptance window opened at the tick-time update, so right
-        // (still held) tracks the later tail fine
-        assert_eq!(kinds[2], JudgementKind::SliderTail { hit: true });
-        assert_eq!(kinds[3], JudgementKind::SliderAggregate(HitGrade::Ok));
-    }
-
-    #[test]
-    fn simultaneous_press_head_hit_keeps_the_restriction_engaged() {
-        // sliderinputmanager.cs:31-44's other trigger for the restriction:
-        // left and right are newly pressed in the same frame, left first
-        // (press_edges's replay order) hits the head. lazer's real order is
-        // hitreceptor.onpressed's hit() (-> postprocessheadjudgement's own
-        // tracking update, reading hitaction == null still) then
-        // hitaction ??= left -- so that internal update sees both keys held
-        // (right included) and refreshes lastpressedactions with both,
-        // meaning the very next update (with hitaction == left now set)
-        // finds "the other key (right) was pressed" true and keeps the
-        // restriction engaged, exactly as if left alone had hit the head
-        // with right already held. left releases at +100 and never returns,
-        // so the body drops even though right stays held throughout
-        let beatmap = slider_map(2.0, 0);
-        let head_t = 1000.0;
-        let end_t = beatmap.objects[0].end_time;
-        let frames = wrap(vec![
-            frame(head_t, 100.0, 100.0, Buttons::LEFT_1 | Buttons::RIGHT_1), // both newly down; left hits the head first
-            frame(head_t + 100.0, 128.0, 100.0, Buttons::RIGHT_1), // left released; right alone stays invalid
-            frame(end_t + 50.0, 200.0, 100.0, Buttons::RIGHT_1),
-        ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
-        let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
-        assert_eq!(kinds[0], JudgementKind::SliderHead { hit: true });
-        // the restriction stayed engaged from the simultaneous press: the
-        // tick and tail both miss even though right is held the whole time
-        assert_eq!(kinds[1], JudgementKind::SliderTick { hit: false });
-        assert_eq!(kinds[2], JudgementKind::SliderTail { hit: false });
-        assert_eq!(kinds[3], JudgementKind::SliderAggregate(HitGrade::Meh)); // 1/3 hit
-    }
-
-    #[test]
-    fn tail_waits_for_the_last_tick_before_judging() {
-        // tick rate 1.5 -> tick distance 93.33 -> tick at t + 333.3, inside
-        // the (end-36, end) window (duration 357.1): the tail becomes
-        // eligible at end-36 = t+321.1 but must wait for the tick
+    fn every_due_point_resolves_in_one_update_in_list_order() {
+        // tick rate 1.5 -> one tick at 93.33px (t = 1333), AFTER the tail
+        // point (1321) in time but BEFORE it in list order: the point walk
+        // is list-ordered, so the tail waits behind the tick and both
+        // resolve on the end-time frame, tick first. danser's replay-time
+        // model would judge one point per update and starve the tail behind
+        // the aggregate; the deliberate divergence documented at
+        // process_ticks_stable judges every due point, modelling the live
+        // client where nothing ever starved
         let beatmap = slider_map(1.5, 0);
         let head_t = 1000.0;
         let end_t = beatmap.objects[0].end_time;
-        let tick_t = beatmap_tick_time(&beatmap); // helper: first tick's time
-        assert!(tick_t > end_t + crate::beatmap::slider_events::TAIL_LENIENCY);
+        let tick_t = beatmap_tick_time(&beatmap);
+        assert!(tick_t > 1321.0);
         let frames = wrap(vec![
             frame(head_t, 100.0, 100.0, Buttons::LEFT_1),
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
         let timeline = simulate(&beatmap, &frames).unwrap();
-        let tick_event = timeline
-            .events
-            .iter()
-            .find(|e| matches!(e.kind, JudgementKind::SliderTick { .. }))
-            .unwrap();
-        let tail_event = timeline
-            .events
-            .iter()
-            .find(|e| matches!(e.kind, JudgementKind::SliderTail { .. }))
-            .unwrap();
-        assert!(
-            tail_event.time >= tick_event.time,
-            "tail may not outrun the last tick"
+        let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                JudgementKind::SliderHead { hit: true },
+                JudgementKind::SliderTick { hit: true },
+                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderAggregate(HitGrade::Great),
+            ]
         );
-        assert_eq!(tail_event.kind, JudgementKind::SliderTail { hit: true });
+        assert_eq!(timeline.totals.count_300, 1);
+        assert_eq!(timeline.totals.max_combo, 3);
+        // both points land on the end-time frame, tick (list-earlier) first
+        assert_eq!(timeline.events[1].time, end_t);
+        assert_eq!(timeline.events[2].time, end_t);
+    }
+
+    #[test]
+    fn a_never_tracked_slider_with_a_missed_head_aggregates_miss() {
+        // nothing pressed, cursor away, and the replay ends before the
+        // slider: everything resolves on the whole-millisecond post-replay
+        // walk -- head timeout at 1151 (first tick past start + 150), the
+        // tick at its own millisecond, the tail point at 1321, the
+        // aggregate at the truncated end (1357). rate 0 -> miss
+        let beatmap = slider_map(2.0, 0);
+        let frames = vec![frame(-1000.0, 400.0, 400.0, 0), frame(500.0, 400.0, 400.0, 0)];
+        let timeline = simulate(&beatmap, &frames).unwrap();
+        let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                JudgementKind::SliderHead { hit: false },
+                JudgementKind::SliderTick { hit: false },
+                JudgementKind::SliderTail { hit: false },
+                JudgementKind::SliderAggregate(HitGrade::Miss),
+            ]
+        );
+        let times: Vec<_> = timeline.events.iter().map(|e| e.time).collect();
+        assert_eq!(times, vec![1151.0, 1250.0, 1321.0, 1357.0]);
+        assert_eq!(timeline.totals.count_miss, 1);
+        assert_eq!(timeline.totals.max_combo, 0);
     }
 }
