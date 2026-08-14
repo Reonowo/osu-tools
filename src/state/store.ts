@@ -67,7 +67,11 @@ export type { EditingSettings, EffectSettings, OverlaySettings, TimelineSettings
 // watch shows a replay; edit is the (future) mutation surface
 export type ViewerMode = "watch" | "edit";
 export type PanelTab = "replay" | "analysis" | "frames" | "keys" | "meta" | "history";
-export type ToolId = "select" | "lasso" | "move" | "smooth" | "erase";
+/** the cursor-path tools, as data: the keybind table's test enumerates them
+ * to assert every tool is reachable from the keyboard, which a type alone
+ * cannot answer at runtime */
+export const TOOL_IDS = ["select", "lasso", "move", "smooth", "erase"] as const;
+export type ToolId = (typeof TOOL_IDS)[number];
 
 export interface IpcDeps {
 	loadReplay(osrPath: string): Promise<LoadedScene>;
