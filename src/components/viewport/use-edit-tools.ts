@@ -9,6 +9,7 @@ import { useEffect, type RefObject } from "react";
 import { toast } from "sonner";
 import { expandErase, remapEraseTargets, type EraseTarget } from "@/editor/erase";
 import { frameEditGate } from "@/editor/gate";
+import { gestureLive } from "@/editor/gesture-live";
 import {
 	BRUSH_RADIUS_FACTOR,
 	CLICK_SLOP_SCREEN_PX,
@@ -28,7 +29,7 @@ import { playbackClock } from "@/playback/instance";
 import { spacePan } from "@/playback/space-pan";
 import { controlOwnsKeydown, withinInteractiveControl, withinViewportChrome } from "@/playback/shortcut-guards";
 import { effectiveOverlays } from "@/state/defaults";
-import { viewerStore } from "@/state/store";
+import { viewerStore, type ToolId } from "@/state/store";
 
 interface LiveGesture {
 	pointerId: number;
@@ -45,6 +46,10 @@ interface LiveGesture {
 	brushRadius: number;
 }
 
+/** the two tools that draw a hover ring: the radius is what tells the user
+ * what a press would sweep, so no other tool may leave one on screen */
+const isBrushTool = (tool: ToolId) => tool === "smooth" || tool === "erase";
+
 export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 	useEffect(() => {
 		const container = containerRef.current;
@@ -56,11 +61,21 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 		// arrow consts rather than function declarations: a hoisted declaration
 		// is checked against the flow state at the top of the block, where
 		// `container` is still nullable (same rule as Viewport.tsx)
+		/** the published gesture flag rides on every assignment rather than on
+		 * the handlers: the abandon paths (pointer cancellation, Escape, a
+		 * splice invalidating the gesture base) each drop `live` on their own,
+		 * and any of them leaving the flag set would keep the tool keys dead
+		 * for the rest of the session */
+		const setLive = (gesture: LiveGesture | null) => {
+			live = gesture;
+			gestureLive.set(gesture !== null);
+		};
+
 		const endGesture = (e?: PointerEvent) => {
 			if (live !== null && e !== undefined && container.hasPointerCapture(e.pointerId)) {
 				container.releasePointerCapture(e.pointerId);
 			}
-			live = null;
+			setLive(null);
 		};
 
 		/** every abandon path -- Escape, pointer cancellation, a structural
@@ -259,7 +274,7 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
 				document.activeElement.blur();
 			}
-			live = { pointerId: e.pointerId, source, toPlayfield, epoch: editor.epoch, brushRadius: env.brushRadius };
+			setLive({ pointerId: e.pointerId, source, toPlayfield, epoch: editor.epoch, brushRadius: env.brushRadius });
 			container.setPointerCapture(e.pointerId);
 			applyEffects(controller.pointerDown(toPlayfield(e), e.shiftKey, env));
 		};
@@ -269,10 +284,9 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 		// would sweep
 		const updateHoverBrush = (e: PointerEvent) => {
 			const state = viewerStore.getState();
-			const brushTool = state.tool === "smooth" || state.tool === "erase";
 			if (
 				state.mode !== "edit" ||
-				!brushTool ||
+				!isBrushTool(state.tool) ||
 				state.scene === null ||
 				spacePan.armed ||
 				withinInteractiveControl(e.target) ||
@@ -351,7 +365,7 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			if (e.key === "Escape" && controller.live) {
 				applyEffects(controller.cancel());
 				clearGestureChrome();
-				live = null;
+				setLive(null);
 				return;
 			}
 			// the modality-aware keyboard guard, not the structural pointer one:
@@ -381,7 +395,21 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			if (!controller.live) return;
 			controller.cancel();
 			clearGestureChrome();
-			live = null;
+			setLive(null);
+		});
+
+		// the ring is refreshed by pointer movement alone, and arming a tool from
+		// the keyboard moves nothing: without this, a ring left by smooth or
+		// erase keeps drawing a radius the armed tool no longer sweeps until the
+		// pointer happens to move again
+		const unsubscribeTool = viewerStore.subscribe((state, previous) => {
+			if (state.tool === previous.tool || isBrushTool(state.tool)) return;
+			// a live gesture owns the ring, same as for pointerleave: its env
+			// froze the tool at pointer-down, so it keeps sweeping as the tool it
+			// started as and re-emits the ring every move -- and its own pointerup
+			// returns brush: null, so nothing it owns can outlive it
+			if (live !== null) return;
+			if (gesturePreview.brush !== null) gesturePreview.setBrush(null);
 		});
 
 		container.addEventListener("pointerdown", onPointerDown);
@@ -398,6 +426,10 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			container.removeEventListener("pointerleave", onPointerLeave);
 			window.removeEventListener("keydown", onKeyDown);
 			unsubscribeSplice();
+			unsubscribeTool();
+			// the controller dies with the effect, so a gesture live across a
+			// remount would otherwise leave the flag latched on forever
+			setLive(null);
 		};
 	}, [containerRef]);
 }
