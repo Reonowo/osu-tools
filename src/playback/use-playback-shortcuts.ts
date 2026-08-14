@@ -4,15 +4,22 @@
 // the library cannot address; wheel stays a manual listener because the
 // library is keyboard-only. Controls stays mounted with no scene (App renders
 // it unconditionally and it returns null early), so every handler re-checks
-// the scene itself rather than relying on mount state
+// the scene itself rather than relying on mount state.
+//
+// this is the `global` registration point of keybinds.ts's table: every key
+// string below is read from it, so what the app binds and what the table
+// lists cannot drift. the `gesture` half registers in use-edit-tools
 
 import { useEffect } from "react";
 import { useHotkeys } from "@tanstack/react-hotkeys";
+import { frameEditGate } from "@/editor/gate";
+import { gestureLive } from "@/editor/gesture-live";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { spacePan } from "@/playback/space-pan";
 import { viewerStore } from "@/state/store";
 import { focusModality } from "./focus-modality";
+import { EDIT_KEYBINDS, KEYBINDS, resolveEditKeybind, type EditKeybindResolution } from "./keybinds";
 import { asksViewportReset, controlOwnsKeydown, wheelFrameStep, withinInteractiveControl } from "./shortcut-guards";
 
 /** exact-select the neighbouring replay frame, one index at a time so a run
@@ -22,31 +29,63 @@ export function stepFrame(direction: 1 | -1) {
 	frameCursor.step(direction);
 }
 
-function guarded(e: KeyboardEvent, action: () => void) {
-	// the one gate for every binding, hotkey-registered and manual ctrl+0
-	// alike (the library's own ignoreInputs is disabled below so nothing is
-	// swallowed before this reads it). the modality split lives in
-	// controlOwnsKeydown: keyboard-acquired focus keeps a control's native
-	// keys, the residue focus a mouse click leaves behind hands them back --
-	// clicking the zoom reset and then holding space must pan, not re-fire
-	// the reset. text entries, dialogs, and composites' nav keys stay owned
-	// under either modality
-	if (viewerStore.getState().scene === null) return;
-	if (controlOwnsKeydown(e, focusModality.keyboardFocus)) return;
-	// the click-residue focus the guard just overruled has no further claim
-	// on the keyboard: drop it before acting, or chromium's promote-on-keydown
-	// paints the control with a focus ring mid-shortcut and a later enter
-	// re-fires it. the structural walk keeps this off plain page targets and
-	// off the frames panel's passthrough rows, which keep focus by contract
+/** the one gate for every binding, hotkey-registered and manual ctrl+0 alike
+ * (the library's own ignoreInputs is disabled below so nothing is swallowed
+ * before this reads it). the modality split lives in controlOwnsKeydown:
+ * keyboard-acquired focus keeps a control's native keys, the residue focus a
+ * mouse click leaves behind hands them back -- clicking the zoom reset and
+ * then holding space must pan, not re-fire the reset. text entries, dialogs,
+ * and composites' nav keys stay owned under either modality */
+function viewerClaims(e: KeyboardEvent): boolean {
+	if (viewerStore.getState().scene === null) return false;
+	return !controlOwnsKeydown(e, focusModality.keyboardFocus);
+}
+
+/** the click-residue focus the guard just overruled has no further claim on
+ * the keyboard: drop it before acting, or chromium's promote-on-keydown paints
+ * the control with a focus ring mid-shortcut and a later enter re-fires it.
+ * the structural walk keeps this off plain page targets and off the frames
+ * panel's passthrough rows, which keep focus by contract */
+function dropClickResidue(e: KeyboardEvent) {
 	if (withinInteractiveControl(e.target) && e.target instanceof HTMLElement) e.target.blur();
+}
+
+function guarded(e: KeyboardEvent, action: () => void) {
+	if (!viewerClaims(e)) return;
+	dropClickResidue(e);
 	action();
+}
+
+/** what an edit-mode key asks the store for, or null when it asks for
+ * nothing. every gate that is not focus, dialog or scene-loaded
+ * (viewerClaims') lives in the resolver, so this is the whole impure half of
+ * the read: gather the plain facts and ask */
+function editKeybindResolution(key: string): EditKeybindResolution | null {
+	const state = viewerStore.getState();
+	if (state.scene === null) return null;
+	return resolveEditKeybind(key, {
+		mode: state.mode,
+		editable: frameEditGate(state.scene).editable,
+		gestureLive: gestureLive.active
+	});
+}
+
+function applyEditKeybind(resolution: EditKeybindResolution) {
+	const state = viewerStore.getState();
+	if (resolution.kind === "tool") {
+		state.setTool(resolution.tool);
+		return;
+	}
+	// the tile's own action, so what a keyboard toggle persists and what a
+	// click persists cannot diverge
+	state.setEditing("snapToLattice", !state.editing.snapToLattice);
 }
 
 export function usePlaybackShortcuts() {
 	useHotkeys(
 		[
 			{
-				hotkey: "Space",
+				hotkey: KEYBINDS.playPause.key,
 				// holding space must not rapid-toggle, while the arrows below keep
 				// key repeat for held-key seeking. e.repeat is filtered here instead
 				// of using the library's requireReset: its hasFired flag only resets
@@ -73,7 +112,7 @@ export function usePlaybackShortcuts() {
 				}
 			},
 			{
-				hotkey: "Space",
+				hotkey: KEYBINDS.playPause.key,
 				// conflictBehavior: the manager matches conflicts on the hotkey
 				// string and target alone, so the keydown registration above would
 				// warn about this one even though the two never fire on the same
@@ -98,16 +137,42 @@ export function usePlaybackShortcuts() {
 				}
 			},
 			{
-				hotkey: "ArrowLeft",
+				hotkey: KEYBINDS.seekBack.key,
 				callback: (e) => guarded(e, () => playbackClock.seekTo(playbackClock.currentTime() - 1000))
 			},
 			{
-				hotkey: "ArrowRight",
+				hotkey: KEYBINDS.seekForward.key,
 				callback: (e) => guarded(e, () => playbackClock.seekTo(playbackClock.currentTime() + 1000))
 			},
-			{ hotkey: ",", callback: (e) => guarded(e, () => stepFrame(-1)) },
-			{ hotkey: ".", callback: (e) => guarded(e, () => stepFrame(1)) },
-			{ hotkey: "Home", callback: (e) => guarded(e, () => playbackClock.seekTo(playbackClock.minTime)) }
+			{ hotkey: KEYBINDS.frameStepBack.key, callback: (e) => guarded(e, () => stepFrame(-1)) },
+			{ hotkey: KEYBINDS.frameStepForward.key, callback: (e) => guarded(e, () => stepFrame(1)) },
+			{
+				hotkey: KEYBINDS.restart.key,
+				callback: (e) => guarded(e, () => playbackClock.seekTo(playbackClock.minTime))
+			},
+			// the tool keys and the snap toggle. registered here rather than in
+			// use-edit-tools so they inherit the focus modality rules, the
+			// click-residue blur and the scene check the wrapper already applies;
+			// what is left of the decision is the resolver's, above
+			...EDIT_KEYBINDS.map((bind) => ({
+				hotkey: bind.key,
+				callback: (e: KeyboardEvent) => {
+					// same reason space filters repeats: the tool setter and the
+					// snap toggle write unconditionally, so a resting finger would
+					// churn the palette (and flip snap back and forth) every repeat
+					if (e.repeat) return;
+					// not guarded(): these are the only bindings that routinely
+					// decline (watch mode, a non-editable replay), and a key the
+					// app ignores must not drop the focus a click left behind --
+					// that would make `E` in watch mode reset the user's tab
+					// position. resolve first, blur only once something is claimed
+					if (!viewerClaims(e)) return;
+					const resolution = editKeybindResolution(bind.key);
+					if (resolution === null) return;
+					dropClickResidue(e);
+					applyEditKeybind(resolution);
+				}
+			}))
 		],
 		// @tanstack/hotkeys defaults both preventDefault and stopPropagation to
 		// true for every matched registration, applied unconditionally on match
@@ -137,7 +202,9 @@ export function usePlaybackShortcuts() {
 		// listener rather than a hotkey registration because the reset is the
 		// *physical* zero and the library matches on the character the layout
 		// prints there -- see asksViewportReset for why `Control+0` cannot
-		// express it. guarded() is the whole gate here, same as for the hotkey
+		// express it, and KEYBINDS.viewportReset for the entry that lists the
+		// physical keys it occupies rather than a key string it has not got.
+		// guarded() is the whole gate here, same as for the hotkey
 		// registrations now that their ignoreInputs is off. preventDefault
 		// stays App.tsx's, app-wide, so page zoom cannot drift even when this
 		// declines
