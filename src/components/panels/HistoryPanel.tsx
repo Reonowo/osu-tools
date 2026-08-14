@@ -115,10 +115,17 @@ function HistoryNode({
 	state: "applied" | "current" | "undone";
 	nodeRef?: RefObject<HTMLDivElement | null>;
 }) {
+	// scroll-my matches the list's p-3.5: block "nearest" stops once the node
+	// itself is visible, so without it the container padding past an end node
+	// stays scrollable and the auto-scroll never quite reaches the edge
 	return (
 		<div
 			ref={nodeRef}
-			className={state === "undone" ? "flex items-start gap-2.5 opacity-45" : "flex items-start gap-2.5"}
+			className={
+				state === "undone"
+					? "flex scroll-my-3.5 items-start gap-2.5 opacity-45"
+					: "flex scroll-my-3.5 items-start gap-2.5"
+			}
 		>
 			<span
 				className={
@@ -128,10 +135,20 @@ function HistoryNode({
 				}
 			/>
 			<div>
-				<div className={state === "current" ? "text-[11px] text-[#e4e4e7]" : "text-[11px] text-[#a1a1aa]"}>
+				{/* pinned integer leadings (the inherited 1.5 gives 16.5px/14.25px
+				    line boxes): stacked nodes must stay whole-pixel tall, or each
+				    one lands at a different subpixel offset and the label/detail
+				    gap renders unevenly down the list */}
+				<div
+					className={
+						state === "current"
+							? "text-[11px] leading-4 text-[#e4e4e7]"
+							: "text-[11px] leading-4 text-[#a1a1aa]"
+					}
+				>
 					{label}
 				</div>
-				<div className="mt-0.5 font-mono text-[9.5px] text-[#8a8a93]">{detail}</div>
+				<div className="mt-0.5 font-mono text-[9.5px] leading-[14px] text-[#8a8a93]">{detail}</div>
 			</div>
 		</div>
 	);
