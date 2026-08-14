@@ -15,16 +15,22 @@ import { isOnLattice } from "@/lib/lattice";
 import { cn } from "@/lib/utils";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
-import { useViewerStore, type ToolId } from "@/state/store";
+import { KEYBINDS, TOOL_KEYBINDS } from "@/playback/keybinds";
+import { TOOL_IDS, useViewerStore, type ToolId } from "@/state/store";
 
-const TOOLS: { id: ToolId; icon: LucideIcon; label: string }[] = [
-	{ id: "select", icon: MousePointer2, label: "select" },
-	{ id: "lasso", icon: Lasso, label: "lasso" },
-	{ id: "move", icon: Move, label: "move" },
-	{ id: "smooth", icon: Spline, label: "smooth" },
-	{ id: "erase", icon: Eraser, label: "erase" }
-];
-const TOOL_IDS: readonly string[] = TOOLS.map((tool) => tool.id);
+// keyed by ToolId and rendered in the store's own order, so a sixth tool
+// cannot be armed from the keyboard while the palette never grows a tile for
+// it: this stops compiling until it has one
+const TOOL_TILES: Record<ToolId, { icon: LucideIcon; label: string }> = {
+	select: { icon: MousePointer2, label: "select" },
+	lasso: { icon: Lasso, label: "lasso" },
+	move: { icon: Move, label: "move" },
+	smooth: { icon: Spline, label: "smooth" },
+	erase: { icon: Eraser, label: "erase" }
+};
+const TOOLS = TOOL_IDS.map((id) => ({ id, ...TOOL_TILES[id] }));
+
+const isToolId = (value: string): value is ToolId => TOOL_IDS.some((id) => id === value);
 
 // the toggle-group item's default size variant carries min-w-8/px-2.5
 // alongside h-8; twMerge only drops h-8 for size-7 (same group, min-w is a
@@ -40,7 +46,18 @@ const ITEM_CLASS =
 // (two classes' worth of specificity) beat the plain text-[#66ccff] tint
 // below (one class) and paint the tile the tool-selected pink instead of the
 // preference cyan
-const PREFERENCE_TILE_CLASS = "size-7 min-w-0 justify-center rounded-lg p-0 text-[#71717a]";
+// the disabled: pair is the toggle variant's, spelled out here because a plain
+// button carries none of it -- without them a blocked snap tile would look
+// exactly like an available one
+const PREFERENCE_TILE_CLASS =
+	"size-7 min-w-0 justify-center rounded-lg p-0 text-[#71717a] disabled:pointer-events-none disabled:opacity-50";
+
+/** the key rides with the label rather than instead of it, so an unavailable
+ * tool still teaches its binding: the blocked reason follows both */
+function toolTooltip(id: ToolId, label: string, blocked: string | null): string {
+	const named = `${label} (${TOOL_KEYBINDS[id].key})`;
+	return blocked === null ? named : `${named} — ${blocked}`;
+}
 
 function PaletteButton({
 	id,
@@ -94,7 +111,7 @@ export function ToolPalette() {
 					// base-ui's toggle-group value is array-valued even in
 					// single-select mode
 					const chosen = next[0];
-					if (chosen !== undefined && TOOL_IDS.includes(chosen)) setTool(chosen as ToolId);
+					if (chosen !== undefined && isToolId(chosen)) setTool(chosen);
 				}}
 				className="gap-1"
 			>
@@ -105,7 +122,7 @@ export function ToolPalette() {
 						icon={icon}
 						label={label}
 						disabled={blocked !== null}
-						tooltip={blocked === null ? label : `${label} — ${blocked}`}
+						tooltip={toolTooltip(id, label, blocked)}
 					/>
 				))}
 				<Separator className="my-0.5" />
@@ -116,7 +133,7 @@ export function ToolPalette() {
 						icon={icon}
 						label={label}
 						disabled={blocked !== null}
-						tooltip={blocked === null ? label : `${label} — ${blocked}`}
+						tooltip={toolTooltip(id, label, blocked)}
 					/>
 				))}
 			</ToggleGroup>
@@ -125,26 +142,27 @@ export function ToolPalette() {
 			ToggleGroup entirely so pressing it can never fight the group's
 			single-select value (ToolId excludes "snap" for the same reason) */}
 			<Tooltip>
-				<TooltipTrigger
-					render={
-						<button
-							type="button"
-							aria-label="snap to lattice"
-							aria-pressed={snapToLattice}
-							onClick={() => setEditing("snapToLattice", !snapToLattice)}
-							className={cn(
-								PREFERENCE_TILE_CLASS,
-								"flex items-center",
-								snapToLattice && "text-[#66ccff]"
-							)}
-						>
-							<Magnet aria-hidden className="size-4" />
-						</button>
-					}
-				/>
+				{/* wrapped for the same reason PaletteButton is: a natively-disabled
+				button fires no hover events, so the span is what the tooltip hangs on */}
+				<TooltipTrigger render={<span />}>
+					<button
+						type="button"
+						aria-label="snap to lattice"
+						aria-pressed={snapToLattice}
+						// the same gate as the tools, because the key is: a tile that
+						// still toggled the preference while X declined would make the
+						// two routes to one persisted setting disagree
+						disabled={blocked !== null}
+						onClick={() => setEditing("snapToLattice", !snapToLattice)}
+						className={cn(PREFERENCE_TILE_CLASS, "flex items-center", snapToLattice && "text-[#66ccff]")}
+					>
+						<Magnet aria-hidden className="size-4" />
+					</button>
+				</TooltipTrigger>
 				<TooltipContent side="right">
-					snap to lattice {snapToLattice ? "on" : "off"} — applies to nudge and drag commits; synthesized
-					frames always snap when a lattice exists
+					snap to lattice ({KEYBINDS.toggleSnap.key}) {snapToLattice ? "on" : "off"} — applies to nudge and
+					drag commits; synthesized frames always snap when a lattice exists
+					{blocked !== null ? ` — ${blocked}` : ""}
 				</TooltipContent>
 			</Tooltip>
 		</div>
