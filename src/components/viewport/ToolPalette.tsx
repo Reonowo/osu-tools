@@ -15,7 +15,7 @@ import { isOnLattice } from "@/lib/lattice";
 import { cn } from "@/lib/utils";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
-import { KEYBINDS, TOOL_KEYBINDS } from "@/playback/keybinds";
+import { formatBindings, keybindRow, TOOL_KEYBINDS, type EffectiveKeybind } from "@/playback/keybinds";
 import { TOOL_IDS, useViewerStore, type ToolId } from "@/state/store";
 
 // keyed by ToolId and rendered in the store's own order, so a sixth tool
@@ -53,9 +53,12 @@ const PREFERENCE_TILE_CLASS =
 	"size-7 min-w-0 justify-center rounded-lg p-0 text-[#71717a] disabled:pointer-events-none disabled:opacity-50";
 
 /** the key rides with the label rather than instead of it, so an unavailable
- * tool still teaches its binding: the blocked reason follows both */
-function toolTooltip(id: ToolId, label: string, blocked: string | null): string {
-	const named = `${label} (${TOOL_KEYBINDS[id].key})`;
+ * tool still teaches its binding: the blocked reason follows both. the key is
+ * the one the user actually has -- an unbound tool names none rather than
+ * showing an empty pair of brackets */
+function toolTooltip(table: readonly EffectiveKeybind[], id: ToolId, label: string, blocked: string | null): string {
+	const keys = formatBindings(keybindRow(table, TOOL_KEYBINDS[id].action).bindings);
+	const named = keys === null ? label : `${label} (${keys})`;
 	return blocked === null ? named : `${named} — ${blocked}`;
 }
 
@@ -93,6 +96,10 @@ export function ToolPalette() {
 	const scene = useViewerStore((s) => s.scene);
 	const snapToLattice = useViewerStore((s) => s.editing.snapToLattice);
 	const setEditing = useViewerStore((s) => s.setEditing);
+	// the effective table, so a rebinding re-renders the tooltips instead of
+	// leaving them advertising a key the user has already changed
+	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
+	const snapKeys = formatBindings(keybindRow(keybinds, "toggleSnap").bindings);
 
 	// non-editable scenes disable the whole palette with the reason in each
 	// tooltip -- the same gate the panels mirror (editor/gate.ts)
@@ -122,7 +129,7 @@ export function ToolPalette() {
 						icon={icon}
 						label={label}
 						disabled={blocked !== null}
-						tooltip={toolTooltip(id, label, blocked)}
+						tooltip={toolTooltip(keybinds, id, label, blocked)}
 					/>
 				))}
 				<Separator className="my-0.5" />
@@ -133,7 +140,7 @@ export function ToolPalette() {
 						icon={icon}
 						label={label}
 						disabled={blocked !== null}
-						tooltip={toolTooltip(id, label, blocked)}
+						tooltip={toolTooltip(keybinds, id, label, blocked)}
 					/>
 				))}
 			</ToggleGroup>
@@ -160,8 +167,9 @@ export function ToolPalette() {
 					</button>
 				</TooltipTrigger>
 				<TooltipContent side="right">
-					snap to lattice ({KEYBINDS.toggleSnap.key}) {snapToLattice ? "on" : "off"} — applies to nudge and
-					drag commits; synthesized frames always snap when a lattice exists
+					snap to lattice {snapKeys === null ? "" : `(${snapKeys}) `}
+					{snapToLattice ? "on" : "off"} — applies to nudge and drag commits; synthesized frames always snap
+					when a lattice exists
 					{blocked !== null ? ` — ${blocked}` : ""}
 				</TooltipContent>
 			</Tooltip>

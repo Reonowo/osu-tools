@@ -7,6 +7,7 @@
 import { Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatBindings, keybindRow, keybindSuffix } from "@/playback/keybinds";
 import { VIEWPORT_ZOOM_STEP } from "@/renderer/playfield";
 import { useViewerStore } from "@/state/store";
 
@@ -15,6 +16,11 @@ const STEP_PERCENT = Math.round(VIEWPORT_ZOOM_STEP * 100);
 export function ZoomControls({ onStep }: { onStep: (direction: 1 | -1) => void }) {
 	const zoom = useViewerStore((s) => s.viewportZoom);
 	const resetViewport = useViewerStore((s) => s.resetViewport);
+	// the keys the user actually has, not the ones this shipped with: both of
+	// these are rebindable now, and a hint naming a key that no longer resets
+	// or pans is the same lie the palette tooltips used to tell
+	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
+	const panKeys = formatBindings(keybindRow(keybinds, "playPause").bindings);
 
 	return (
 		<div
@@ -46,7 +52,8 @@ export function ZoomControls({ onStep }: { onStep: (direction: 1 | -1) => void }
 					}
 				/>
 				<TooltipContent side="top">
-					reset to 100%, centred (ctrl+0) — hold space or middle-drag to pan
+					reset to 100%, centred{keybindSuffix(keybinds, "viewportReset")} —{" "}
+					{panKeys === null ? "middle-drag to pan" : `hold ${panKeys} or middle-drag to pan`}
 				</TooltipContent>
 			</Tooltip>
 
