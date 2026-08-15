@@ -6,6 +6,7 @@ import type {
 	EffectSettings,
 	ExportResult,
 	IpcError,
+	KeybindOverrides,
 	LoadedScene,
 	OverlaySettings,
 	Settings,
@@ -71,9 +72,10 @@ export function invokeSetViewerPrefs(
 	overlays: OverlaySettings,
 	editing: EditingSettings,
 	effects: EffectSettings,
-	timeline: TimelineSettings
+	timeline: TimelineSettings,
+	keybinds: KeybindOverrides
 ): Promise<Settings> {
-	return invoke<Settings>("set_viewer_prefs", { volume, overlays, editing, effects, timeline });
+	return invoke<Settings>("set_viewer_prefs", { volume, overlays, editing, effects, timeline, keybinds });
 }
 
 export function invokeClearRecents(): Promise<Settings> {

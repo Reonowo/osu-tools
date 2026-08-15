@@ -4,6 +4,7 @@ import type {
 	EditingSettings,
 	EffectSettings,
 	IpcError,
+	KeybindOverrides,
 	OverlaySettings,
 	Settings,
 	TimelineSettings
@@ -20,7 +21,8 @@ const baseSettings: Settings = {
 	recents: [],
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
-	timeline: DEFAULT_TIMELINE
+	timeline: DEFAULT_TIMELINE,
+	keybinds: {}
 };
 
 const identityDelta: EditDelta = {
@@ -44,12 +46,14 @@ function deps(): IpcDeps {
 		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing, effects) => ({
+		setViewerPrefs: async (volume, overlays, editing, effects, timeline, keybinds) => ({
 			...baseSettings,
 			volume,
 			overlays,
 			editing,
-			effects
+			effects,
+			timeline,
+			keybinds
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
 		applyEdit: async () => identityDelta,
@@ -106,6 +110,7 @@ function saveRecorder() {
 		editing: EditingSettings;
 		effects: EffectSettings;
 		timeline: TimelineSettings;
+		keybinds: KeybindOverrides;
 	}[] = [];
 	return {
 		calls,
@@ -114,9 +119,10 @@ function saveRecorder() {
 			overlays: OverlaySettings,
 			editing: EditingSettings,
 			effects: EffectSettings,
-			timeline: TimelineSettings
+			timeline: TimelineSettings,
+			keybinds: KeybindOverrides
 		) => {
-			calls.push({ volume, overlays, editing, effects, timeline });
+			calls.push({ volume, overlays, editing, effects, timeline, keybinds });
 			return baseSettings;
 		}
 	};
@@ -221,6 +227,33 @@ describe("installPrefsPersistence", () => {
 		timer.fire();
 		expect(rec.calls[0].timeline.tethers).toBe(false);
 		expect(rec.calls[0].timeline.hitWindowBands).toBe(true);
+	});
+
+	test("a rebinding schedules a save and collapses under the debounce", () => {
+		const store = createViewerStore(deps());
+		const timer = manualScheduler();
+		const rec = saveRecorder();
+		installPrefsPersistence(store, rec.save, 500, timer.scheduler);
+
+		store.getState().setKeybinds({ selectTool: [{ hotkey: "К", codes: ["KeyV"] }] });
+		store.getState().setKeybinds({ selectTool: [{ hotkey: "N", codes: ["KeyN"] }] });
+		expect(timer.scheduled).toBe(2);
+		timer.fire();
+
+		expect(rec.calls).toHaveLength(1);
+		expect(rec.calls[0].keybinds.selectTool?.[0].hotkey).toBe("N");
+	});
+
+	test("an unbinding persists as an unbinding rather than as an absent action", () => {
+		// the empty list is the whole of what makes an unbind survive a restart
+		const store = createViewerStore(deps());
+		const timer = manualScheduler();
+		const rec = saveRecorder();
+		installPrefsPersistence(store, rec.save, 500, timer.scheduler);
+
+		store.getState().setKeybinds({ eraseTool: [] });
+		timer.fire();
+		expect(rec.calls[0].keybinds).toEqual({ eraseTool: [] });
 	});
 
 	test("dispose flushes the pending save and stops listening", () => {
