@@ -77,13 +77,34 @@ describe("category registry", () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
-	test("registry and coverage describe the same four categories", () => {
+	test("registry and coverage describe the same categories", () => {
 		const ids = SETTINGS_CATEGORIES.map((category) => category.id).sort();
 		expect(Object.keys(CATEGORY_PREFS).sort()).toEqual(ids);
 	});
 
 	test("general is first, which is what the no-target open path falls back to", () => {
 		expect(SETTINGS_CATEGORIES[0]?.id).toBe("general");
+	});
+
+	test("the bespoke categories claim no per-key pref, and say so by claiming none", () => {
+		// general's install path and keybinds' override map are single controls
+		// over one setting each, not sets of per-key setters -- listing a key
+		// for either would make the coverage assertions above lie about what a
+		// ToggleRow-shaped category is
+		expect(CATEGORY_PREFS.general).toEqual([]);
+		expect(CATEGORY_PREFS.keybinds).toEqual([]);
+	});
+
+	test("every registry entry is a category the dialog can render", () => {
+		// the registry is what the nav column maps over, so an id with no panel
+		// would render an empty body rather than failing anywhere
+		expect(SETTINGS_CATEGORIES.map((category) => category.id)).toEqual([
+			"general",
+			"gameplay",
+			"analysis",
+			"editing",
+			"keybinds"
+		]);
 	});
 });
 

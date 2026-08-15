@@ -1,4 +1,4 @@
-// the settings dialog: a nav column and four category panels inside the modal
+// the settings dialog: a nav column and five category panels inside the modal
 // it has always been. still a modal because it is a modal-shaped task and has
 // to be reachable with nothing loaded (the start screen needs the install
 // path), so it can be neither a seventh panel tab nor a route -- there is no
@@ -16,6 +16,7 @@ import { SETTINGS_CATEGORIES, type SettingsCategory } from "./categories";
 import { EditingCategory } from "./EditingCategory";
 import { GameplayCategory } from "./GameplayCategory";
 import { GeneralCategory } from "./GeneralCategory";
+import { KeybindsCategory } from "./KeybindsCategory";
 
 // the vertical orientation costs less here than it does on the rail: a
 // left-aligned full-width text row is what group-data-vertical/tabs already
@@ -151,6 +152,9 @@ export function SettingsDialog({
 						</TabsContent>
 						<TabsContent value="editing">
 							<EditingCategory />
+						</TabsContent>
+						<TabsContent value="keybinds">
+							<KeybindsCategory />
 						</TabsContent>
 					</div>
 				</Tabs>
