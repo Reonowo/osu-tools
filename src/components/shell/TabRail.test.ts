@@ -17,7 +17,8 @@ const baseSettings: Settings = {
 	recents: [],
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
-	timeline: DEFAULT_TIMELINE
+	timeline: DEFAULT_TIMELINE,
+	keybinds: {}
 };
 
 const identityDelta: EditDelta = {

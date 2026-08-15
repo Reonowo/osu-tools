@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "../state/defaults";
 import type {
 	EffectSettings,
 	IpcError,
@@ -6,6 +7,7 @@ import type {
 	LoadedSceneWarning,
 	OverlaySettings,
 	RenderKind,
+	Settings,
 	SimulationDto
 } from "./scene-types";
 import { isIpcError } from "./ipc";
@@ -137,6 +139,27 @@ describe("scene contract mirror", () => {
 			backgroundDim: 35
 		};
 		expect(effects.backgroundDim).toBe(35);
+	});
+
+	test("the settings contract carries the keybind overrides, sparsely", () => {
+		// keys copied from settings.rs's settings_serialize_with_camel_case_keys.
+		// the map is opaque on the rust side, so this is the only declaration of
+		// what an action or a binding is -- and the three states it can be in:
+		// absent (follow the default), present (these keys), present-and-empty
+		// (deliberately unbound)
+		const settings: Settings = {
+			osuStablePath: null,
+			volume: 100,
+			overlays: DEFAULT_OVERLAYS,
+			recents: [],
+			editing: DEFAULT_EDITING,
+			effects: DEFAULT_EFFECTS,
+			timeline: DEFAULT_TIMELINE,
+			keybinds: { selectTool: [{ hotkey: "К", codes: ["KeyV"] }], eraseTool: [] }
+		};
+		expect(settings.keybinds.selectTool?.[0].codes).toEqual(["KeyV"]);
+		expect(settings.keybinds.eraseTool).toEqual([]);
+		expect(settings.keybinds.moveTool).toBeUndefined();
 	});
 
 	test("warnings carry their payload fields", () => {

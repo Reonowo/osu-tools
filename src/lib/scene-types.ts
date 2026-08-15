@@ -340,6 +340,23 @@ export interface TimelineSettings {
 	severityTicks: boolean;
 }
 
+/** one key an action answers to, as it is persisted. the hotkey string is the
+ * @tanstack/hotkeys canonical form -- what a registration takes verbatim -- and
+ * the physical codes ride alongside it unconditionally, because the entry's
+ * matcher (printed character or physical key) is what decides which half is
+ * matched against; see docs/adr/0002-keybindings-store-key-and-code.md */
+export interface KeybindBinding {
+	hotkey: string;
+	codes: readonly string[];
+}
+
+/** mirrors settings.rs KeybindOverrides: sparse, action -> its ordered binding
+ * slots. only actions the user actually changed appear; an absent action
+ * follows the app's default and a present-but-empty one is deliberately
+ * unbound. rust stores it opaquely, so this is the only declaration of what an
+ * action or a binding is */
+export type KeybindOverrides = Record<string, readonly KeybindBinding[]>;
+
 /** mirrors settings.rs Settings */
 export interface Settings {
 	osuStablePath: string | null;
@@ -350,4 +367,5 @@ export interface Settings {
 	editing: EditingSettings;
 	effects: EffectSettings;
 	timeline: TimelineSettings;
+	keybinds: KeybindOverrides;
 }
