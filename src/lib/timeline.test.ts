@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { audioExtendedBounds, countAtOrBefore, fractionFor, statsAt, timeFor } from "./timeline";
+import { audioExtendedBounds, countAtOrBefore, fractionFor, statsAt, timeFor, widenBounds } from "./timeline";
 
 const bounds = { minTime: -1500, maxTime: 8500 };
 
@@ -52,6 +52,25 @@ describe("audioExtendedBounds", () => {
 
 	test("a longer audio track extends maxTime, minTime is untouched", () => {
 		expect(audioExtendedBounds(bounds, 20_000)).toEqual({ minTime: -1500, maxTime: 20_000 });
+	});
+});
+
+describe("widenBounds", () => {
+	test("no current bounds adopts the incoming ones", () => {
+		expect(widenBounds(null, bounds)).toBe(bounds);
+	});
+
+	test("incoming bounds inside the current ones return the current object itself", () => {
+		// identity, not just equality: an unchanged fold must not re-render
+		// bounds consumers
+		expect(widenBounds(bounds, { minTime: -1000, maxTime: 8000 })).toBe(bounds);
+		expect(widenBounds(bounds, bounds)).toBe(bounds);
+	});
+
+	test("each side widens independently and never narrows", () => {
+		expect(widenBounds(bounds, { minTime: -2000, maxTime: 8000 })).toEqual({ minTime: -2000, maxTime: 8500 });
+		expect(widenBounds(bounds, { minTime: 0, maxTime: 9000 })).toEqual({ minTime: -1500, maxTime: 9000 });
+		expect(widenBounds(bounds, { minTime: -2000, maxTime: 9000 })).toEqual({ minTime: -2000, maxTime: 9000 });
 	});
 });
 

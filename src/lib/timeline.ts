@@ -20,6 +20,25 @@ export function audioExtendedBounds(bounds: TimeBounds, audioDurationMs: number 
 	};
 }
 
+/** folds a landed delta's live bounds into the timeline's mapping bounds:
+ * the union of the two spans, so the mapping only ever widens. the timeline
+ * tiers draw against a fixed frame of reference -- an edit that re-judges
+ * the last object moves the live playback bounds (derive.ts computes them
+ * from the simulation so the clock covers the full fade), and mapping
+ * against those directly shifted every mark on screen when the window sat
+ * pinned at an end. an edit genuinely outgrowing the mapping still widens
+ * it, or the new content would be unreachable; nothing ever shrinks it back
+ * short of a new scene install. returns `current` itself when the incoming
+ * bounds fit inside it */
+export function widenBounds(current: TimeBounds | null, incoming: TimeBounds): TimeBounds {
+	if (current === null) return incoming;
+	if (incoming.minTime >= current.minTime && incoming.maxTime <= current.maxTime) return current;
+	return {
+		minTime: Math.min(current.minTime, incoming.minTime),
+		maxTime: Math.max(current.maxTime, incoming.maxTime)
+	};
+}
+
 export function fractionFor(bounds: TimeBounds, t: number): number {
 	const span = bounds.maxTime - bounds.minTime;
 	if (span <= 0) return 0;
