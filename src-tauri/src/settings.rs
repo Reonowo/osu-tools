@@ -12,6 +12,8 @@
 //! manually paired beatmap survives a restart instead of being looked up
 //! again (or asked for again).
 //! v6 adds `timeline`: the timeline dock's per-layer visibility toggles.
+//! v7 adds `keybinds`: the frontend's sparse keybind override map, stored
+//! opaquely -- see `KeybindOverrides`.
 //!
 //! every field is `#[serde(default)]` at the container level, so a v1 file --
 //! or any future file written by an older build -- hydrates the new fields
@@ -19,10 +21,11 @@
 //! values are additionally range-checked on load: the file is user-editable,
 //! and a hand-typed volume of 900 must not reach the audio element
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub const SETTINGS_FILE: &str = "settings.json";
 
@@ -46,6 +49,54 @@ pub const BACKGROUND_DIM_DEFAULT: u32 = 70;
 /// how many recently opened replays the start screen keeps
 pub const MAX_RECENTS: usize = 12;
 
+/// the defensive caps on the keybind override map. the frontend owns what an
+/// action is and what a binding looks like; these are structural bounds, the
+/// same posture every other pref gets, and nothing more
+pub const MAX_KEYBIND_ACTIONS: usize = 64;
+pub const MAX_KEYBIND_BINDINGS: usize = 4;
+pub const MAX_KEYBIND_STRING: usize = 64;
+
+/// the frontend's sparse keybind overrides: action -> its binding slots, only
+/// for actions the user actually changed.
+///
+/// stored opaquely on purpose. this crate knows neither the action vocabulary
+/// nor the uniqueness rule and should not learn them: an override written by a
+/// newer build has to survive a downgrade rather than being scrubbed on first
+/// load by a validator that merely does not recognise it yet, which is why the
+/// bindings stay `serde_json::Value` instead of a mirrored struct
+pub type KeybindOverrides = BTreeMap<String, Vec<serde_json::Value>>;
+
+/// a hand edit -- or a newer build's shape -- must never fail the whole
+/// settings parse and take the stable path down with it. anything that is not
+/// an action mapped to a list of bindings is dropped entry by entry; what is
+/// left travels untouched
+fn lenient_keybinds<'de, D: Deserializer<'de>>(deserializer: D) -> Result<KeybindOverrides, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(map) = value else {
+        return Ok(KeybindOverrides::new());
+    };
+    Ok(map
+        .into_iter()
+        .filter_map(|(action, bindings)| match bindings {
+            serde_json::Value::Array(items) => Some((action, items)),
+            _ => None,
+        })
+        .collect())
+}
+
+/// true when every string inside a stored binding is within the cap, keys of
+/// nested objects included
+fn keybind_strings_within_cap(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => s.len() <= MAX_KEYBIND_STRING,
+        serde_json::Value::Array(items) => items.iter().all(keybind_strings_within_cap),
+        serde_json::Value::Object(fields) => fields
+            .iter()
+            .all(|(key, field)| key.len() <= MAX_KEYBIND_STRING && keybind_strings_within_cap(field)),
+        _ => true,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -62,6 +113,11 @@ pub struct Settings {
     pub editing: EditingPrefs,
     pub effects: EffectPrefs,
     pub timeline: TimelinePrefs,
+    /// sparse: only the actions the user actually rebound. an absent action
+    /// keeps following the frontend's own default, which is what lets a later
+    /// improvement to a default reach someone who has opened this surface
+    #[serde(deserialize_with = "lenient_keybinds")]
+    pub keybinds: KeybindOverrides,
 }
 
 impl Default for Settings {
@@ -74,6 +130,7 @@ impl Default for Settings {
             editing: EditingPrefs::default(),
             effects: EffectPrefs::default(),
             timeline: TimelinePrefs::default(),
+            keybinds: KeybindOverrides::new(),
         }
     }
 }
@@ -241,6 +298,20 @@ impl Settings {
         if !GRID_SPACINGS.contains(&self.overlays.playfield_grid) {
             self.overlays.playfield_grid = 0;
         }
+        // the keybind caps: entry count, bindings per action, string length.
+        // structure only -- whether an action exists and whether two of them
+        // want the same key are the frontend's questions, answered by its own
+        // fold, and a validator here would scrub what a newer build wrote
+        self.keybinds.retain(|action, bindings| {
+            bindings.truncate(MAX_KEYBIND_BINDINGS);
+            action.len() <= MAX_KEYBIND_STRING && bindings.iter().all(keybind_strings_within_cap)
+        });
+        if self.keybinds.len() > MAX_KEYBIND_ACTIONS {
+            // the map is ordered, so which entries survive is the same on
+            // every run rather than whatever the hash happened to yield
+            let kept: Vec<String> = self.keybinds.keys().take(MAX_KEYBIND_ACTIONS).cloned().collect();
+            self.keybinds.retain(|action, _| kept.contains(action));
+        }
         self.recents.truncate(MAX_RECENTS);
         for recent in &mut self.recents {
             recent.accuracy = if recent.accuracy.is_finite() {
@@ -312,7 +383,17 @@ mod tests {
                 nested_marks: false,
                 severity_ticks: true,
             },
+            keybinds: keybinds([("selectTool", json!({ "hotkey": "К", "codes": ["KeyV"] }))]),
         }
+    }
+
+    /// one binding per named action, which is the shape every override in
+    /// these tests takes
+    fn keybinds<const N: usize>(entries: [(&str, serde_json::Value); N]) -> KeybindOverrides {
+        entries
+            .into_iter()
+            .map(|(action, binding)| (action.to_string(), vec![binding]))
+            .collect()
     }
 
     fn recent(path: &str, opened_at_ms: i64) -> RecentReplay {
@@ -427,6 +508,7 @@ mod tests {
                     "nestedMarks": false,
                     "severityTicks": true,
                 },
+                "keybinds": { "selectTool": [{ "hotkey": "К", "codes": ["KeyV"] }] },
             })
         );
 
@@ -462,6 +544,7 @@ mod tests {
                     "nestedMarks": true,
                     "severityTicks": true,
                 },
+                "keybinds": {},
             })
         );
     }
@@ -546,6 +629,7 @@ mod tests {
         assert_eq!(loaded.editing, EditingPrefs::default());
         assert_eq!(loaded.effects, EffectPrefs::default());
         assert_eq!(loaded.timeline, TimelinePrefs::default());
+        assert_eq!(loaded.keybinds, KeybindOverrides::new());
 
         // a partially-written overlays object hydrates per field too
         std::fs::write(
@@ -774,6 +858,151 @@ mod tests {
             load_settings(dir.path()).effects.background_dim,
             BACKGROUND_DIM_DEFAULT
         );
+    }
+
+    #[test]
+    fn keybind_overrides_survive_a_save_and_load_round_trip() {
+        // including the deliberately-unbound state: an empty binding list is
+        // not the same thing as an absent action, and collapsing the two would
+        // make unbinding a lie that expires at the next launch
+        let dir = tempfile::tempdir().unwrap();
+        let mut overrides = keybinds([("selectTool", json!({ "hotkey": "К", "codes": ["KeyV"] }))]);
+        overrides.insert("eraseTool".into(), Vec::new());
+        let settings = Settings {
+            keybinds: overrides.clone(),
+            ..Settings::default()
+        };
+        save_settings(dir.path(), &settings).unwrap();
+
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.keybinds, overrides);
+        assert_eq!(
+            loaded.keybinds.get("eraseTool").map(Vec::len),
+            Some(0),
+            "an unbind comes back as an unbind, not as an absent action"
+        );
+        assert!(!loaded.keybinds.contains_key("moveTool"));
+    }
+
+    #[test]
+    fn a_legacy_file_hydrates_an_empty_keybind_map() {
+        // a v6 file has no keybinds at all; the stable path and every other
+        // pref must survive it, and nothing may come up rebound
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"osuStablePath":"D:\\games\\osu!","volume":40}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.osu_stable_path.as_deref(), Some(r"D:\games\osu!"));
+        assert_eq!(loaded.volume, 40);
+        assert_eq!(loaded.keybinds, KeybindOverrides::new());
+    }
+
+    #[test]
+    fn an_override_this_build_does_not_recognise_survives_untouched() {
+        // the whole reason the map is opaque: a downgrade must not scrub what a
+        // newer build wrote, so neither the action name nor the fields of a
+        // binding are validated here
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"keybinds":{"someFutureAction":[{"hotkey":"Mod+J","codes":["KeyJ"],"seq":["G","G"]}]}}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(
+            loaded.keybinds.get("someFutureAction").unwrap()[0],
+            json!({ "hotkey": "Mod+J", "codes": ["KeyJ"], "seq": ["G", "G"] })
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_keybind_map_is_clamped_to_its_structural_caps() {
+        let mut settings = Settings {
+            keybinds: (0..(MAX_KEYBIND_ACTIONS + 5))
+                .map(|i| (format!("action{i:03}"), vec![json!({ "hotkey": "J" })]))
+                .collect(),
+            ..Settings::default()
+        };
+        settings.keybinds.insert(
+            "tooManyBindings".into(),
+            (0..(MAX_KEYBIND_BINDINGS + 3))
+                .map(|i| json!({ "hotkey": format!("F{i}") }))
+                .collect(),
+        );
+        settings.keybinds.insert(
+            "tooLong".into(),
+            vec![json!({ "hotkey": "x".repeat(MAX_KEYBIND_STRING + 1) })],
+        );
+        settings
+            .keybinds
+            .insert("k".repeat(MAX_KEYBIND_STRING + 1), vec![json!({ "hotkey": "J" })]);
+        settings.sanitize();
+
+        assert_eq!(settings.keybinds.len(), MAX_KEYBIND_ACTIONS);
+        assert!(!settings.keybinds.contains_key("tooLong"));
+        assert!(!settings
+            .keybinds
+            .contains_key(&"k".repeat(MAX_KEYBIND_STRING + 1)));
+        // the caps are deterministic: the same file always clamps the same way
+        let mut again = Settings {
+            keybinds: settings.keybinds.clone(),
+            ..Settings::default()
+        };
+        again.sanitize();
+        assert_eq!(again.keybinds, settings.keybinds);
+    }
+
+    #[test]
+    fn a_bindings_list_is_capped_without_losing_the_action() {
+        let mut settings = Settings {
+            keybinds: [(
+                "selectTool".to_string(),
+                (0..(MAX_KEYBIND_BINDINGS + 3))
+                    .map(|i| json!({ "hotkey": format!("F{i}") }))
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(
+            settings.keybinds.get("selectTool").map(Vec::len),
+            Some(MAX_KEYBIND_BINDINGS)
+        );
+    }
+
+    #[test]
+    fn a_keybind_map_of_the_wrong_shape_does_not_lose_the_rest_of_settings() {
+        // the same failure mode the recents test guards: one hand-edited
+        // branch must not fail serde_json::from_str for the whole file and
+        // silently drop the stable path on the next save
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"osuStablePath":"D:\\games\\osu!","keybinds":"nope"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_settings(dir.path()).osu_stable_path.as_deref(),
+            Some(r"D:\games\osu!")
+        );
+
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"volume":42,"keybinds":{"selectTool":"K","moveTool":[{"hotkey":"N"}]}}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.volume, 42);
+        assert!(
+            !loaded.keybinds.contains_key("selectTool"),
+            "an action mapped to something that is not a list of bindings is dropped"
+        );
+        assert_eq!(loaded.keybinds.get("moveTool").unwrap()[0], json!({ "hotkey": "N" }));
     }
 
     #[test]

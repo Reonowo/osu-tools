@@ -11,7 +11,8 @@ use crate::error::{editor_engine_error, IpcError};
 use crate::load::{self, LoadOutcome, SavedBeatmap, SessionState};
 use crate::scene::LoadedScene;
 use crate::settings::{
-    save_settings, EditingPrefs, EffectPrefs, OverlayPrefs, RecentReplay, Settings, TimelinePrefs,
+    save_settings, EditingPrefs, EffectPrefs, KeybindOverrides, OverlayPrefs, RecentReplay, Settings,
+    TimelinePrefs,
 };
 use crate::state::AppState;
 use engine::formats::osr::FIRST_LAZER_VERSION;
@@ -229,6 +230,7 @@ pub fn set_viewer_prefs(
     editing: EditingPrefs,
     effects: EffectPrefs,
     timeline: TimelinePrefs,
+    keybinds: KeybindOverrides,
 ) -> Result<Settings, IpcError> {
     let mut settings = state.settings.lock().expect("settings lock");
     // persist before publishing, as in set_osu_stable_path
@@ -238,6 +240,7 @@ pub fn set_viewer_prefs(
     candidate.editing = editing;
     candidate.effects = effects;
     candidate.timeline = timeline;
+    candidate.keybinds = keybinds;
     candidate.sanitize();
     save_settings(&state.config_dir, &candidate)?;
     *settings = candidate;
@@ -989,6 +992,14 @@ mod tests {
             hit_window_bands: false,
             ..TimelinePrefs::default()
         };
+        // the overrides travel opaquely: this crate never asks what
+        // `selectTool` is or whether two actions want one key
+        let keybinds: KeybindOverrides = [(
+            "selectTool".to_string(),
+            vec![serde_json::json!({ "hotkey": "К", "codes": ["KeyV"] })],
+        )]
+        .into_iter()
+        .collect();
         // volume over 100
         let updated = set_viewer_prefs(
             app.state(),
@@ -997,6 +1008,7 @@ mod tests {
             editing.clone(),
             effects.clone(),
             timeline.clone(),
+            keybinds.clone(),
         )
         .unwrap();
 
@@ -1017,6 +1029,10 @@ mod tests {
         assert!(
             updated.timeline.tethers,
             "an untouched timeline layer stays visible"
+        );
+        assert_eq!(
+            updated.keybinds, keybinds,
+            "a rebinding round-trips through the command unchanged"
         );
 
         // persisted in sanitized form, not just published
@@ -1039,6 +1055,7 @@ mod tests {
             EditingPrefs::default(),
             EffectPrefs::default(),
             TimelinePrefs::default(),
+            KeybindOverrides::new(),
         )
         .unwrap();
 
@@ -1065,6 +1082,7 @@ mod tests {
             EditingPrefs::default(),
             EffectPrefs::default(),
             TimelinePrefs::default(),
+            KeybindOverrides::new(),
         )
         .unwrap_err();
         assert!(matches!(err, IpcError::Io { .. }));
