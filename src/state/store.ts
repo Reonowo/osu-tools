@@ -40,6 +40,7 @@ import type {
 	TimelineSettings
 } from "../lib/scene-types";
 import { deriveScene, type DerivedScene } from "../lib/derive";
+import { widenBounds, type TimeBounds } from "../lib/timeline";
 import { foldKeybinds, NO_KEYBIND_OVERRIDES, type EffectiveKeybind } from "../playback/keybinds";
 import { clampViewportZoom, DEFAULT_VIEWPORT_ZOOM, NO_VIEWPORT_PAN, type ViewportPan } from "../renderer/playfield";
 import {
@@ -177,6 +178,15 @@ export interface ViewerState {
 	 * naming that same scene rather than going null out from under it */
 	osrPath: string | null;
 	derived: DerivedScene | null;
+	/** the timeline's mapping bounds: the dock's fixed frame of reference,
+	 * shared by both tiers and the status bar's zoom readout. frozen from the
+	 * pristine document at install and only ever widened when a landed
+	 * delta's live bounds outgrow it (lib/timeline.ts's widenBounds) --
+	 * derived.bounds keep breathing with the simulation because the clock
+	 * needs the full fade covered, and mapping the timeline against those
+	 * directly made every mark shift on screen when an edit re-judged the
+	 * last object. null exactly when derived is null */
+	timelineBounds: TimeBounds | null;
 	sceneId: number;
 	loading: boolean;
 	lastError: { error: IpcError; osrPath: string } | null;
@@ -421,9 +431,15 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				simulation: delta.simulation ?? scene.simulation,
 				replay: { ...scene.replay, playerName: delta.playerName, timestampTicks: delta.timestampTicks }
 			};
+			const rederived = delta.frames !== null || delta.simulation !== null ? deriveScene(nextScene) : null;
 			set({
 				scene: nextScene,
-				...(delta.frames !== null || delta.simulation !== null ? { derived: deriveScene(nextScene) } : {}),
+				...(rederived !== null
+					? {
+							derived: rederived,
+							timelineBounds: widenBounds(get().timelineBounds, rederived.timelineBounds)
+						}
+					: {}),
 				editRevision,
 				lastSplice,
 				editor: {
@@ -602,9 +618,14 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			// it describes the loaded file, not the edited document
 			const lattice = inferLattice(scene.frames);
 			const offLattice = summarizeOffLattice(scene.frames, lattice);
+			const derived = deriveScene(scene);
 			set({
 				scene,
-				derived: deriveScene(scene),
+				derived,
+				// the pristine document's own mapping bounds: the frame of
+				// reference every edit this session maps inside (widened only by
+				// genuine frame extension, never re-derived)
+				timelineBounds: derived.timelineBounds,
 				sceneId: get().sceneId + 1,
 				osrPath,
 				audioDurationMs: null,
@@ -706,6 +727,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			scene: null,
 			osrPath: null,
 			derived: null,
+			timelineBounds: null,
 			sceneId: 0,
 			loading: false,
 			lastError: null,
