@@ -301,6 +301,56 @@ describe("bounds", () => {
 		expect(clock.currentTime()).toBe(5000);
 	});
 
+	test("shrinking maxTime under a paused clock leaves its time in place", () => {
+		// PlayerView re-feeds the live bounds on every landed edit, and a
+		// re-judgement can shrink maxTime below where the user sits paused --
+		// clamping the paused time made the playhead (and the strip's played
+		// tint) visibly jump backwards on release. an overrun past maxTime is
+		// safe: tick() holds it, and play() restarts from the top
+		const clock = new PlaybackClock(fakeNow().now);
+		clock.setBounds(-1500, 9900);
+		clock.seekTo(9900);
+		clock.setBounds(-1500, 9800);
+		expect(clock.currentTime()).toBe(9900);
+		clock.play();
+		expect(clock.currentTime()).toBe(-1500);
+	});
+
+	test("a risen minTime pulls a paused clock forward with it", () => {
+		// deleting the earliest frame lifts derived.bounds.minTime (the only
+		// one of its four terms an edit can move), and play() only restarts at
+		// the other end -- left alone, the clock would run forward from -2000
+		// through pre-roll the edit just removed
+		const c = fakeNow();
+		const clock = new PlaybackClock(c.now);
+		clock.setBounds(-2000, 9900);
+		clock.seekTo(-2000);
+		clock.setBounds(-1, 9900);
+		expect(clock.currentTime()).toBe(-1);
+		clock.play();
+		c.advance(16);
+		expect(clock.tick()).toBeCloseTo(15, 6);
+	});
+
+	test("a risen minTime under a playing clock does not re-apply the un-ticked interval", () => {
+		// an edit can land mid-playback (PlayerView's editRevision effect
+		// deliberately never seeks), so the clamp has to rebase the tick
+		// baseline the way seekTo does -- otherwise the elapsed-but-un-ticked
+		// time lands on top of the new minimum and skips forward
+		const c = fakeNow();
+		const clock = new PlaybackClock(c.now);
+		clock.setBounds(-2000, 9900);
+		clock.seekTo(-2000);
+		clock.play();
+		c.advance(100);
+		expect(clock.tick()).toBeCloseTo(-1900, 6);
+		c.advance(100);
+		clock.setBounds(-1000, 9900);
+		expect(clock.currentTime()).toBe(-1000);
+		c.advance(16);
+		expect(clock.tick()).toBeCloseTo(-984, 6);
+	});
+
 	test("play() at maxTime restarts from minTime", () => {
 		const c = fakeNow();
 		const clock = new PlaybackClock(c.now);

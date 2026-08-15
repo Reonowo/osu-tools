@@ -99,10 +99,32 @@ export class PlaybackClock {
 		this.mode = "internal";
 	}
 
+	/** deliberately leaves an overrun past maxTime alone: PlayerView re-feeds
+	 * the live bounds on every landed edit, and clamping a paused time under a
+	 * shrinking maxTime visibly yanked the playhead backwards on release. that
+	 * overrun is safe everywhere it can be read -- tick() holds a paused time
+	 * and pauses a playing one at the boundary, seekTo clamps, and play() at or
+	 * past maxTime restarts from minTime.
+	 *
+	 * a time below a risen minTime is not: only the frame stream can move that
+	 * bound (derive.ts takes it against the beatmap's own edit-invariant
+	 * lead-in and first appear), so deleting the earliest frame lifts it past
+	 * where the user sits paused, and play() -- which only restarts at the
+	 * other end -- would then run forward through pre-roll the edit removed.
+	 * clamping up to it is a forward correction, not the backward yank above */
 	setBounds(minMs: number, maxMs: number): void {
 		this.boundsMin = minMs;
 		this.boundsMax = maxMs;
-		this.time = Math.min(Math.max(this.time, minMs), maxMs);
+		if (this.time < minMs) {
+			this.time = minMs;
+			// same rebase seekTo does: moving time out-of-band without this
+			// leaves lastNow naming the tick before the correction, and the next
+			// tick re-applies that whole interval on top of the new minimum.
+			// only internal mode can reach here -- minTime is at most 0
+			// (derive.ts mins it against a literal 0), so a time below it is
+			// negative, and audioCovers() keeps a negative time off the audio
+			this.lastNow = this.now();
+		}
 	}
 
 	currentTime(): number {
