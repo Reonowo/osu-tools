@@ -24,8 +24,10 @@ import { gesturePreview, opsToAuthoritative, selectionToAuthoritative } from "@/
 import { countedLabel, deletedFrameCount, movedFrameCount } from "@/editor/tool-commits";
 import { countTimedAtOrBefore } from "@/lib/timeline";
 import { viewportPointToPlayfield, viewportTransform } from "@/renderer/playfield";
+import { captureArm } from "@/playback/capture-arm";
 import { focusModality } from "@/playback/focus-modality";
 import { playbackClock } from "@/playback/instance";
+import { keybindRow, matchesKeybind } from "@/playback/keybinds";
 import { spacePan } from "@/playback/space-pan";
 import { controlOwnsKeydown, withinInteractiveControl, withinViewportChrome } from "@/playback/shortcut-guards";
 import { effectiveOverlays } from "@/state/defaults";
@@ -148,7 +150,8 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			});
 		};
 
-		/** the one erase pipeline, shared by the brush and Delete/Backspace:
+		/** the one erase pipeline, shared by the brush and the erase-selection
+		 * keybind (Delete/Backspace by default, whatever the user bound since):
 		 * the live preview is already showing the expansion; freeze it, queue
 		 * the intent, and let the dispatch-time re-expansion regenerate the
 		 * entry (or reject with a toast and discard -- the snap-back) */
@@ -332,8 +335,8 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			endGesture(e);
 		};
 
-		/** Delete/Backspace erases the current frame selection with any tool
-		 * active -- the same operation, the same label, the same intent
+		/** the erase-selection keybind erases the current frame selection with
+		 * any tool active -- the same operation, the same label, the same intent
 		 * pipeline as the brush */
 		const eraseSelection = () => {
 			const state = viewerStore.getState();
@@ -358,6 +361,10 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 		// escape is two-stage: a live gesture dies (nothing commits), otherwise
 		// the selection clears. both live on one key
 		const onKeyDown = (e: KeyboardEvent) => {
+			// a keystroke meant for an armed binding slot is that slot's. this
+			// listener is on the window and the hotkey manager does not mediate
+			// it, so the settings dialog's own focus containment is not enough
+			if (captureArm.armed) return;
 			const state = viewerStore.getState();
 			if (state.mode !== "edit" || state.scene === null) return;
 			// a live gesture owns escape whatever holds focus -- the pointer is
@@ -374,7 +381,14 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			// and text entry keep their own keys (a number field's Backspace,
 			// a dialog's Escape)
 			if (controlOwnsKeydown(e, focusModality.keyboardFocus)) return;
-			if (e.key === "Delete" || e.key === "Backspace") {
+			// resolved against the effective table rather than compared as
+			// literals: these keys were listed in the table without being driven
+			// by it, so a user who rebound them was rebinding nothing
+			if (matchesKeybind(e, keybindRow(state.effectiveKeybinds, "eraseSelection"))) {
+				// claimed, so nothing else acts on it: Backspace still navigates
+				// back in some webviews, and this row can now be rebound onto a
+				// chord the webview would otherwise answer itself
+				e.preventDefault();
 				eraseSelection();
 				return;
 			}
