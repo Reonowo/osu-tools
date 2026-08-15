@@ -47,7 +47,7 @@ export function StatusBar() {
 	// the fallbacks just keep the component well-typed against the store's
 	// nullable fields
 	const scene = useViewerStore((s) => s.scene);
-	const derived = useViewerStore((s) => s.derived);
+	const timelineBounds = useViewerStore((s) => s.timelineBounds);
 	const lattice = useViewerStore((s) => s.editor?.lattice ?? null);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
@@ -67,8 +67,10 @@ export function StatusBar() {
 	// the same audio-extended window DetailLanes and OverviewStrip zoom
 	// against (lib/timeline.ts's audioExtendedBounds) -- a replay's frames can
 	// end before its audio does, and the zoom readout must describe the same
-	// span the timeline actually renders rather than a narrower frame-only one
-	const bounds = audioExtendedBounds(derived?.bounds ?? { minTime: 0, maxTime: 0 }, audioDurationMs);
+	// span the timeline actually renders rather than a narrower frame-only
+	// one. timeline bounds for the same reason: the readout follows the
+	// lanes' mapping, which holds still under editing
+	const bounds = audioExtendedBounds(timelineBounds ?? { minTime: 0, maxTime: 0 }, audioDurationMs);
 	// clampSpan mirrors windowAround inside the lanes: on a replay shorter
 	// than the stored span the lanes render the whole replay at 1x, and the
 	// readout must not claim a sub-1x zoom the timeline is not doing
