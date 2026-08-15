@@ -23,6 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { formatTime } from "@/lib/format";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
+import { keybindSuffix } from "@/playback/keybinds";
 import { stepFrame } from "@/playback/use-playback-shortcuts";
 import { useViewerStore } from "@/state/store";
 
@@ -88,6 +89,10 @@ export function Transport() {
 	const setPlaying = useViewerStore((s) => s.setPlaying);
 	const setRate = useViewerStore((s) => s.setRate);
 	const setVolume = useViewerStore((s) => s.setVolume);
+	// all four of these buttons name a key, and all four keys are rebindable
+	// now: read the effective table so a hint cannot go on advertising one the
+	// user has moved or taken away
+	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
 
 	const currentTimeRef = useRef<HTMLSpanElement>(null);
 	const totalTimeRef = useRef<HTMLSpanElement>(null);
@@ -121,7 +126,7 @@ export function Transport() {
 		<div className="flex items-center gap-[7px] px-2.5 py-1.5">
 			<IconAction
 				label="restart"
-				tooltip="jump back to the start of the replay (home)"
+				tooltip={`jump back to the start of the replay${keybindSuffix(keybinds, "restart")}`}
 				className={FLANKING_BUTTON_CLASS}
 				onClick={() => playbackClock.seekTo(playbackClock.minTime)}
 			>
@@ -140,11 +145,14 @@ export function Transport() {
 						</Button>
 					}
 				/>
-				<TooltipContent>{playing ? "pause" : "play"} (space)</TooltipContent>
+				<TooltipContent>
+					{playing ? "pause" : "play"}
+					{keybindSuffix(keybinds, "playPause")}
+				</TooltipContent>
 			</Tooltip>
 			<IconAction
 				label="previous frame"
-				tooltip="step back exactly one replay frame, not a fixed interval (,)"
+				tooltip={`step back exactly one replay frame, not a fixed interval${keybindSuffix(keybinds, "frameStepBack")}`}
 				className={FLANKING_BUTTON_CLASS}
 				onClick={() => stepFrame(-1)}
 			>
@@ -152,7 +160,7 @@ export function Transport() {
 			</IconAction>
 			<IconAction
 				label="next frame"
-				tooltip="step forward exactly one replay frame, not a fixed interval (.)"
+				tooltip={`step forward exactly one replay frame, not a fixed interval${keybindSuffix(keybinds, "frameStepForward")}`}
 				className={FLANKING_BUTTON_CLASS}
 				onClick={() => stepFrame(1)}
 			>
