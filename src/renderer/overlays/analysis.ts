@@ -7,9 +7,9 @@
 // all pinned to ppy/osu@83b8a64bec19e1463353645c2d6d10c75e275b43
 
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
-import { previewedPathPoints, snapshotIsEmpty, type PreviewSnapshot } from "../../editor/preview";
+import { previewedPathPoints, snapshotIsEmpty, type PlayfieldPoint, type PreviewSnapshot } from "../../editor/preview";
 import { isLeft, isRight } from "../../engine/buttons";
-import type { Press } from "../../engine/interpolation";
+import { cursorStateAt, type Press } from "../../engine/interpolation";
 import type { FrameDto } from "../../lib/scene-types";
 import { countAtOrBefore } from "../../lib/timeline";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
@@ -17,6 +17,29 @@ import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
 /** indices alive at t under the [time, time + displayLength) lifetime */
 export function aliveWindow(times: number[], t: number, displayLength: number): { lo: number; hi: number } {
 	return { lo: countAtOrBefore(times, t - displayLength), hi: countAtOrBefore(times, t) };
+}
+
+/** the authoritative cursor-path polyline for the window frames[lo..hi),
+ * ending at the interpolated cursor sample for t itself rather than at the
+ * newest whole frame. deliberate divergence from cursorpathcontainer.cs,
+ * whose path stops at the last frame's position: in motion the missing
+ * sub-frame segment is invisible, but a seek landing between frames (a
+ * timeline click, an object double-click) leaves the path visibly detached
+ * from the cursor the renderer draws -- and a paused viewer stares at that
+ * gap until a frame step happens to land t exactly on a frame. the tail
+ * keeps lazer's expiry untouched; only the head is extended, by exactly the
+ * segment the cursor is mid-way along */
+export function cursorPathPoints(frames: FrameDto[], lo: number, hi: number, t: number): PlayfieldPoint[] {
+	if (hi <= lo) return [];
+	const points: PlayfieldPoint[] = [];
+	for (let i = lo; i < hi; i++) points.push({ x: frames[i].x, y: frames[i].y });
+	const head = cursorStateAt(frames, t);
+	const newest = points[points.length - 1];
+	// a frame-exact t (a frame step, playback resting on a frame) resolves to
+	// the newest frame's own position, where appending would only stack a
+	// zero-length segment on the path's head
+	if (head !== null && (head.x !== newest.x || head.y !== newest.y)) points.push({ x: head.x, y: head.y });
+	return points;
 }
 
 /** the marker footprint every stroke below is written against
@@ -193,16 +216,16 @@ export class AnalysisDrawable implements ObjectDrawable {
 		if (overlays.cursorPath) {
 			const { lo, hi } = aliveWindow(this.frameTimes, t, length);
 			this.path.clear();
-			if (previewing) {
-				const points = previewedPathPoints(this.frames, lo, hi, snapshot, t - length, t);
-				if (points.length >= 2) {
-					this.path.moveTo(points[0].x, points[0].y);
-					for (let i = 1; i < points.length; i++) this.path.lineTo(points[i].x, points[i].y);
-					this.path.stroke({ width: 2, color: 0xeb4791, join: "round", cap: "round" });
-				}
-			} else if (hi - lo >= 2) {
-				this.path.moveTo(this.frames[lo].x, this.frames[lo].y);
-				for (let i = lo + 1; i < hi; i++) this.path.lineTo(this.frames[i].x, this.frames[i].y);
+			// the preview path deliberately keeps its frame-vertex head: a live
+			// gesture previews the frames, not the cursor drawable, and grafting
+			// the authoritative interpolated sample onto previewed geometry would
+			// streak a line to a cursor the preview is intentionally not moving
+			const points = previewing
+				? previewedPathPoints(this.frames, lo, hi, snapshot, t - length, t)
+				: cursorPathPoints(this.frames, lo, hi, t);
+			if (points.length >= 2) {
+				this.path.moveTo(points[0].x, points[0].y);
+				for (let i = 1; i < points.length; i++) this.path.lineTo(points[i].x, points[i].y);
 				// cursorpathcontainer.cs:24,30 -- pathradius 1 (2px total width), pink2
 				this.path.stroke({ width: 2, color: 0xeb4791, join: "round", cap: "round" });
 			}
