@@ -30,6 +30,7 @@ const TICK_CLASS: Record<"ok" | "meh" | "miss", string> = {
 
 export function OverviewStrip() {
 	const derived = useViewerStore((s) => s.derived);
+	const timelineBounds = useViewerStore((s) => s.timelineBounds);
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const mode = useViewerStore((s) => s.mode);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
@@ -45,8 +46,10 @@ export function OverviewStrip() {
 	// maxTime on loadedmetadata; the strip must map every layer -- the tint,
 	// the ticks, seeks, the zoom bracket -- against those same effective
 	// bounds, or the trailing audio is pegged at 100% and unseekable once the
-	// replay's own frames have run out
-	const baseBounds = derived?.bounds ?? { minTime: 0, maxTime: 1 };
+	// replay's own frames have run out. the timeline bounds, not
+	// derived.bounds: the strip's frame of reference must hold still while
+	// edits re-judge the replay (store.ts)
+	const baseBounds = timelineBounds ?? { minTime: 0, maxTime: 1 };
 	const bounds = audioExtendedBounds(baseBounds, audioDurationMs);
 
 	// the four continuous layers (played tint, progress fill, zoom bracket,

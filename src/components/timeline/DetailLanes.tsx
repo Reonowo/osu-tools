@@ -138,6 +138,7 @@ function velocityPoints(samples: readonly VelocitySample[], peak: number, view: 
 export function DetailLanes() {
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
+	const timelineBounds = useViewerStore((s) => s.timelineBounds);
 	const audioDurationMs = useViewerStore((s) => s.audioDurationMs);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 	const mode = useViewerStore((s) => s.mode);
@@ -157,8 +158,10 @@ export function DetailLanes() {
 	// AppShell (and so TimelineDock) only mounts once App.tsx has a loaded
 	// scene, and mode only reaches "edit" with one loaded -- these fallbacks
 	// just keep the hooks below well-typed against the store's nullable
-	// fields, matching TopBar's own convention, not a real null-scene path
-	const bounds: TimeBounds = audioExtendedBounds(derived?.bounds ?? { minTime: 0, maxTime: 1 }, audioDurationMs);
+	// fields, matching TopBar's own convention, not a real null-scene path.
+	// the timeline bounds, not derived.bounds: the lanes' frame of reference
+	// must hold still while edits re-judge the replay (store.ts)
+	const bounds: TimeBounds = audioExtendedBounds(timelineBounds ?? { minTime: 0, maxTime: 1 }, audioDurationMs);
 	const peakVelocity = derived?.analysis.peakVelocity ?? 0;
 
 	// per-scene source lists: independent of the zoom window, recomputed only
@@ -232,8 +235,13 @@ export function DetailLanes() {
 		() => windowAround(bounds, playbackClock.currentTime(), detailSpanMs * NEIGHBOURHOOD_FACTOR),
 		// sliceEpoch is a synthetic dependency: bumping it is how the rAF loop
 		// asks for a fresh slice without going through react state for the
-		// window itself
-		[scene, bounds.minTime, bounds.maxTime, detailSpanMs, sliceEpoch]
+		// window itself. `scene` is deliberately NOT one: a landed edit changes
+		// the data inside the slice, never where the slice sits, and recomputing
+		// the window here re-rounded the layer's snapped offset on a new
+		// device-pixel phase -- every mark twitched by up to a pixel on the
+		// first edit after each pause. a newly installed scene still re-slices,
+		// through the bounds change or the draw loop's own outgrow check
+		[bounds.minTime, bounds.maxTime, detailSpanMs, sliceEpoch]
 	);
 
 	// the *requested* neighbourhood, which is not the same thing as the one on
