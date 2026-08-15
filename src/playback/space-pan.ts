@@ -8,6 +8,10 @@
 export class SpacePan {
 	private held = false;
 	private dragged = false;
+	/** the main key of the binding that armed this hold. a hold has to end on
+	 * the key that began it: play/pause can carry an alternate binding, and a
+	 * keyup for the *other* one is not this press ending */
+	private armedBy: string | null = null;
 	private listeners = new Set<(armed: boolean) => void>();
 
 	/** true while space is down, which is when a left-drag pans instead of
@@ -19,11 +23,20 @@ export class SpacePan {
 	/** call on space keydown, after the same guards that used to gate the
 	 * toggle. auto-repeat must not reach here: re-arming mid-hold would forget
 	 * a drag already in progress and let the release toggle playback */
-	press(): void {
+	press(mainKey: string): void {
 		this.dragged = false;
 		if (this.held) return;
 		this.held = true;
+		this.armedBy = mainKey;
 		this.notify();
+	}
+
+	/** true when `mainKey` is letting go of the hold that is actually armed. a
+	 * keyup for any other key -- a second binding on the same action, or a key
+	 * pressed mid-hold that happens to be one -- is not this press ending and
+	 * must not end it */
+	heldBy(mainKey: string): boolean {
+		return this.held && this.armedBy === mainKey;
 	}
 
 	/** call on space keyup. true when the release should still toggle playback:
@@ -33,6 +46,7 @@ export class SpacePan {
 	release(): boolean {
 		const tapped = this.held && !this.dragged;
 		this.dragged = false;
+		this.armedBy = null;
 		if (this.held) {
 			this.held = false;
 			this.notify();
@@ -48,6 +62,7 @@ export class SpacePan {
 	 * its caller to do */
 	cancel(): void {
 		this.dragged = false;
+		this.armedBy = null;
 		if (!this.held) return;
 		this.held = false;
 		this.notify();
