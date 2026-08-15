@@ -15,6 +15,7 @@ import type {
 	RecentReplay,
 	Settings
 } from "../lib/scene-types";
+import { defaultKeybinds } from "../playback/keybinds";
 import { testScene } from "../test/scene";
 import { VIEWPORT_ZOOM_MAX, VIEWPORT_ZOOM_MIN } from "../renderer/playfield";
 import {
@@ -36,7 +37,8 @@ const baseSettings: Settings = {
 	recents: [],
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
-	timeline: DEFAULT_TIMELINE
+	timeline: DEFAULT_TIMELINE,
+	keybinds: {}
 };
 
 const sampleRecent: RecentReplay = {
@@ -60,13 +62,14 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing, effects, timeline) => ({
+		setViewerPrefs: async (volume, overlays, editing, effects, timeline, keybinds) => ({
 			...baseSettings,
 			volume,
 			overlays,
 			editing,
 			effects,
-			timeline
+			timeline,
+			keybinds
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
 		applyEdit: async () => identityDelta,
@@ -441,7 +444,8 @@ describe("viewer preferences", () => {
 			recents: [],
 			editing: { ...DEFAULT_EDITING, snapToLattice: false },
 			effects: DEFAULT_EFFECTS,
-			timeline: DEFAULT_TIMELINE
+			timeline: DEFAULT_TIMELINE,
+			keybinds: {}
 		};
 		const store = createViewerStore(deps({ getSettings: async () => stored }));
 
@@ -478,6 +482,50 @@ describe("viewer preferences", () => {
 		expect(failing.getState().volume).toBe(100);
 		expect(failing.getState().overlays).toEqual(DEFAULT_OVERLAYS);
 		expect(failing.getState().editing).toEqual(DEFAULT_EDITING);
+	});
+
+	test("a persisted rebinding is what the keyboard does after hydration", async () => {
+		// the whole path in one assertion: the file's sparse map lands in the
+		// store, folds onto the defaults, and the row the user moved is the row
+		// that answers to their key
+		const store = createViewerStore(
+			deps({
+				getSettings: async () => ({
+					...baseSettings,
+					keybinds: { selectTool: [{ hotkey: "N", codes: ["KeyN"] }], eraseTool: [] }
+				})
+			})
+		);
+		await store.getState().hydrateSettings();
+
+		const row = (action: string) =>
+			store.getState().effectiveKeybinds.find((candidate) => candidate.action === action)!;
+		expect(row("selectTool").bindings.map((b) => b.hotkey)).toEqual(["N"]);
+		expect(row("eraseTool").bindings).toEqual([]);
+		// an action the user never touched keeps following the app's default
+		expect(row("moveTool").bindings.map((b) => b.hotkey)).toEqual(["M"]);
+	});
+
+	test("a settings file written before keybinds existed leaves everything on its default", async () => {
+		const legacy = { osuStablePath: null, volume: 70 } as unknown as Settings;
+		const store = createViewerStore(deps({ getSettings: async () => legacy }));
+		await store.getState().hydrateSettings();
+		expect(store.getState().keybinds).toEqual({});
+		expect(store.getState().effectiveKeybinds).toEqual(defaultKeybinds());
+	});
+
+	test("setKeybinds moves the table with the map", async () => {
+		// the two are one fact: a consumer must never read a table the
+		// persisted map does not describe
+		const store = createViewerStore(deps());
+		store.getState().setKeybinds({ moveTool: [{ hotkey: "N", codes: ["KeyN"] }] });
+		expect(store.getState().keybinds).toEqual({ moveTool: [{ hotkey: "N", codes: ["KeyN"] }] });
+		expect(
+			store
+				.getState()
+				.effectiveKeybinds.find((row) => row.action === "moveTool")!
+				.bindings.map((b) => b.hotkey)
+		).toEqual(["N"]);
 	});
 
 	test("a volume edit made while hydration is in flight wins over the loaded value", async () => {

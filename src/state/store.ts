@@ -32,6 +32,7 @@ import type {
 	FrameChanges,
 	FrameDto,
 	IpcError,
+	KeybindOverrides,
 	LoadedScene,
 	OverlaySettings,
 	RecentReplay,
@@ -39,6 +40,7 @@ import type {
 	TimelineSettings
 } from "../lib/scene-types";
 import { deriveScene, type DerivedScene } from "../lib/derive";
+import { foldKeybinds, NO_KEYBIND_OVERRIDES, type EffectiveKeybind } from "../playback/keybinds";
 import { clampViewportZoom, DEFAULT_VIEWPORT_ZOOM, NO_VIEWPORT_PAN, type ViewportPan } from "../renderer/playfield";
 import {
 	clampBackgroundDim,
@@ -84,7 +86,8 @@ export interface IpcDeps {
 		overlays: OverlaySettings,
 		editing: EditingSettings,
 		effects: EffectSettings,
-		timeline: TimelineSettings
+		timeline: TimelineSettings,
+		keybinds: KeybindOverrides
 	): Promise<Settings>;
 	clearRecents(): Promise<Settings>;
 	applyEdit(epoch: number, baseRevision: number, ops: EditOp[], label: string): Promise<EditDelta>;
@@ -200,6 +203,15 @@ export interface ViewerState {
 	effects: EffectSettings;
 	/** the timeline dock's per-layer visibility toggles */
 	timeline: TimelineSettings;
+	/** the user's sparse keybind overrides, exactly as they persist */
+	keybinds: KeybindOverrides;
+	/** the overrides folded onto the defaults: what is actually bound. it
+	 * lives in the store rather than in a module-level singleton because three
+	 * consumers read it -- the playback shortcuts hook, the edit-tools hook and
+	 * the tool palette's tooltips -- and a singleton would not re-render the
+	 * tooltips, so the palette would go on advertising a key the user had
+	 * already changed */
+	effectiveKeybinds: EffectiveKeybind[];
 	playing: boolean;
 	rate: number;
 	/** linear amplitude percent 0-100; persisted (unlike rate, which belongs
@@ -208,6 +220,10 @@ export interface ViewerState {
 	mode: ViewerMode;
 	panelOpen: boolean;
 	panelTab: PanelTab;
+	/** the keybind help overlay. session-only chrome, never persisted, and
+	 * deliberately not gated on a loaded scene -- the list is most useful to
+	 * someone who has not opened a replay yet */
+	helpOpen: boolean;
 	tool: ToolId;
 	/** the armed key tile: filters the press table and names the key
 	 * add-press writes. session-only, never persisted; reset by every scene
@@ -248,12 +264,17 @@ export interface ViewerState {
 	setEditing<K extends keyof EditingSettings>(key: K, value: EditingSettings[K]): void;
 	setEffect<K extends keyof EffectSettings>(key: K, value: EffectSettings[K]): void;
 	setTimeline<K extends keyof TimelineSettings>(key: K, value: TimelineSettings[K]): void;
+	/** replaces the whole override map -- the keybind module's pure editors
+	 * (applyCapture, clearBinding, revertKeybind) are what produce the next
+	 * one, so every rule about what an override may be lives in one place */
+	setKeybinds(overrides: KeybindOverrides): void;
 	setPlaying(playing: boolean): void;
 	setRate(rate: number): void;
 	setVolume(volume: number): void;
 	setMode(mode: ViewerMode): void;
 	togglePanel(): void;
 	setPanelTab(tab: PanelTab): void;
+	setHelpOpen(open: boolean): void;
 	setTool(tool: ToolId): void;
 	setFeatherMs(ms: number): void;
 	setSmoothStrength(value: number): void;
@@ -557,6 +578,13 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			set({ settings });
 		}
 
+		/** the overrides and the table they fold to, written together: the two
+		 * fields are one fact, and a set that moved only one of them would let
+		 * a consumer read a table the persisted map does not describe */
+		function installKeybinds(keybinds: KeybindOverrides) {
+			return { keybinds, effectiveKeybinds: foldKeybinds(keybinds) };
+		}
+
 		// a stale (superseded) success still swaps the displayed scene: its
 		// command already installed the backend session (commands.rs
 		// install_scene runs before the promise resolves) and dropped the
@@ -689,12 +717,15 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			editing: DEFAULT_EDITING,
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
+			keybinds: NO_KEYBIND_OVERRIDES,
+			effectiveKeybinds: foldKeybinds(NO_KEYBIND_OVERRIDES),
 			playing: false,
 			rate: 1,
 			volume: DEFAULT_VOLUME,
 			mode: "watch",
 			panelOpen: false,
 			panelTab: "replay",
+			helpOpen: false,
 			tool: "select",
 			armedKey: null,
 			featherMs: DEFAULT_FEATHER_MS,
@@ -754,6 +785,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				set({ effects: { ...get().effects, [key]: next } });
 			},
 			setTimeline: (key, value) => set({ timeline: { ...get().timeline, [key]: value } }),
+			setKeybinds: (overrides) => set(installKeybinds(overrides)),
 			setPlaying: (playing) => set({ playing }),
 			setRate: (rate) => set({ rate }),
 			setVolume: (volume) => {
@@ -767,6 +799,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			togglePanel: () => set({ panelOpen: !get().panelOpen }),
 			// a rail click is also a request to see the panel
 			setPanelTab: (panelTab) => set({ panelTab, panelOpen: true }),
+			setHelpOpen: (helpOpen) => set({ helpOpen }),
 			setTool: (tool) => set({ tool }),
 			// a blank number field arrives as NaN and must leave the last good
 			// value alone, matching setOverlay's displayLength rule
@@ -792,6 +825,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				const editingBefore = get().editing;
 				const effectsBefore = get().effects;
 				const timelineBefore = get().timeline;
+				const keybindsBefore = get().keybinds;
 				const volumeEditsBefore = volumeEdits;
 				// claimed at initiation, like install()'s refresh: bumping only at
 				// publication would let this read -- when it resolves late --
@@ -814,18 +848,24 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				const editingEdited = get().editing !== editingBefore;
 				const effectsEdited = get().effects !== effectsBefore;
 				const timelineEdited = get().timeline !== timelineBefore;
-				// volume/overlays/editing/effects/timeline are frontend-owned --
-				// nothing backend-side ever changes them on its own -- so they apply
-				// even when a newer read has claimed the slot; the settings object
-				// itself (recents move under a concurrent load) publishes only while
-				// this read is still the newest claim
+				const keybindsEdited = get().keybinds !== keybindsBefore;
+				// volume/overlays/editing/effects/timeline/keybinds are
+				// frontend-owned -- nothing backend-side ever changes them on its own
+				// -- so they apply even when a newer read has claimed the slot; the
+				// settings object itself (recents move under a concurrent load)
+				// publishes only while this read is still the newest claim
 				set({
 					...(refreshSeq === settingsRefreshSeq ? { settings } : {}),
 					...(volumeEdited ? {} : { volume: clampVolume(settings.volume) }),
 					...(overlaysEdited ? {} : { overlays: { ...DEFAULT_OVERLAYS, ...settings.overlays } }),
 					...(editingEdited ? {} : { editing: { ...DEFAULT_EDITING, ...settings.editing } }),
 					...(effectsEdited ? {} : { effects: { ...DEFAULT_EFFECTS, ...settings.effects } }),
-					...(timelineEdited ? {} : { timeline: { ...DEFAULT_TIMELINE, ...settings.timeline } })
+					...(timelineEdited ? {} : { timeline: { ...DEFAULT_TIMELINE, ...settings.timeline } }),
+					// the whole map replaces, never merges: a merge would resurrect an
+					// override the user reverted in another window, and the sparse map
+					// is already only what they changed. a settings file written
+					// before this feature hydrates it empty
+					...(keybindsEdited ? {} : installKeybinds(settings.keybinds ?? NO_KEYBIND_OVERRIDES))
 				});
 				// an edit made while the read was in flight predates the persistence
 				// subscription (App installs it only once this resolves), and the
@@ -836,18 +876,33 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// while the save was in flight; edits after the stable save cannot
 				// slip past install, because App's subscription lands in the same
 				// microtask drain as this resolution, ahead of any queued input
-				if (volumeEdited || overlaysEdited || editingEdited || effectsEdited || timelineEdited) {
+				if (
+					volumeEdited ||
+					overlaysEdited ||
+					editingEdited ||
+					effectsEdited ||
+					timelineEdited ||
+					keybindsEdited
+				) {
 					for (;;) {
-						const { volume, overlays, editing, effects, timeline } = get();
+						const { volume, overlays, editing, effects, timeline, keybinds } = get();
 						const volumeEditsAtSave = volumeEdits;
 						try {
-							const saved = await deps.setViewerPrefs(volume, overlays, editing, effects, timeline);
+							const saved = await deps.setViewerPrefs(
+								volume,
+								overlays,
+								editing,
+								effects,
+								timeline,
+								keybinds
+							);
 							const stable =
 								volumeEdits === volumeEditsAtSave &&
 								get().overlays === overlays &&
 								get().editing === editing &&
 								get().effects === effects &&
-								get().timeline === timeline;
+								get().timeline === timeline &&
+								get().keybinds === keybinds;
 							if (stable) {
 								publishSettings(saved);
 								break;
