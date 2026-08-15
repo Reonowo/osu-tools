@@ -94,23 +94,26 @@ export function PlayerView() {
 		const audio = new Audio(convertFileSrc(scene.audioPath));
 		audio.preload = "auto";
 		playbackClock.attachAudio(htmlAudioAdapter(audio));
-		// closes over this effect run's `derived` -- must be torn down before the
-		// next scene's effect run attaches its own audio, or a metadata event
-		// that lands late (this element's fetch/decode outlives audio.pause())
-		// stomps the new scene's clock bounds with this scene's stale derived
 		const onLoadedMetadata = () => {
-			// a metadata event can land after a newer scene installed but before
+			// a metadata event can land late (this element's fetch/decode
+			// outlives audio.pause()): after a newer scene installed but before
 			// this effect's deferred cleanup removes the listener -- a stale
 			// scene's audio must touch neither the clock nor the store (the store
 			// write would otherwise stick forever when the new scene has no audio)
-			if (viewerStore.getState().sceneId !== sceneId) return;
+			const state = viewerStore.getState();
+			if (state.sceneId !== sceneId || state.derived === null) return;
 			const durationMs = audio.duration * 1000;
 			// streaming sources report Infinity; that must not reach the bounds
 			if (!Number.isFinite(durationMs)) return;
-			const extended = audioExtendedBounds(derived.bounds, durationMs);
+			// the live derived, never this effect run's closure: an edit landing
+			// before the metadata rederives the bounds, and extending the
+			// install-time ones here would stomp the clock's post-edit bounds at
+			// both ends -- with nothing to re-correct them, since publishing the
+			// duration below does not bump editRevision
+			const extended = audioExtendedBounds(state.derived.bounds, durationMs);
 			playbackClock.setBounds(extended.minTime, extended.maxTime);
 			// publish so the timeline maps against the same audio-extended bounds
-			viewerStore.getState().setAudioDuration(durationMs);
+			state.setAudioDuration(durationMs);
 		};
 		audio.addEventListener("loadedmetadata", onLoadedMetadata);
 
