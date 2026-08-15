@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-	asksViewportReset,
+	asksPageZoomReset,
 	controlOwnsKeydown,
 	wheelFrameStep,
 	withinDialog,
@@ -251,7 +251,7 @@ describe("wheelFrameStep", () => {
 	});
 });
 
-describe("asksViewportReset", () => {
+describe("asksPageZoomReset", () => {
 	// what each layout actually delivers for a press of the physical top-row
 	// zero, which is the key the webview resets page zoom from. these carry the
 	// shift state the browser would report even though the predicate's own
@@ -264,25 +264,35 @@ describe("asksViewportReset", () => {
 	const azertyShifted = { ctrlKey: true, altKey: false, shiftKey: true, code: "Digit0", key: "0" };
 
 	test("the physical top-row zero resets whatever character the layout prints", () => {
-		expect(asksViewportReset(qwerty)).toBe(true);
-		expect(asksViewportReset(azertyUnshifted)).toBe(true);
-		expect(asksViewportReset(azertyShifted)).toBe(true);
+		expect(asksPageZoomReset(qwerty)).toBe(true);
+		expect(asksPageZoomReset(azertyUnshifted)).toBe(true);
+		expect(asksPageZoomReset(azertyShifted)).toBe(true);
 	});
 
 	test("the numpad zero resets only with numlock on", () => {
-		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "Numpad0", key: "0" })).toBe(true);
+		expect(asksPageZoomReset({ ctrlKey: true, altKey: false, code: "Numpad0", key: "0" })).toBe(true);
 		// numlock off makes that same code Insert, and ctrl+insert is copy
-		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "Numpad0", key: "Insert" })).toBe(false);
+		expect(asksPageZoomReset({ ctrlKey: true, altKey: false, code: "Numpad0", key: "Insert" })).toBe(false);
 	});
 
 	test("altgr is left alone so the german-family layouts can still type `}`", () => {
 		// chromium reports altgr as ctrl+alt
-		expect(asksViewportReset({ ctrlKey: true, altKey: true, code: "Digit0", key: "}" })).toBe(false);
+		expect(asksPageZoomReset({ ctrlKey: true, altKey: true, code: "Digit0", key: "}" })).toBe(false);
 	});
 
 	test("a plain zero and other ctrl chords ask for nothing", () => {
-		expect(asksViewportReset({ ctrlKey: false, altKey: false, code: "Digit0", key: "0" })).toBe(false);
-		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "Digit9", key: "9" })).toBe(false);
-		expect(asksViewportReset({ ctrlKey: true, altKey: false, code: "KeyO", key: "o" })).toBe(false);
+		expect(asksPageZoomReset({ ctrlKey: false, altKey: false, code: "Digit0", key: "0" })).toBe(false);
+		expect(asksPageZoomReset({ ctrlKey: true, altKey: false, code: "Digit9", key: "9" })).toBe(false);
+		expect(asksPageZoomReset({ ctrlKey: true, altKey: false, code: "KeyO", key: "o" })).toBe(false);
+	});
+
+	test("the suppression stays on ctrl+0 whatever the viewport reset is bound to", () => {
+		// it is the webview's gesture, not the user's binding: rebinding the
+		// reset must neither stop this swallowing ctrl+0 nor start it swallowing
+		// something else. this predicate takes no binding at all, which is the
+		// shape of that guarantee
+		const rebound = { ctrlKey: true, altKey: false, code: "KeyR", key: "r" };
+		expect(asksPageZoomReset(rebound)).toBe(false);
+		expect(asksPageZoomReset(qwerty)).toBe(true);
 	});
 });

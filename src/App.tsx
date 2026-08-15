@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { AppShell } from "@/components/shell/AppShell";
 import { ExportDialog } from "@/components/ExportDialog";
+import { HelpOverlay } from "@/components/HelpOverlay";
 import { MismatchDialog } from "@/components/MismatchDialog";
 import { resolveOpenCategory, type SettingsCategory } from "@/components/settings/categories";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
@@ -11,7 +12,8 @@ import { invokeSetViewerPrefs } from "@/lib/ipc";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
 import { installFocusModality } from "@/playback/focus-modality";
-import { asksViewportReset } from "@/playback/shortcut-guards";
+import { useHelpShortcut } from "@/playback/use-help-shortcut";
+import { asksPageZoomReset } from "@/playback/shortcut-guards";
 import { installPrefsPersistence } from "@/state/persist";
 import { useViewerStore, viewerStore } from "@/state/store";
 
@@ -25,6 +27,11 @@ export default function App() {
 	const [exportOpen, setExportOpen] = useState(false);
 	const scene = useViewerStore((s) => s.scene);
 	const lastError = useViewerStore((s) => s.lastError);
+
+	// registered here rather than with the other global bindings: those mount
+	// with AppShell, which exists only once a scene is loaded, and the keybind
+	// list has to be reachable from the start screen (use-help-shortcut.ts)
+	useHelpShortcut();
 
 	function selectCategory(category: SettingsCategory) {
 		lastCategory.current = category;
@@ -61,7 +68,7 @@ export default function App() {
 		// the same predicate the viewer's own ctrl+0 acts on, so the chord this
 		// swallows and the chord that resets the viewport are one definition
 		function onKeyDown(e: KeyboardEvent) {
-			if (asksViewportReset(e)) e.preventDefault();
+			if (asksPageZoomReset(e)) e.preventDefault();
 		}
 		window.addEventListener("wheel", onWheel, { passive: false });
 		window.addEventListener("keydown", onKeyDown);
@@ -117,6 +124,7 @@ export default function App() {
 				<AppShell onOpenSettings={openSettings} onOpenExport={() => setExportOpen(true)} />
 			)}
 			<MismatchDialog />
+			<HelpOverlay />
 			<SettingsDialog
 				category={settingsCategory}
 				onCategoryChange={selectCategory}

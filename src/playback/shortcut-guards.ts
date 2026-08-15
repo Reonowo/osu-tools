@@ -165,10 +165,16 @@ export function wheelFrameStep(e: { deltaY: number; ctrlKey: boolean; target: un
 	return e.deltaY < 0 ? -1 : 1;
 }
 
-/** true when a keydown is the viewport reset chord. the one predicate both
- * sides read: App.tsx suppresses the webview's page-zoom reset with it and
- * the shortcut hook acts on it, so what the app swallows and what it acts on
- * cannot drift apart.
+/** true when a keydown is the chord the webview would reset its page zoom on.
+ * App.tsx swallows it app-wide, unconditionally, because nothing in this app
+ * is ever meant to resize that way.
+ *
+ * deliberately pinned to the physical ctrl+0 rather than to whatever the
+ * viewport reset is bound to: the gesture belongs to the webview, not to the
+ * user's binding, so rebinding the reset must neither stop this suppressing
+ * ctrl+0 nor start it suppressing some other chord. one predicate served both
+ * sides while the reset was hardcoded here; matchesCodeKeybind (keybinds.ts)
+ * is what the viewer's own reset reads now.
  *
  * the top row goes by code, not key -- the physical zero is ctrl+0 whatever
  * character the layout prints there. an azerty zero is `à` unshifted and "0"
@@ -180,7 +186,7 @@ export function wheelFrameStep(e: { deltaY: number; ctrlKey: boolean; target: un
  * otherwise stop those users typing anywhere in the app. the numpad arm does
  * ask for the key, since with numlock off that same code is Insert:
  * ctrl+insert is copy, and the webview never zoomed on it */
-export function asksViewportReset(e: { ctrlKey: boolean; altKey: boolean; code: string; key: string }): boolean {
+export function asksPageZoomReset(e: { ctrlKey: boolean; altKey: boolean; code: string; key: string }): boolean {
 	if (!e.ctrlKey || e.altKey) return false;
 	return e.code === "Digit0" || (e.code === "Numpad0" && e.key === "0");
 }
