@@ -40,7 +40,22 @@ export interface ObjectLaneEntry {
 export interface DerivedScene {
 	presses: Press[];
 	edges: ButtonEdges;
+	/** the live playback bounds the clock maps against, re-derived on every
+	 * landed delta so the fade past a re-judged last object stays covered.
+	 * the timeline tiers deliberately do NOT draw against these -- they use
+	 * the store's fold of timelineBounds below, so an edit cannot shift the
+	 * dock's frame of reference */
 	bounds: { minTime: number; maxTime: number };
+	/** the document's timeline mapping bounds: judgement-invariant by
+	 * construction, unlike the playback bounds above. every simulation event
+	 * lands at or before its object's miss deadline -- a hit at its press
+	 * within the late meh window, a miss at the window's close, slider and
+	 * spinner events at or before their own end -- so lastEnd + the miss
+	 * window + the fade covers any re-judgement an edit can produce, and no
+	 * drag can outgrow it. only the frame stream's own extent (or a new
+	 * scene) moves it, which is what lets the store fold it widen-only into
+	 * a frame of reference that holds still under editing */
+	timelineBounds: { minTime: number; maxTime: number };
 	/** indexed by objectIndex; empty arrays when not simulated */
 	judgementsByObject: JudgementEventDto[][];
 	/** the object lane's per-object model, index-aligned with
@@ -234,12 +249,17 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		}
 	}
 
+	const minTime = Math.min(0, -scene.beatmap.audioLeadIn, firstFrame, firstAppear);
 	return {
 		presses,
 		edges: buttonEdges(scene.frames),
 		bounds: {
-			minTime: Math.min(0, -scene.beatmap.audioLeadIn, firstFrame, firstAppear),
+			minTime,
 			maxTime: Math.max(lastFrame, lastEventTime + HIT_FADE_OUT_TIME)
+		},
+		timelineBounds: {
+			minTime,
+			maxTime: Math.max(lastFrame, lastEnd + scene.renderPlan.hitWindows.miss + HIT_FADE_OUT_TIME)
 		},
 		judgementsByObject,
 		objectLane,

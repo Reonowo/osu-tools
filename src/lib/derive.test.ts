@@ -12,6 +12,38 @@ describe("deriveScene", () => {
 		expect(d.bounds.maxTime).toBe(1800);
 	});
 
+	test("timelineBounds are the judgement deadline bound, immune to event times", () => {
+		const base = deriveScene(testScene());
+		// min shared with the playback bounds; max(lastFrame, lastEnd + miss
+		// window + 800) -- testScene: max(1100, 1000 + 400 + 800)
+		expect(base.timelineBounds.minTime).toBe(-1500);
+		expect(base.timelineBounds.maxTime).toBe(2200);
+
+		// the latest possible judgement (a miss at the window's close) still
+		// fits inside; the playback bounds move with it, the mapping does not
+		const scene = testScene();
+		const late = deriveScene(
+			testScene({
+				simulation: {
+					...scene.simulation,
+					status: "authoritative",
+					events: [
+						{
+							time: 1400,
+							objectIndex: 0,
+							kind: { type: "circle", grade: "miss" },
+							comboAfter: 0,
+							accuracyAfter: 0
+						}
+					],
+					totals: { count300: 0, count100: 0, count50: 0, countMiss: 1, maxCombo: 0 }
+				}
+			})
+		);
+		expect(late.bounds.maxTime).toBe(2200);
+		expect(late.timelineBounds.maxTime).toBe(2200);
+	});
+
 	test("a late judgement extends maxTime through its full fade", () => {
 		// a circle hit 180ms late animates until 1180 + 800 (objectLifetime
 		// keeps its drawable alive that long); the clock must not pause before
