@@ -16,6 +16,7 @@ import type { BrushRing, ChromeShape, PreviewSnapshot } from "../editor/preview"
 import type { DerivedScene } from "../lib/derive";
 import type { LoadedScene } from "../lib/scene-types";
 import type { EffectSettings, OverlaySettings } from "../state/store";
+import { installGradSafeBatchShader } from "./batch-shader";
 import {
 	clampPlayfieldGridSpacing,
 	DEFAULT_EFFECTS,
@@ -265,6 +266,9 @@ export class GameplayRenderer {
 			// render() below is the only thing that ever draws this stage
 			autoStart: false
 		});
+		// before anything renders: the stock batch shader draws a hairline seam
+		// across every mipmapped sprite's quad diagonal (see batch-shader.ts)
+		installGradSafeBatchShader(renderer.app.renderer);
 		host.appendChild(renderer.app.canvas);
 
 		// later objects render below earlier ones (osu approach order)
