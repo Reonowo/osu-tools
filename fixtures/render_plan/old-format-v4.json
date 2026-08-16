@@ -1,139 +1,277 @@
 {
-	"playfield": {
-		"width": 512.0,
-		"height": 384.0
-	},
-	"comboColours": [
-		[241, 116, 0, 255],
-		[0, 241, 53, 255],
-		[0, 82, 241, 255],
-		[241, 0, 0, 255],
-		[232, 235, 0, 255],
-		[92, 0, 241, 255]
-	],
-	"hitWindows": {
-		"great": 43.5,
-		"ok": 91.5,
-		"meh": 139.5,
-		"miss": 400.0
-	},
-	"scale": 0.500205,
-	"preempt": 1050.0,
-	"fadeIn": 400.0,
-	"objects": [
-		{
-			"startTime": 1024.0,
-			"endTime": 1024.0,
-			"position": [249.59738, 185.59738],
-			"stackHeight": 2,
-			"comboColourIndex": 1,
-			"comboIndex": 1,
-			"indexInCombo": 0,
-			"preempt": 1050.0,
-			"fadeIn": 400.0,
-			"kind": {
-				"type": "circle"
-			}
-		},
-		{
-			"startTime": 1124.0,
-			"endTime": 1124.0,
-			"position": [252.79869, 188.79869],
-			"stackHeight": 1,
-			"comboColourIndex": 1,
-			"comboIndex": 1,
-			"indexInCombo": 1,
-			"preempt": 1050.0,
-			"fadeIn": 400.0,
-			"kind": {
-				"type": "circle"
-			}
-		},
-		{
-			"startTime": 1224.0,
-			"endTime": 1224.0,
-			"position": [256.0, 192.0],
-			"stackHeight": 0,
-			"comboColourIndex": 1,
-			"comboIndex": 1,
-			"indexInCombo": 2,
-			"preempt": 1050.0,
-			"fadeIn": 400.0,
-			"kind": {
-				"type": "circle"
-			}
-		},
-		{
-			"startTime": 2024.0,
-			"endTime": 2424.0,
-			"position": [100.0, 100.0],
-			"stackHeight": 0,
-			"comboColourIndex": 2,
-			"comboIndex": 2,
-			"indexInCombo": 0,
-			"preempt": 1050.0,
-			"fadeIn": 400.0,
-			"kind": {
-				"type": "slider",
-				"vertices": [0.0, 0.0, 120.0, 0.0],
-				"cumulativeLengths": [0.0, 120.0],
-				"distance": 120.0,
-				"segmentEnds": [1.0],
-				"repeatCount": 0,
-				"spanCount": 1,
-				"spanDuration": 400.0,
-				"duration": 400.0,
-				"endPosition": [220.0, 100.0],
-				"snakeInDuration": 350.0,
-				"nested": [
-					{
-						"kind": "head",
-						"spanIndex": 0,
-						"time": 2024.0,
-						"position": [100.0, 100.0],
-						"pathProgress": 0.0,
-						"preempt": 1050.0,
-						"fadeIn": 400.0
-					},
-					{
-						"kind": "tail",
-						"spanIndex": 0,
-						"time": 2424.0,
-						"position": [220.0, 100.0],
-						"pathProgress": 1.0,
-						"preempt": 1450.0,
-						"fadeIn": 400.0
-					}
-				]
-			}
-		},
-		{
-			"startTime": 2524.0,
-			"endTime": 2524.0,
-			"position": [223.20131, 103.20131],
-			"stackHeight": -1,
-			"comboColourIndex": 2,
-			"comboIndex": 2,
-			"indexInCombo": 1,
-			"preempt": 1050.0,
-			"fadeIn": 400.0,
-			"kind": {
-				"type": "circle"
-			}
-		},
-		{
-			"startTime": 2624.0,
-			"endTime": 2624.0,
-			"position": [226.40262, 106.402626],
-			"stackHeight": -2,
-			"comboColourIndex": 2,
-			"comboIndex": 2,
-			"indexInCombo": 2,
-			"preempt": 1050.0,
-			"fadeIn": 400.0,
-			"kind": {
-				"type": "circle"
-			}
-		}
-	]
+  "playfield": {
+    "width": 512.0,
+    "height": 384.0
+  },
+  "comboColours": [
+    [
+      241,
+      116,
+      0,
+      255
+    ],
+    [
+      0,
+      241,
+      53,
+      255
+    ],
+    [
+      0,
+      82,
+      241,
+      255
+    ],
+    [
+      241,
+      0,
+      0,
+      255
+    ],
+    [
+      232,
+      235,
+      0,
+      255
+    ],
+    [
+      92,
+      0,
+      241,
+      255
+    ]
+  ],
+  "hitWindows": {
+    "great": 43.5,
+    "ok": 91.5,
+    "meh": 139.5,
+    "miss": 400.0
+  },
+  "scale": 0.500205,
+  "preempt": 1050.0,
+  "fadeIn": 400.0,
+  "objects": [
+    {
+      "startTime": 1024.0,
+      "endTime": 1024.0,
+      "position": [
+        249.59738,
+        185.59738
+      ],
+      "stackHeight": 2,
+      "comboColourIndex": 1,
+      "comboIndex": 1,
+      "indexInCombo": 0,
+      "preempt": 1050.0,
+      "fadeIn": 400.0,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 60,
+          "layered": false,
+          "filename": null
+        }
+      ],
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 1124.0,
+      "endTime": 1124.0,
+      "position": [
+        252.79869,
+        188.79869
+      ],
+      "stackHeight": 1,
+      "comboColourIndex": 1,
+      "comboIndex": 1,
+      "indexInCombo": 1,
+      "preempt": 1050.0,
+      "fadeIn": 400.0,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 60,
+          "layered": false,
+          "filename": null
+        }
+      ],
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 1224.0,
+      "endTime": 1224.0,
+      "position": [
+        256.0,
+        192.0
+      ],
+      "stackHeight": 0,
+      "comboColourIndex": 1,
+      "comboIndex": 1,
+      "indexInCombo": 2,
+      "preempt": 1050.0,
+      "fadeIn": 400.0,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 60,
+          "layered": false,
+          "filename": null
+        }
+      ],
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 2024.0,
+      "endTime": 2424.0,
+      "position": [
+        100.0,
+        100.0
+      ],
+      "stackHeight": 0,
+      "comboColourIndex": 2,
+      "comboIndex": 2,
+      "indexInCombo": 0,
+      "preempt": 1050.0,
+      "fadeIn": 400.0,
+      "samples": [],
+      "kind": {
+        "type": "slider",
+        "vertices": [
+          0.0,
+          0.0,
+          120.0,
+          0.0
+        ],
+        "cumulativeLengths": [
+          0.0,
+          120.0
+        ],
+        "distance": 120.0,
+        "segmentEnds": [
+          1.0
+        ],
+        "repeatCount": 0,
+        "spanCount": 1,
+        "spanDuration": 400.0,
+        "duration": 400.0,
+        "endPosition": [
+          220.0,
+          100.0
+        ],
+        "snakeInDuration": 350.0,
+        "nested": [
+          {
+            "kind": "head",
+            "spanIndex": 0,
+            "time": 2024.0,
+            "position": [
+              100.0,
+              100.0
+            ],
+            "pathProgress": 0.0,
+            "preempt": 1050.0,
+            "fadeIn": 400.0,
+            "samples": [
+              {
+                "bank": "normal",
+                "name": "hitnormal",
+                "suffix": null,
+                "volume": 60,
+                "layered": false,
+                "filename": null
+              }
+            ]
+          },
+          {
+            "kind": "tail",
+            "spanIndex": 0,
+            "time": 2424.0,
+            "position": [
+              220.0,
+              100.0
+            ],
+            "pathProgress": 1.0,
+            "preempt": 1450.0,
+            "fadeIn": 400.0,
+            "samples": [
+              {
+                "bank": "normal",
+                "name": "hitnormal",
+                "suffix": null,
+                "volume": 60,
+                "layered": false,
+                "filename": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "startTime": 2524.0,
+      "endTime": 2524.0,
+      "position": [
+        223.20131,
+        103.20131
+      ],
+      "stackHeight": -1,
+      "comboColourIndex": 2,
+      "comboIndex": 2,
+      "indexInCombo": 1,
+      "preempt": 1050.0,
+      "fadeIn": 400.0,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 60,
+          "layered": false,
+          "filename": null
+        }
+      ],
+      "kind": {
+        "type": "circle"
+      }
+    },
+    {
+      "startTime": 2624.0,
+      "endTime": 2624.0,
+      "position": [
+        226.40262,
+        106.402626
+      ],
+      "stackHeight": -2,
+      "comboColourIndex": 2,
+      "comboIndex": 2,
+      "indexInCombo": 2,
+      "preempt": 1050.0,
+      "fadeIn": 400.0,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 60,
+          "layered": false,
+          "filename": null
+        }
+      ],
+      "kind": {
+        "type": "circle"
+      }
+    }
+  ]
 }
