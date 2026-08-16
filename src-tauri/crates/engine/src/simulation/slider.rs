@@ -15,7 +15,8 @@
 //! from the scored rate with the head counted in
 
 use crate::beatmap::difficulty::HitGrade;
-use crate::beatmap::{NestedKind, ProcessedKind, ProcessedObject, ProcessedSlider};
+use crate::beatmap::stable_points::StablePointKind;
+use crate::beatmap::{ProcessedKind, ProcessedObject, ProcessedSlider};
 use crate::math::Vec2;
 use crate::simulation::buttons::ActionMask;
 use crate::simulation::presses::{can_be_hit_stable, ClickAction};
@@ -50,7 +51,7 @@ fn dst_sq_87(a: Vec2, b: Vec2) -> f32 {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TickPoint {
     pub time: f64,
-    pub kind: NestedKind,
+    pub kind: StablePointKind,
 }
 
 #[derive(Debug)]
@@ -87,8 +88,12 @@ impl SliderState {
             .map(|p| TickPoint {
                 time: p.time,
                 kind: match p.kind {
-                    NestedKind::Repeat => NestedKind::Repeat,
-                    _ => NestedKind::Tick,
+                    // the repeat keeps its ordinal through the re-kind below:
+                    // that ordinal is the node identity a consumer needs, and
+                    // it is a property of the generated slider, not of where
+                    // the point lands in this list
+                    repeat @ StablePointKind::Repeat { .. } => repeat,
+                    _ => StablePointKind::Tick,
                 },
             })
             .collect();
@@ -100,7 +105,7 @@ impl SliderState {
             let end = slider.stable_end_time as i64;
             let duration = end - start;
             last.time = (start + duration / 2).max(end - 36) as f64;
-            last.kind = NestedKind::Tail;
+            last.kind = StablePointKind::Tail;
         }
         SliderState {
             points,
@@ -268,12 +273,11 @@ fn process_ticks_stable(ctx: &mut Ctx<'_>, index: usize, time: f64, allowable: b
             state.missed += 1;
         }
         let kind = match point.kind {
-            NestedKind::Tick => JudgementKind::SliderTick { hit },
-            NestedKind::Repeat => JudgementKind::SliderRepeat { hit },
+            StablePointKind::Tick => JudgementKind::SliderTick { hit },
+            StablePointKind::Repeat { repeat_index } => JudgementKind::SliderRepeat { hit, repeat_index },
             // the tail's combo semantics (+1 on hit, no break on miss --
             // danser's end-point Hold) live in ScoreState::apply
-            NestedKind::Tail => JudgementKind::SliderTail { hit },
-            NestedKind::Head => unreachable!("stable score points never contain the head"),
+            StablePointKind::Tail => JudgementKind::SliderTail { hit },
         };
         ctx.emit(time, index, kind);
     }

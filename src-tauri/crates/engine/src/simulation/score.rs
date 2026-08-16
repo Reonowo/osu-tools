@@ -18,10 +18,25 @@ use crate::beatmap::difficulty::HitGrade;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JudgementKind {
     Circle(HitGrade),
-    SliderHead { hit: bool },
-    SliderTick { hit: bool },
-    SliderRepeat { hit: bool },
-    SliderTail { hit: bool },
+    SliderHead {
+        hit: bool,
+    },
+    SliderTick {
+        hit: bool,
+    },
+    /// `repeat_index` is 0-based and identifies WHICH repeat this is, which
+    /// is what picks the node samples the repeat sounds with (lazer's
+    /// `Slider.cs`: repeat *n* takes `GetNodeSamples(n + 1)`). carried rather
+    /// than recovered by counting repeat events, because a positional join
+    /// over emission order goes silently wrong the first time that order
+    /// changes -- see `beatmap::stable_points::StablePointKind`
+    SliderRepeat {
+        hit: bool,
+        repeat_index: u32,
+    },
+    SliderTail {
+        hit: bool,
+    },
     SliderAggregate(HitGrade),
     SpinnerSpin,
     SpinnerBonus,
@@ -61,7 +76,7 @@ impl ScoreState {
             }
             JudgementKind::SliderHead { hit }
             | JudgementKind::SliderTick { hit }
-            | JudgementKind::SliderRepeat { hit } => {
+            | JudgementKind::SliderRepeat { hit, .. } => {
                 if *hit {
                     self.increment_combo();
                 } else {
@@ -136,7 +151,7 @@ mod tests {
         let s = state_after(&[
             JudgementKind::SliderHead { hit: true },
             JudgementKind::SliderTick { hit: true },
-            JudgementKind::SliderRepeat { hit: true },
+            JudgementKind::SliderRepeat { hit: true, repeat_index: 0 },
             JudgementKind::SliderTail { hit: true },
             JudgementKind::SliderAggregate(HitGrade::Great),
         ]);

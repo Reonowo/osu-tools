@@ -96,7 +96,12 @@ fn full_combo_timeline(processed: &ProcessedBeatmap) -> JudgementTimeline {
                     let kind = match nested.kind {
                         NestedKind::Head => JudgementKind::SliderHead { hit: true },
                         NestedKind::Tick => JudgementKind::SliderTick { hit: true },
-                        NestedKind::Repeat => JudgementKind::SliderRepeat { hit: true },
+                        // the repeat that ends span `span_index` is repeat
+                        // `span_index` (beatmap::slider_events)
+                        NestedKind::Repeat => JudgementKind::SliderRepeat {
+                            hit: true,
+                            repeat_index: nested.span_index.max(0) as u32,
+                        },
                         NestedKind::Tail => JudgementKind::SliderTail { hit: true },
                     };
                     push(index, nested.time, kind);

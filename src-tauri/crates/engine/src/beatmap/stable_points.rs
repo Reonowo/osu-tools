@@ -28,19 +28,35 @@
 //! the lazer nested objects stay untouched for rendering and every
 //! lazer-parity fixture; only the legacy simulation consumes this list.
 
-use crate::beatmap::NestedKind;
 use crate::error::{resource_limit, Result};
 use crate::limits;
 use crate::path::SliderPath;
+
+/// which slider element a stable score point is. deliberately not
+/// [`crate::beatmap::NestedKind`]: the head is not a score point (it feeds
+/// the aggregate rate through the click machinery instead), and a repeat
+/// carries WHICH repeat it is.
+///
+/// that ordinal is not decoration. lazer picks a repeat's samples by node
+/// (`slider.cs` -- repeat *n* takes `GetNodeSamples(n + 1)`), so a consumer
+/// holding only "this is a repeat" would have to recover the node by counting
+/// repeat judgements in emission order. that join is silently wrong the first
+/// time emission order changes, and wrong means the map's own hitsounding
+/// plays on the wrong reverse -- audible, and not attributable to anything
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StablePointKind {
+    Tick,
+    /// 0-based: the repeat that ends span `repeat_index`
+    Repeat { repeat_index: u32 },
+    Tail,
+}
 
 /// one stable score point. `time` is whole milliseconds by construction
 /// (stable floors every score time)
 #[derive(Debug, Clone, Copy)]
 pub struct StableScorePoint {
     pub time: f64,
-    /// tick, repeat, or tail -- the head is not a score point (it feeds the
-    /// aggregate rate through the click machinery instead)
-    pub kind: NestedKind,
+    pub kind: StablePointKind,
 }
 
 /// timing.go:27-33 `GetRatio` -- the clamped inverse slider velocity,
@@ -152,7 +168,7 @@ pub(crate) fn stable_score_points(
                     start_time + (f64::from(scoring_length_total as f32) / velocity * 1000.0).floor();
                 points.push(StableScorePoint {
                     time: score_time,
-                    kind: NestedKind::Tick,
+                    kind: StablePointKind::Tick,
                 });
                 if points.len() > limits::MAX_SLIDER_NESTED_OBJECTS {
                     return Err(resource_limit(
@@ -175,9 +191,13 @@ pub(crate) fn stable_score_points(
         points.push(StableScorePoint {
             time: score_time,
             kind: if last_span {
-                NestedKind::Tail
+                StablePointKind::Tail
             } else {
-                NestedKind::Repeat
+                // the repeat that ends span `span` is repeat `span`, which is
+                // node `span + 1` in lazer's node-sample list
+                StablePointKind::Repeat {
+                    repeat_index: span as u32,
+                }
             },
         });
         if points.len() > limits::MAX_SLIDER_NESTED_OBJECTS {
@@ -214,7 +234,8 @@ pub(crate) fn stable_score_points(
 
 #[cfg(test)]
 mod tests {
-    use crate::beatmap::{process_beatmap, NestedKind, ProcessedKind};
+    use super::StablePointKind;
+    use crate::beatmap::{process_beatmap, ProcessedKind};
     use crate::formats::beatmap::{
         Beatmap, HitObject, HitObjectKind, PathControlPoint, PathType, SliderData, TimingPoint,
     };
@@ -244,6 +265,9 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 2.0,
             combo_colors: Vec::new(),
+            default_sample_bank: crate::formats::samples::SampleBank::Normal,
+            default_sample_volume: 100,
+            samples_match_playback_rate: false,
             breaks: Vec::new(),
             timing_points: vec![TimingPoint {
                 time: 0.0,
@@ -255,6 +279,7 @@ mod tests {
                 pos: Vec2::new(100.0, 100.0),
                 new_combo: true,
                 combo_offset: 0,
+                samples: Vec::new(),
                 kind: HitObjectKind::Slider(SliderData {
                     control_points: vec![
                         PathControlPoint {
@@ -268,13 +293,14 @@ mod tests {
                     ],
                     expected_distance: Some(100.0),
                     repeat_count,
+                    node_samples: Vec::new(),
                 }),
             }],
         };
         process_beatmap(&map).unwrap()
     }
 
-    fn points_of(processed: &crate::beatmap::ProcessedBeatmap) -> Vec<(f64, NestedKind)> {
+    fn points_of(processed: &crate::beatmap::ProcessedBeatmap) -> Vec<(f64, StablePointKind)> {
         match &processed.objects[0].kind {
             ProcessedKind::Slider(s) => s.stable_points.iter().map(|p| (p.time, p.kind)).collect(),
             _ => unreachable!("the test map holds one slider"),
@@ -291,7 +317,7 @@ mod tests {
         let processed = slider_map(0);
         assert_eq!(
             points_of(&processed),
-            vec![(1250.0, NestedKind::Tick), (1357.0, NestedKind::Tail)]
+            vec![(1250.0, StablePointKind::Tick), (1357.0, StablePointKind::Tail)]
         );
         let ProcessedKind::Slider(s) = &processed.objects[0].kind else {
             unreachable!()
@@ -315,11 +341,31 @@ mod tests {
         assert_eq!(
             points_of(&processed),
             vec![
-                (1250.0, NestedKind::Tick),
-                (1357.0, NestedKind::Repeat),
-                (1464.0, NestedKind::Tick),
-                (1714.0, NestedKind::Tail),
+                (1250.0, StablePointKind::Tick),
+                (1357.0, StablePointKind::Repeat { repeat_index: 0 }),
+                (1464.0, StablePointKind::Tick),
+                (1714.0, StablePointKind::Tail),
             ]
         );
+    }
+
+    #[test]
+    fn every_repeat_names_its_own_ordinal_in_span_order() {
+        // four spans -> three repeats, numbered 0, 1, 2 in the order they are
+        // reached. this is the identity a hit sample's node lookup rides on,
+        // so it must survive the time sort rather than depend on it
+        let processed = slider_map(3);
+        let repeats: Vec<u32> = match &processed.objects[0].kind {
+            ProcessedKind::Slider(s) => s
+                .stable_points
+                .iter()
+                .filter_map(|p| match p.kind {
+                    StablePointKind::Repeat { repeat_index } => Some(repeat_index),
+                    _ => None,
+                })
+                .collect(),
+            _ => unreachable!("the test map holds one slider"),
+        };
+        assert_eq!(repeats, vec![0, 1, 2]);
     }
 }

@@ -93,7 +93,7 @@ pub fn total_score(
     for event in &timeline.events {
         match event.kind {
             JudgementKind::SliderHead { hit }
-            | JudgementKind::SliderRepeat { hit }
+            | JudgementKind::SliderRepeat { hit, .. }
             | JudgementKind::SliderTail { hit } => {
                 if hit {
                     total = total.saturating_add(30);
@@ -184,6 +184,9 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
             combo_colors: Vec::new(),
+            default_sample_bank: crate::formats::samples::SampleBank::Normal,
+            default_sample_volume: 100,
+            samples_match_playback_rate: false,
             breaks: Vec::new(),
             timing_points: vec![TimingPoint {
                 time: 0.0,
@@ -206,6 +209,7 @@ mod tests {
                     pos: Vec2::new(256.0, 192.0),
                     new_combo: i == 0,
                     combo_offset: 0,
+                    samples: Vec::new(),
                     kind: HitObjectKind::Circle,
                 })
                 .collect(),
@@ -221,6 +225,7 @@ mod tests {
                 pos: Vec2::ZERO,
                 new_combo: false,
                 combo_offset: 0,
+                samples: Vec::new(),
                 kind: HitObjectKind::Spinner { duration },
             }],
         )
@@ -270,7 +275,7 @@ mod tests {
         let timeline = timeline_of(&[
             JudgementKind::SliderHead { hit: true },
             JudgementKind::SliderTick { hit: true },
-            JudgementKind::SliderRepeat { hit: true },
+            JudgementKind::SliderRepeat { hit: true, repeat_index: 0 },
             JudgementKind::SliderTail { hit: true },
             JudgementKind::SliderAggregate(HitGrade::Great),
         ]);

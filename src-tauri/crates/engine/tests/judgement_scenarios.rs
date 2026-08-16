@@ -110,7 +110,7 @@ fn slider_tracking_matches_the_lazer_dump() {
             .filter_map(|e| match e.kind {
                 JudgementKind::SliderHead { hit } => Some(("head", hit)),
                 JudgementKind::SliderTick { hit } => Some(("tick", hit)),
-                JudgementKind::SliderRepeat { hit } => Some(("repeat", hit)),
+                JudgementKind::SliderRepeat { hit, .. } => Some(("repeat", hit)),
                 JudgementKind::SliderTail { hit } => Some(("tail", hit)),
                 _ => None,
             })

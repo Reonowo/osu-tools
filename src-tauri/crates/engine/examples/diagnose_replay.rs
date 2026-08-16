@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use engine::beatmap::stable_points::StablePointKind;
 use engine::beatmap::{process_beatmap, NestedKind, ProcessedBeatmap, ProcessedKind};
 use engine::formats::beatmap::decode_beatmap_path;
 use engine::formats::osr::decode_osr;
@@ -90,7 +91,7 @@ fn main() {
             let combo_before = u64::from(state.combo);
             let added = match event.kind {
                 JudgementKind::SliderHead { hit }
-                | JudgementKind::SliderRepeat { hit }
+                | JudgementKind::SliderRepeat { hit, .. }
                 | JudgementKind::SliderTail { hit } => {
                     if hit {
                         30
@@ -167,7 +168,7 @@ fn print_map_summary(processed: &ProcessedBeatmap) {
         let stable_ticks = slider
             .stable_points
             .iter()
-            .filter(|p| p.kind == NestedKind::Tick)
+            .filter(|p| p.kind == StablePointKind::Tick)
             .count();
         // lazer's tick count for the same slider, for the side-by-side
         let lazer_ticks = kinds.get("tick").copied().unwrap_or(0);
@@ -354,7 +355,7 @@ fn print_sliders(processed: &ProcessedBeatmap, timeline: &JudgementTimeline, all
                 e.kind,
                 JudgementKind::SliderHead { hit: false }
                     | JudgementKind::SliderTick { hit: false }
-                    | JudgementKind::SliderRepeat { hit: false }
+                    | JudgementKind::SliderRepeat { hit: false, .. }
                     | JudgementKind::SliderTail { hit: false }
             )
         });
