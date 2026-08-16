@@ -5,15 +5,19 @@
 // the dock-wide ctrl+wheel span zoom: one rule for every tier, mirroring how
 // ctrl+wheel zooms the viewport canvas, while plain wheel keeps frame-
 // stepping here like everywhere else (the global listener handles that; the
-// webview's own ctrl+wheel page zoom is suppressed app-wide in App.tsx)
+// webview's own ctrl+wheel page zoom is suppressed app-wide in App.tsx).
+// onOpenSettings passes straight through to the transport's audio button:
+// App.tsx owns dialog open-ness, which is the existing pattern -- moving it
+// into the store would make a piece of chrome a piece of viewer state
 
+import type { SettingsCategory } from "@/components/settings/categories";
 import { detailSpanForWheel } from "@/lib/timeline-view";
 import { useViewerStore } from "@/state/store";
 import { DetailLanes } from "./DetailLanes";
 import { OverviewStrip } from "./OverviewStrip";
 import { Transport } from "./Transport";
 
-export function TimelineDock() {
+export function TimelineDock({ onOpenSettings }: { onOpenSettings: (category?: SettingsCategory) => void }) {
 	const mode = useViewerStore((s) => s.mode);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 	const setDetailSpan = useViewerStore((s) => s.setDetailSpan);
@@ -28,7 +32,7 @@ export function TimelineDock() {
 		>
 			<OverviewStrip />
 			{mode === "edit" && <DetailLanes />}
-			<Transport />
+			<Transport onOpenSettings={onOpenSettings} />
 		</div>
 	);
 }

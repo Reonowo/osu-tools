@@ -35,7 +35,7 @@ export function AppShell({
 				{panelOpen && <SidePanel />}
 				<TabRail />
 			</div>
-			<TimelineDock />
+			<TimelineDock onOpenSettings={onOpenSettings} />
 			<StatusBar />
 		</div>
 	);

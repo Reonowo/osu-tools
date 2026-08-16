@@ -14,13 +14,25 @@
 // this file never adds a second one
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { Pause, Play, SkipBack, StepBack, StepForward, Volume1, Volume2, VolumeX } from "lucide-react";
+import {
+	Pause,
+	Play,
+	SkipBack,
+	SlidersHorizontal,
+	StepBack,
+	StepForward,
+	Volume1,
+	Volume2,
+	VolumeX
+} from "lucide-react";
+import type { SettingsCategory } from "@/components/settings/categories";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatTime } from "@/lib/format";
+import { speakerState, type VolumeLevels } from "@/playback/audio-levels";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { keybindSuffix } from "@/playback/keybinds";
@@ -45,10 +57,32 @@ const RATES: { value: number; label: string }[] = [
 	{ value: 2, label: "2×" }
 ];
 
-/** the speaker glyph tracks the level, exactly as Controls.tsx did */
-function VolumeIcon({ volume }: { volume: number }) {
-	const Icon = volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
-	return <Icon className="size-4 shrink-0 text-[#71717a]" aria-hidden />;
+/** the speaker glyph tracks the level, exactly as Controls.tsx did, and clicking
+ * it mutes -- the convention every media player trains, which is why it stays
+ * the mute and never the way into the audio modal (the sliders button beside
+ * the readout is that affordance instead).
+ *
+ * the glyph's state is not just the master's: audio-levels.ts folds all three
+ * channels, so a master at 70 with music and hitsounds both silent reads muted
+ * rather than 70%. the CLICK is the master's alone, because the master is the
+ * slider sitting next to it -- which means the one case where the two disagree
+ * (a fold that reads muted because both children are zero) mutes the master on
+ * the first click rather than restoring anything. that is the honest reading:
+ * the glyph is never made to lie, and the two clicks still get you back */
+function VolumeButton({ levels, onToggle }: { levels: VolumeLevels; onToggle: () => void }) {
+	const state = speakerState(levels);
+	const Icon = state === "muted" ? VolumeX : state === "low" ? Volume1 : Volume2;
+	const muted = levels.master <= 0;
+	return (
+		<IconAction
+			label={muted ? "unmute" : "mute"}
+			tooltip={muted ? "restore the volume this muted" : "mute"}
+			className="size-[26px] rounded-lg"
+			onClick={onToggle}
+		>
+			<Icon />
+		</IconAction>
+	);
 }
 
 /** an icon-only ghost button and its tooltip. the aria-label names the
@@ -81,14 +115,16 @@ function IconAction({
 	);
 }
 
-export function Transport() {
+export function Transport({ onOpenSettings }: { onOpenSettings: (category?: SettingsCategory) => void }) {
 	const scene = useViewerStore((s) => s.scene);
 	const playing = useViewerStore((s) => s.playing);
 	const rate = useViewerStore((s) => s.rate);
 	const volume = useViewerStore((s) => s.volume);
+	const audio = useViewerStore((s) => s.audio);
 	const setPlaying = useViewerStore((s) => s.setPlaying);
 	const setRate = useViewerStore((s) => s.setRate);
 	const setVolume = useViewerStore((s) => s.setVolume);
+	const toggleMute = useViewerStore((s) => s.toggleMute);
 	// all four of these buttons name a key, and all four keys are rebindable
 	// now: read the effective table so a hint cannot go on advertising one the
 	// user has moved or taken away
@@ -207,14 +243,17 @@ export function Transport() {
 				</ToggleGroup>
 
 				<div className="flex items-center gap-2">
-					<VolumeIcon volume={volume} />
+					<VolumeButton
+						levels={{ master: volume, music: audio.musicVolume, hitsound: audio.hitsoundVolume }}
+						onToggle={toggleMute}
+					/>
 					<Slider
 						// shrink-0 or the ml-auto group squeezes the track away entirely,
 						// same trap Controls.tsx's own comment called out: the thumb is
 						// the only non-shrinkable part, so a bare width alone collapses
 						// to it
 						className="w-[86px] shrink-0"
-						aria-label="volume"
+						aria-label="master volume"
 						min={0}
 						max={100}
 						step={1}
@@ -224,6 +263,18 @@ export function Transport() {
 					<span className="w-[30px] text-right font-mono text-[10.5px] text-[#71717a] tabular-nums">
 						{volume}%
 					</span>
+					{/* after the readout rather than replacing the speaker: the
+					    speaker stays passive (see VolumeIcon), and the master slider
+					    stays the thing you reach for mid-replay while everything
+					    else is one click further */}
+					<IconAction
+						label="audio settings"
+						tooltip="music and hitsound levels, and the rest of the audio settings"
+						className="size-[26px] rounded-lg"
+						onClick={() => onOpenSettings("audio")}
+					>
+						<SlidersHorizontal />
+					</IconAction>
 				</div>
 			</div>
 		</div>
