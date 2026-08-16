@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { fromHex } from "../../engine/color";
 import { trackValueAt } from "../../engine/transforms";
 import { testScene } from "../../test/scene";
-import { GRADE_COLOURS, judgementSpecs, resultTracks, ringExplosion, tickMissTracks } from "./judgement-tracks";
+import {
+	argonProJudgementPiece,
+	GRADE_COLOURS,
+	judgementSpecs,
+	resultTracks,
+	ringExplosion,
+	tickMissTracks
+} from "./judgement-tracks";
 
 describe("judgement specs", () => {
 	test("authoritative circle events pop at the object position", () => {
@@ -45,7 +52,8 @@ describe("judgement specs", () => {
 									position: [100, 100],
 									pathProgress: 0,
 									preempt: 600,
-									fadeIn: 400
+									fadeIn: 400,
+									samples: []
 								},
 								{
 									kind: "tick",
@@ -54,7 +62,8 @@ describe("judgement specs", () => {
 									position: [150, 100],
 									pathProgress: 0.5,
 									preempt: 500,
-									fadeIn: 150
+									fadeIn: 150,
+									samples: []
 								},
 								{
 									kind: "tail",
@@ -63,7 +72,8 @@ describe("judgement specs", () => {
 									position: [200, 100],
 									pathProgress: 1,
 									preempt: 600,
-									fadeIn: 400
+									fadeIn: 400,
+									samples: []
 								}
 							]
 						}
@@ -143,7 +153,8 @@ describe("judgement specs", () => {
 									position: [150, 100],
 									pathProgress: 0.5,
 									preempt: 500,
-									fadeIn: 150
+									fadeIn: 150,
+									samples: []
 								}
 							]
 						}
@@ -175,17 +186,54 @@ describe("judgement specs", () => {
 					{
 						time: 980,
 						objectIndex: 0,
-						kind: { type: "spinnerFinal", grade: "great" },
+						kind: { type: "spinnerFinal", grade: "meh" },
 						comboAfter: 1,
 						accuracyAfter: 1
 					}
 				],
-				totals: { count300: 1, count100: 0, count50: 0, countMiss: 0, maxCombo: 1 }
+				totals: { count300: 0, count100: 0, count50: 1, countMiss: 0, maxCombo: 1 }
 			}
 		});
 		const specs = judgementSpecs(scene);
 		expect(specs).toHaveLength(1);
-		expect(specs[0]).toMatchObject({ x: 256, y: 192, grade: "great", style: "text" });
+		expect(specs[0]).toMatchObject({ x: 256, y: 192, grade: "meh", style: "text" });
+	});
+
+	// the point of these two is the MECHANISM, not the outcome: nothing here
+	// keys on "greats are noisy", it keys on argonpro answering Drawable.Empty()
+	test("a great draws nothing because the skin answers empty, while every other grade still draws", () => {
+		const gradeSpecs = (grade: "great" | "ok" | "meh" | "miss") =>
+			judgementSpecs(
+				testScene({
+					simulation: {
+						status: "authoritative",
+						events: [
+							{
+								time: 980,
+								objectIndex: 0,
+								kind: { type: "circle", grade },
+								comboAfter: 1,
+								accuracyAfter: 1
+							}
+						],
+						totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 1 }
+					}
+				})
+			);
+		expect(gradeSpecs("great")).toHaveLength(0);
+		for (const grade of ["ok", "meh", "miss"] as const) {
+			expect(gradeSpecs(grade)).toEqual([expect.objectContaining({ grade, style: "text", time: 980 })]);
+		}
+	});
+
+	test("the skin's three-valued answer keeps empty and no-answer distinct", () => {
+		// an empty answer is a decision the skin made; a `none` is a decline
+		// that a later source in the chain would answer instead. a chain that
+		// collapsed them would resurrect the very piece the skin removed
+		expect(argonProJudgementPiece("great")).toEqual({ answer: "empty" });
+		expect(argonProJudgementPiece("largeTickHit")).toEqual({ answer: "none" });
+		expect(argonProJudgementPiece("largeTickMiss")).toEqual({ answer: "piece", style: "tickMiss" });
+		expect(argonProJudgementPiece("miss")).toEqual({ answer: "piece", style: "text" });
 	});
 
 	test("seed is the event's index into simulation.events, not the object index", () => {

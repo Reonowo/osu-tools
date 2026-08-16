@@ -85,7 +85,10 @@ describe("JudgementsDrawable, notSimulated (decision 5)", () => {
 });
 
 describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's reconcileActiveDrawables)", () => {
-	function sceneWithOneGreatHit() {
+	// a 100 rather than a 300: argonpro answers Drawable.Empty() for greats
+	// (judgement-tracks.ts's argonProJudgementPiece), so a great builds no
+	// popup at all and there would be nothing here to orphan
+	function sceneWithOneHit() {
 		return testScene({
 			simulation: {
 				status: "authoritative",
@@ -93,12 +96,12 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 					{
 						time: 1000,
 						objectIndex: 0,
-						kind: { type: "circle", grade: "great" },
+						kind: { type: "circle", grade: "ok" },
 						comboAfter: 1,
 						accuracyAfter: 1
 					}
 				],
-				totals: { count300: 1, count100: 0, count50: 0, countMiss: 0, maxCombo: 1 }
+				totals: { count300: 0, count100: 1, count50: 0, countMiss: 0, maxCombo: 1 }
 			}
 		});
 	}
@@ -108,7 +111,7 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 		// inside it, so it's already active by the time we seek backward to
 		// t=1200, which still lands inside the same window -- ActiveSetTracker's
 		// rebuild branch reports it in `added` again with no matching `removed`
-		const ctx = stubContextWithoutCanvas(sceneWithOneGreatHit());
+		const ctx = stubContextWithoutCanvas(sceneWithOneHit());
 		const drawable = new JudgementsDrawable(ctx);
 
 		drawable.update(2000);
@@ -127,7 +130,7 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 	test("the same scenario holds for the tickMiss popup shape", () => {
 		const scene = testScene({
 			renderPlan: {
-				...sceneWithOneGreatHit().renderPlan,
+				...sceneWithOneHit().renderPlan,
 				objects: [
 					{
 						startTime: 1000,
@@ -139,6 +142,7 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 						indexInCombo: 0,
 						preempt: 600,
 						fadeIn: 400,
+						samples: [],
 						kind: {
 							type: "slider",
 							vertices: [100, 100, 200, 100],
@@ -159,7 +163,8 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 									position: [100, 100],
 									pathProgress: 0,
 									preempt: 600,
-									fadeIn: 400
+									fadeIn: 400,
+									samples: []
 								}
 							]
 						}

@@ -23,8 +23,10 @@ export const BORDER_PORTION = 0.128;
  * the c# float value. typed `number` (rather than the precise literal type)
  * because slider-lut.ts compares it against 0 -- see the guard there */
 export const SLIDER_BORDER_PORTION: number = 0.2;
-/** osuargonskintransformer.cs:57 (non-pro argon) */
-export const SLIDER_BODY_ALPHA = 0.98;
+/** osuargonskintransformer.cs:57 -- the `isPro` branch. argonpro is this
+ * app's default skin throughout, so the pro alpha is the one that applies;
+ * the non-pro branch on the same line is 0.98 */
+export const SLIDER_BODY_ALPHA = 0.92;
 /** smoothpath.cs:58 */
 export const LUT_AA_PORTION = 0.02;
 

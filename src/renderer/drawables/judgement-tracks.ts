@@ -33,55 +33,97 @@ function nestedAt(nested: RenderNested[], time: number, kind: RenderNested["kind
 	return nested.find((n) => n.kind === kind && Math.abs(n.time - time) <= 1) ?? null;
 }
 
-/** osuargonskintransformer.cs:23-42 -- which hitresults get a popup at all
- * (large tick hits and slider tail hits return null; large tick/ignore misses
- * get the tick-miss piece; everything else gets the text piece).
- * drawableosujudgement.cs:39-71 -- popup position (slider tail for the
- * aggregate, playfield centre for spinners, the object itself otherwise) */
+/** the lazer `HitResult`s this viewer's judgement events map onto. the skin is
+ * asked about a result, never about our own event kinds, exactly as
+ * `SkinComponentLookup<HitResult>` is (hitresult.cs) */
+export type JudgedResult = Grade | "largeTickHit" | "largeTickMiss";
+
+/** what a skin answers when asked for a judgement piece. lazer's
+ * `GetDrawableComponent` is three-valued and every value is load-bearing: a
+ * drawable to show, `Drawable.Empty()` -- answered, with nothing -- and
+ * `null`, declining so the next source answers instead. an empty answer is
+ * NOT a decline: collapsing the two would resurrect exactly what a skin was
+ * chosen to remove */
+export type PieceAnswer = { answer: "piece"; style: "text" | "tickMiss" } | { answer: "empty" } | { answer: "none" };
+
+/** osuargonskintransformer.cs:23-42, on the `isPro` branch -- argonpro is this
+ * app's default skin throughout.
+ *
+ * :26-28 answers `Drawable.Empty()` for Great (and Perfect, which osu!std
+ * never judges), which is why a 300 draws no popup here. the popup is missing
+ * because THE SKIN ANSWERED EMPTY, not because the app decided a 300 is noisy:
+ * when real skin loading lands, a legacy skin's 1x1 transparent `hit300.png`
+ * must reach this same outcome through this same call, and a skin that draws
+ * greats must get them back without this module changing. the app never
+ * substitutes its own judgement for the skin's */
+export function argonProJudgementPiece(result: JudgedResult): PieceAnswer {
+	if (result === "great") return { answer: "empty" };
+	switch (result) {
+		// :32-34 -- large tick hits and slider tail hits get no piece at all
+		case "largeTickHit":
+			return { answer: "none" };
+		// :36-38
+		case "largeTickMiss":
+			return { answer: "piece", style: "tickMiss" };
+		// :40-41
+		default:
+			return { answer: "piece", style: "text" };
+	}
+}
+
+/** drawableosujudgement.cs:39-71 -- popup position (slider tail for the
+ * aggregate, playfield centre for spinners, the object itself otherwise). what
+ * each result draws is not decided here: every candidate is put to the skin
+ * (argonProJudgementPiece) and only a `piece` answer becomes a spec */
 export function judgementSpecs(scene: LoadedScene): JudgementSpec[] {
 	if (scene.simulation.status !== "authoritative") return [];
 	const specs: JudgementSpec[] = [];
 	scene.simulation.events.forEach((event, seed) => {
 		const obj = scene.renderPlan.objects[event.objectIndex];
 		const kind = event.kind;
+		// what the skin is asked about, and where the piece it may return
+		// would sit
+		let result: JudgedResult;
+		let x: number;
+		let y: number;
 		switch (kind.type) {
 			case "circle":
-				specs.push({
-					time: event.time,
-					x: obj.position[0],
-					y: obj.position[1],
-					grade: kind.grade,
-					style: "text",
-					seed
-				});
+				result = kind.grade;
+				[x, y] = obj.position;
 				break;
-			case "sliderAggregate": {
-				const [x, y] = obj.kind.type === "slider" ? obj.kind.endPosition : obj.position;
-				specs.push({ time: event.time, x, y, grade: kind.grade, style: "text", seed });
+			case "sliderAggregate":
+				result = kind.grade;
+				[x, y] = obj.kind.type === "slider" ? obj.kind.endPosition : obj.position;
 				break;
-			}
 			case "spinnerFinal":
-				specs.push({ time: event.time, x: 256, y: 192, grade: kind.grade, style: "text", seed });
+				result = kind.grade;
+				x = 256;
+				y = 192;
 				break;
 			case "sliderTick":
 			case "sliderRepeat": {
-				if (kind.hit || obj.kind.type !== "slider") break;
+				if (obj.kind.type !== "slider") return;
 				const nested = nestedAt(obj.kind.nested, event.time, kind.type === "sliderTick" ? "tick" : "repeat");
-				if (nested !== null) {
-					specs.push({
-						time: event.time,
-						x: nested.position[0],
-						y: nested.position[1],
-						grade: "miss",
-						style: "tickMiss",
-						seed
-					});
-				}
+				if (nested === null) return;
+				result = kind.hit ? "largeTickHit" : "largeTickMiss";
+				[x, y] = nested.position;
 				break;
 			}
 			default:
-				break;
+				return;
 		}
+		const piece = argonProJudgementPiece(result);
+		if (piece.answer !== "piece") return;
+		specs.push({
+			time: event.time,
+			x,
+			y,
+			// the tick-miss piece is drawn in miss colours whichever result
+			// produced it (argonjudgementpiecesslidertickmiss.cs)
+			grade: result === "largeTickMiss" ? "miss" : (result as Grade),
+			style: piece.style,
+			seed
+		});
 	});
 	return specs;
 }
