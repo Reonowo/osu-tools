@@ -191,10 +191,13 @@ impl Default for AudioPrefs {
     }
 }
 
-/// gameplay preferences that are not render effects. they live beside the
+/// gameplay preferences that are not render effects. they persist beside the
 /// effects rather than with the volumes because that is lazer's own split:
 /// `Sections/Gameplay/AudioSettings` holds these two while `Sections/Audio`
-/// holds the levels and the offset
+/// holds the levels and the offset. this is where they are STORED, not where
+/// they are shown -- the viewer renders both in its audio category, and the
+/// keys were left here so no settings file needs migrating (the reasoning is
+/// at `src/components/settings/AudioCategory.tsx`)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GameplayPrefs {
