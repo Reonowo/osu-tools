@@ -35,6 +35,17 @@ import {
 } from "./keybinds";
 import { controlOwnsKeydown, wheelFrameStep, withinInteractiveControl } from "./shortcut-guards";
 
+/** one press of the volume keys, in percent. lazer moves its master in
+ * hundredths of unity per press (AudioManager's VolumeIncreaseAmount), which
+ * is one percentage point here; five makes the pair usable in a hurry without
+ * overshooting a level anyone tuned by hand */
+const VOLUME_STEP = 5;
+
+function nudgeMasterVolume(delta: number) {
+	const { volume, setVolume } = viewerStore.getState();
+	setVolume(volume + delta);
+}
+
 /** exact-select the neighbouring replay frame, one index at a time so a run
  * of duplicate-time frames is fully steppable; does not pause playback,
  * matching the `,` / `.` behaviour the wheel shares */
@@ -137,13 +148,17 @@ function registrationsFor(row: EffectiveKeybind, key: string): UseHotkeyDefiniti
 							// a rebound accelerator would otherwise reach the webview on
 							// every repeat after the first
 							if (e.repeat) return;
-							// keydown only arms the viewport's pan drag now; the play/pause
-							// toggle moved to keyup so a space-drag can suppress it. a tap
-							// still toggles, one keystroke later than it used to. the
-							// release is not registered here at all -- see the keyup
-							// listener in the effect below for why the library cannot see
-							// it end
-							spacePan.press(keybindMainKey(key));
+							// keydown arms the viewport's pan drag AND pauses. only the
+							// play half of the toggle waits for the keyup, where a
+							// space-drag can still suppress it -- pausing cannot wait,
+							// because a held key would keep a replay playing and
+							// hitsounding for the whole press (see space-pan.ts). the
+							// release is not registered here at all: see the keyup
+							// listener in the effect below for why the library cannot
+							// see it end
+							const { playing, setPlaying } = viewerStore.getState();
+							spacePan.press(keybindMainKey(key), playing);
+							if (playing) setPlaying(false);
 						})
 				}
 			];
@@ -161,6 +176,10 @@ function registrationsFor(row: EffectiveKeybind, key: string): UseHotkeyDefiniti
 			return [{ hotkey, callback: (e) => guarded(e, () => stepFrame(1)) }];
 		case "restart":
 			return [{ hotkey, callback: (e) => guarded(e, () => playbackClock.seekTo(playbackClock.minTime)) }];
+		case "volumeUp":
+			return [{ hotkey, callback: (e) => guarded(e, () => nudgeMasterVolume(VOLUME_STEP)) }];
+		case "volumeDown":
+			return [{ hotkey, callback: (e) => guarded(e, () => nudgeMasterVolume(-VOLUME_STEP)) }];
 		default:
 			// the tool keys and the snap toggle. registered here rather than in
 			// use-edit-tools so they inherit the focus modality rules, the
@@ -287,16 +306,20 @@ export function usePlaybackShortcuts() {
 			// the keydown's guard covers most of this: press() ran only if it
 			// passed, so a release with nothing armed -- a keyboard-focused
 			// button's own space activation, a text field, no loaded scene --
-			// toggles nothing
-			if (!spacePan.release()) return;
+			// has nothing to answer
+			const shouldPlay = spacePan.release();
+			if (shouldPlay === null) return;
 			// but the release can land somewhere the press did not: space armed
 			// over the viewer, then a click into a number field before letting go
 			// targets this keyup at the field. the latch is already cleared above;
-			// the tap itself is discarded so playback does not toggle behind the
-			// field the user just entered
+			// the release is discarded so playback does not start behind the field
+			// the user just entered. a replay the press paused stays paused, which
+			// is the half that already happened and the half nobody minds
 			if (controlOwnsKeydown(e, focusModality.keyboardFocus)) return;
+			// an absolute state, not a toggle: the press already moved playback,
+			// so toggling again here would undo the pause it just performed
 			const { playing, setPlaying } = viewerStore.getState();
-			setPlaying(!playing);
+			if (playing !== shouldPlay) setPlaying(shouldPlay);
 		}
 		// passive: the viewer layout never scrolls, so default is never prevented
 		// here. ctrl+wheel is the one wheel gesture that does need a
