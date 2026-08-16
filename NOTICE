@@ -1,0 +1,39 @@
+Third-party assets bundled with this application
+================================================
+
+Default hit samples
+-------------------
+
+`public/samples/Gameplay/` contains audio sample files taken verbatim from
+
+    ppy/osu-resources  --  https://github.com/ppy/osu-resources
+
+specifically its `osu.Game.Resources/Samples/Gameplay/` tree, retaining that
+tree's three-tier layout (`ArgonPro/`, `Argon/`, and the shared tier beside
+them) so they resolve the way osu!lazer's own skins resolve them.
+
+Those files are licensed under
+
+    Creative Commons Attribution-NonCommercial 4.0 International
+    (CC BY-NC 4.0)  --  https://creativecommons.org/licenses/by-nc/4.0/
+
+Copyright (c) ppy Pty Ltd <contact@ppy.sh>.
+
+The licence requires attribution -- this notice -- and bars commercial use of
+anything these files ship inside. This application is a personal,
+non-commercial tool.
+
+Only `.wav` and `.mp3` sample files are taken. The osu-resources fonts are
+separately licensed and are not included, and the osu! and ppy trademarks are
+excluded from the CC grant and are not used.
+
+The osu!std-relevant subset is vendored: per-bank hit samples
+(`{bank}-hit{normal,whistle,finish,clap}`), slider samples
+(`{bank}-slider{tick,slide,whistle}`), the spinner samples and `combobreak`.
+Files belonging to the other rulesets (`taiko-*`, `catch-banana`) and to game
+surfaces this application does not have (`failsound*`, `rank-*`, `fountain-*`,
+`nightcore-*`, `restart`, `resume-countdown`, `pause-loop`, `sectionfail`,
+`sectionpass`) are not included.
+
+Everything else in this repository is the project's own work; osu!lazer is
+referenced for behavioural parity only, and no lazer source code is included.
