@@ -432,9 +432,12 @@ export interface AudioSettings {
 }
 
 /** mirrors settings.rs GameplayPrefs: the gameplay preferences that are not
- * render effects. they sit beside the effects rather than with the volumes
+ * render effects. they persist beside the effects rather than with the volumes
  * because that is lazer's own split -- `Sections/Gameplay/AudioSettings` holds
- * these two while `Sections/Audio` holds the levels and the offset */
+ * these two while `Sections/Audio` holds the levels and the offset. that is
+ * where they are STORED, not where they are shown: both render in the audio
+ * category, and the keys stayed here so no settings file needs migrating
+ * (AudioCategory.tsx argues the placement) */
 export interface GameplaySettings {
 	/** 0-1; osuconfigmanager.cs:144 PositionalHitsoundsLevel, default 0.2 */
 	positionalHitsoundLevel: number;
