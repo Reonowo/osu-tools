@@ -1,4 +1,4 @@
-// the settings dialog: a nav column and five category panels inside the modal
+// the settings dialog: a nav column and six category panels inside the modal
 // it has always been. still a modal because it is a modal-shaped task and has
 // to be reachable with nothing loaded (the start screen needs the install
 // path), so it can be neither a seventh panel tab nor a route -- there is no
@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useViewerStore } from "@/state/store";
 import { AnalysisCategory } from "./AnalysisCategory";
+import { AudioCategory } from "./AudioCategory";
 import { SETTINGS_CATEGORIES, type SettingsCategory } from "./categories";
 import { EditingCategory } from "./EditingCategory";
 import { GameplayCategory } from "./GameplayCategory";
@@ -47,6 +48,8 @@ export function SettingsDialog({
 	const isOpen = category !== null;
 	const setOverlay = useViewerStore((s) => s.setOverlay);
 	const overlays = useViewerStore((s) => s.overlays);
+	const setAudio = useViewerStore((s) => s.setAudio);
+	const audioOffset = useViewerStore((s) => s.audio.offsetMs);
 	const loadSettings = useViewerStore((s) => s.loadSettings);
 	const saveStablePath = useViewerStore((s) => s.saveStablePath);
 
@@ -81,6 +84,17 @@ export function SettingsDialog({
 		// leaving the input blank with the store silently unchanged
 		if (value === null) setDraftLength(displayLength);
 		else setOverlay("displayLength", value);
+	}
+
+	// the audio offset's draft, hoisted for exactly the reason display length's
+	// is: a half-typed "-1" of "-120" must survive a category switch, and it
+	// must not be clamped to the -500 floor between keystrokes
+	const [draftOffset, setDraftOffset] = useState<number | null>(audioOffset);
+	useEffect(() => setDraftOffset(audioOffset), [audioOffset]);
+
+	function commitOffset(value: number | null) {
+		if (value === null) setDraftOffset(audioOffset);
+		else setAudio("offsetMs", value);
 	}
 
 	useEffect(() => {
@@ -142,6 +156,13 @@ export function SettingsDialog({
 						</TabsContent>
 						<TabsContent value="gameplay">
 							<GameplayCategory />
+						</TabsContent>
+						<TabsContent value="audio">
+							<AudioCategory
+								draftOffset={draftOffset}
+								onDraftOffsetChange={setDraftOffset}
+								onCommitOffset={commitOffset}
+							/>
 						</TabsContent>
 						<TabsContent value="analysis">
 							<AnalysisCategory

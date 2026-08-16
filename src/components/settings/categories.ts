@@ -1,34 +1,44 @@
-// the settings dialog's five categories: the ordered registry the nav column
+// the settings dialog's six categories: the ordered registry the nav column
 // renders, the pref-key coverage map, and the open-target resolution every
 // caller of the dialog goes through. plain data and one pure function, the
 // same split TabRail makes with PANEL_TABS/railTabClick, so the seam is
 // covered headlessly while the panels around it stay untested jsx
 
-import { Activity, Gamepad2, Keyboard, PencilRuler, Settings2, type LucideIcon } from "lucide-react";
-import type { EditingSettings, EffectSettings, OverlaySettings, TimelineSettings } from "@/state/store";
+import { Activity, Gamepad2, Keyboard, PencilRuler, Settings2, Volume2, type LucideIcon } from "lucide-react";
+import type {
+	AudioSettings,
+	EditingSettings,
+	EffectSettings,
+	GameplaySettings,
+	OverlaySettings,
+	TimelineSettings
+} from "@/state/store";
 
-export type SettingsCategory = "general" | "gameplay" | "analysis" | "editing" | "keybinds";
+export type SettingsCategory = "general" | "gameplay" | "audio" | "analysis" | "editing" | "keybinds";
 
 /** the nav column's order, mirroring PANEL_TABS in TabRail.tsx. `general`
  * must stay first: resolveOpenCategory falls back to the first entry, and the
  * start screen's settings button exists for the install path it holds. the
- * rest read as a stack -- what the replay looks like, what is drawn on top of
- * it, how you change it, and last the keyboard that reaches all of it. the
- * icon sits beside the label rather than replacing it (the inverse of the
- * rail), so it is decorative and rendered aria-hidden */
+ * rest read as a stack -- what the replay looks like, what it sounds like,
+ * what is drawn on top of it, how you change it, and last the keyboard that
+ * reaches all of it. the icon sits beside the label rather than replacing it
+ * (the inverse of the rail), so it is decorative and rendered aria-hidden */
 export const SETTINGS_CATEGORIES: { id: SettingsCategory; label: string; Icon: LucideIcon }[] = [
 	{ id: "general", label: "general", Icon: Settings2 },
 	{ id: "gameplay", label: "gameplay", Icon: Gamepad2 },
+	{ id: "audio", label: "audio", Icon: Volume2 },
 	{ id: "analysis", label: "analysis", Icon: Activity },
 	{ id: "editing", label: "editing", Icon: PencilRuler },
 	{ id: "keybinds", label: "keybinds", Icon: Keyboard }
 ];
 
 /** a viewer pref, namespaced by the group that holds it. the namespace is not
- * decoration: the four groups are free to reuse a name (`effects.enabled` is
+ * decoration: the groups are free to reuse a name (`effects.enabled` is
  * already a key another group could plausibly want), and a bare key map would
  * quietly collapse the two into one entry that reads as covered */
 export type SettingsPrefKey =
+	| `audio.${keyof AudioSettings}`
+	| `gameplay.${keyof GameplaySettings}`
 	| `overlays.${keyof OverlaySettings}`
 	| `timeline.${keyof TimelineSettings}`
 	| `effects.${keyof EffectSettings}`
@@ -39,15 +49,33 @@ export type SettingsPrefKey =
  * and into settings.rs but never rendered, which is invisible otherwise.
  *
  * `general` covers no key on purpose: the install path is a bespoke control,
- * not a per-key setter. so are `Settings.osuStablePath` and `Settings.recents`,
- * and `Settings.volume` is a real persisted pref that Transport.tsx renders
- * rather than this dialog -- all three are outside this map by design, and a
- * naive "every Settings key has a category" assertion would fail on day one.
- * `keybinds` covers none for the same reason: `Settings.keybinds` is one
- * sparse map behind a bespoke capture control, not a set of per-key setters.
- * the four groups here are exactly the ones that grow by "add a toggle" */
+ * not a per-key setter. so are `Settings.osuStablePath` and `Settings.recents`
+ * -- both outside this map by design, and a naive "every Settings key has a
+ * category" assertion would fail on day one. `keybinds` covers none for the
+ * same reason: `Settings.keybinds` is one sparse map behind a bespoke capture
+ * control, not a set of per-key setters.
+ *
+ * `Settings.volume` -- the master -- is deliberately absent too, but for a
+ * different reason than it used to be. it is not "rendered elsewhere instead":
+ * it is rendered in BOTH places, on the transport where it is one drag away
+ * and in the audio category beside the channels it multiplies, which is what
+ * lazer does (VolumeSettings.cs). a key in this map means "exactly one
+ * category owns it", and the master owns none */
 export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]> = {
 	general: [],
+	// the two `gameplay.*` keys are not a typo: the audio category renders
+	// them, and the prefs group they persist under was left alone so no
+	// settings file needs migrating (AudioCategory.tsx says why they moved).
+	// this map is keyed on where a control APPEARS, which is exactly the
+	// question a prefix cannot answer
+	audio: [
+		"audio.musicVolume",
+		"audio.hitsoundVolume",
+		"audio.offsetMs",
+		"audio.ignoreBeatmapHitsounds",
+		"gameplay.positionalHitsoundLevel",
+		"gameplay.alwaysPlayFirstComboBreak"
+	],
 	gameplay: [
 		"effects.backgroundDim",
 		"effects.enabled",

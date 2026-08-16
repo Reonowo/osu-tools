@@ -1,6 +1,12 @@
-// gameplay: what the replay itself looks like -- the background dim, then the
-// effects master and the five rows it gates. skinning lands here when it does
-// (TODO.md)
+// gameplay: what the replay LOOKS like -- the background dim, the effects
+// master and the five rows it gates. nothing here makes a sound.
+//
+// the two hit-sample behaviours that used to sit here (the positional level
+// and always-play-first-combo-break) now live in the audio category, which
+// owns everything audible; AudioCategory.tsx's header carries the reasoning,
+// and the short version is that lazer's own split is device-vs-behaviour
+// rather than audio-vs-not, and does not survive a viewer with no gameplay to
+// configure. skinning lands here when it does (TODO.md)
 
 import { SectionLabel } from "@/components/panels/SectionLabel";
 import { ToggleRow } from "@/components/settings/ToggleRow";
