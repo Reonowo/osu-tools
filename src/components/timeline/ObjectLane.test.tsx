@@ -20,6 +20,7 @@ const circle: RenderObject = {
 	indexInCombo: 0,
 	preempt: 600,
 	fadeIn: 400,
+	samples: [],
 	kind: { type: "circle" }
 };
 

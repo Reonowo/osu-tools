@@ -23,6 +23,7 @@ function circleAt(startTime: number): RenderObject {
 		indexInCombo: 0,
 		preempt: 600,
 		fadeIn: 400,
+		samples: [],
 		kind: { type: "circle" }
 	};
 }
@@ -61,7 +62,8 @@ describe("aimTime", () => {
 						position: [0, 0],
 						pathProgress: 0,
 						preempt: 600,
-						fadeIn: 400
+						fadeIn: 400,
+						samples: []
 					}
 				]
 			}
@@ -70,7 +72,7 @@ describe("aimTime", () => {
 		const spinner: RenderObject = {
 			...circleAt(1000),
 			endTime: 2000,
-			kind: { type: "spinner", duration: 1000, spinsRequired: 3, maxBonusSpins: 1 }
+			kind: { type: "spinner", duration: 1000, spinsRequired: 3, maxBonusSpins: 1, bonusSamples: [] }
 		};
 		expect(aimTime(spinner)).toBeNull();
 	});
@@ -116,7 +118,8 @@ describe("hitErrors", () => {
 						position: [0, 0],
 						pathProgress: 0,
 						preempt: 600,
-						fadeIn: 400
+						fadeIn: 400,
+						samples: []
 					}
 				]
 			}

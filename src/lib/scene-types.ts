@@ -12,6 +12,12 @@ export interface LoadedScene {
 	simulation: SimulationDto;
 	audioPath: string | null;
 	backgroundPath: string | null;
+	/// the beatmap's OWN hit-sample files, keyed by the lookup name the chain
+	/// asks for (a lowercased stem, or a full file name for an explicit
+	/// `hitSample`). empty for a map that ships none, which is most of them --
+	/// the bundled default set answers those. values are absolute paths for
+	/// tauri's convertFileSrc
+	sampleFiles: Record<string, string>;
 	warnings: LoadedSceneWarning[];
 	/// shipped only for pre-lazer authoritative scenes; always describes the
 	/// loaded file, never in-session edits
@@ -157,7 +163,12 @@ export type JudgementKindDto =
 	| { type: "circle"; grade: Grade }
 	| { type: "sliderHead"; hit: boolean }
 	| { type: "sliderTick"; hit: boolean }
-	| { type: "sliderRepeat"; hit: boolean }
+	/** `repeatIndex` is 0-based: the repeat that ends span `repeatIndex`, which
+	 * is lazer's node `repeatIndex + 1`. it rides on the event so a consumer
+	 * picking this repeat's samples never has to recover the node by counting
+	 * repeat events -- a positional join goes silently wrong the first time
+	 * emission order changes */
+	| { type: "sliderRepeat"; hit: boolean; repeatIndex: number }
 	| { type: "sliderTail"; hit: boolean }
 	| { type: "sliderAggregate"; grade: Grade }
 	| { type: "spinnerSpin" }
@@ -206,13 +217,51 @@ export interface RenderObject {
 	indexInCombo: number;
 	preempt: number;
 	fadeIn: number;
+	/// what this object sounds when its own judgement lands. a circle and a
+	/// spinner sound these; a slider is always empty, because a slider never
+	/// sounds as a unit -- its head, repeats, tail and ticks each sound their
+	/// own (see RenderNested.samples)
+	samples: SampleLookup[];
 	kind: RenderKind;
+}
+
+/** one skin-independent sample lookup: lazer's `HitSampleInfo` after its sample
+ * control point has been applied, which is exactly what `ISkin.GetSample` is
+ * handed. deliberately carries no path, no extension and no source -- resolving
+ * those is the lookup chain's job, and keeping that split is what makes the
+ * skin substitutable */
+export interface SampleLookup {
+	bank: "normal" | "soft" | "drum" | "none";
+	name: "hitnormal" | "hitwhistle" | "hitfinish" | "hitclap" | "slidertick" | "spinnerbonus";
+	/** the custom sample bank index when >= 2; the suffixed lookup name is
+	 * tried first and falls back to the unsuffixed one */
+	suffix: number | null;
+	/** 0-100. the per-sample floor (`max(volume, 5)`) is a playback rule
+	 * applied where playback happens, not here */
+	volume: number;
+	/** a `hitnormal` that plays UNDER this object's additions rather than
+	 * instead of them */
+	layered: boolean;
+	/** set when the object named an explicit `hitSample` file. lazer models
+	 * that as a normal-bank `hitnormal` that prepends the filename and its
+	 * extension-stripped form to its lookup names, which is why `bank` and
+	 * `name` still read as that pair */
+	filename: string | null;
 }
 
 export type RenderKind =
 	| { type: "circle" }
 	| RenderSlider
-	| { type: "spinner"; duration: number; spinsRequired: number; maxBonusSpins: number };
+	| {
+			type: "spinner";
+			duration: number;
+			spinsRequired: number;
+			maxBonusSpins: number;
+			/** what a BONUS spin sounds: the spinner's own sample under the
+			 * `spinnerbonus` name. an ordinary spin carries no samples at all
+			 * and is silent, as it is in lazer */
+			bonusSamples: SampleLookup[];
+	  };
 
 export interface RenderSlider {
 	type: "slider";
@@ -240,6 +289,10 @@ export interface RenderNested {
 	pathProgress: number;
 	preempt: number;
 	fadeIn: number;
+	/// what this piece sounds when its own judgement lands: the head takes
+	/// node 0, a repeat takes node `spanIndex + 1`, the tail takes the last
+	/// node, and a tick takes the slider's own sample renamed to `slidertick`
+	samples: SampleLookup[];
 }
 
 export type LoadedSceneWarning =
@@ -357,11 +410,48 @@ export interface KeybindBinding {
  * action or a binding is */
 export type KeybindOverrides = Record<string, readonly KeybindBinding[]>;
 
+/** mirrors settings.rs AudioPrefs: everything the audio category holds except
+ * the master, which keeps its own top-level `Settings.volume` key so no
+ * existing settings file needs migrating. these are grouped rather than
+ * flattened because they cross the ipc boundary as one argument -- a row of
+ * loose numbers there is a silent-swap waiting to happen */
+export interface AudioSettings {
+	/** linear amplitude percent 0-100; the effective gain is master x this */
+	musicVolume: number;
+	hitsoundVolume: number;
+	/** ms, -500..500. positive moves the playfield, judgements and hit samples
+	 * ahead of the music -- equivalently, delays the music against everything
+	 * else. a plain number rather than a bounded type: json can keep no such
+	 * promise, so clampAudioOffset and sanitize() are the validation */
+	offsetMs: number;
+	/** lazer's `BeatmapHitsounds`, inverted so the stored default is false.
+	 * drops the beatmap's own sample FILES from the lookup chain; the map's
+	 * design -- which bank each object draws from, which additions fire,
+	 * per-object volume -- is object data and keeps applying */
+	ignoreBeatmapHitsounds: boolean;
+}
+
+/** mirrors settings.rs GameplayPrefs: the gameplay preferences that are not
+ * render effects. they sit beside the effects rather than with the volumes
+ * because that is lazer's own split -- `Sections/Gameplay/AudioSettings` holds
+ * these two while `Sections/Audio` holds the levels and the offset */
+export interface GameplaySettings {
+	/** 0-1; osuconfigmanager.cs:144 PositionalHitsoundsLevel, default 0.2 */
+	positionalHitsoundLevel: number;
+	/** comboeffects.cs:59 -- whether the play's FIRST combo break sounds even
+	 * when the combo lost was small. lazer defaults it on */
+	alwaysPlayFirstComboBreak: boolean;
+}
+
 /** mirrors settings.rs Settings */
 export interface Settings {
 	osuStablePath: string | null;
-	/** linear amplitude percent, 0-100 */
+	/** the MASTER volume, linear amplitude percent 0-100. its own top-level key
+	 * since before the other channels existed, and left there so a settings
+	 * file written by an older build keeps its level */
 	volume: number;
+	audio: AudioSettings;
+	gameplay: GameplaySettings;
 	overlays: OverlaySettings;
 	recents: RecentReplay[];
 	editing: EditingSettings;

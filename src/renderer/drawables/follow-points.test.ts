@@ -19,6 +19,7 @@ function circle(startTime: number, x: number, y: number, comboIndex: number): Re
 		indexInCombo: 0,
 		preempt: 600,
 		fadeIn: 400,
+		samples: [],
 		kind: { type: "circle" }
 	};
 }
@@ -42,7 +43,7 @@ describe("follow point generation (followpointconnection.cs)", () => {
 		expect(generateFollowPoints([circle(1000, 0, 0, 1), circle(2000, 300, 0, 2)], 0.5)).toHaveLength(0);
 		const spinner: RenderObject = {
 			...circle(1000, 0, 0, 1),
-			kind: { type: "spinner", duration: 500, spinsRequired: 1, maxBonusSpins: 1 }
+			kind: { type: "spinner", duration: 500, spinsRequired: 1, maxBonusSpins: 1, bonusSamples: [] }
 		};
 		expect(generateFollowPoints([spinner, circle(2000, 300, 0, 1)], 0.5)).toHaveLength(0);
 	});

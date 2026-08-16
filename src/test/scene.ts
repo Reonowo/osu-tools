@@ -58,6 +58,7 @@ export function testScene(overrides: Partial<LoadedScene> = {}): LoadedScene {
 					indexInCombo: 0,
 					preempt: 600,
 					fadeIn: 400,
+					samples: [],
 					kind: { type: "circle" }
 				}
 			]
@@ -77,6 +78,7 @@ export function testScene(overrides: Partial<LoadedScene> = {}): LoadedScene {
 		},
 		audioPath: null,
 		backgroundPath: null,
+		sampleFiles: {},
 		warnings: [],
 		integrity: null,
 		incompleteness: null,

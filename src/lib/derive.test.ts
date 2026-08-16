@@ -95,12 +95,13 @@ function circle(startTime: number): RenderObject {
 		indexInCombo: 0,
 		preempt: 600,
 		fadeIn: 400,
+		samples: [],
 		kind: { type: "circle" }
 	};
 }
 
 function nested(kind: RenderNested["kind"], time: number): RenderNested {
-	return { kind, spanIndex: 0, time, position: [0, 0], pathProgress: 0, preempt: 600, fadeIn: 400 };
+	return { kind, spanIndex: 0, time, position: [0, 0], pathProgress: 0, preempt: 600, fadeIn: 400, samples: [] };
 }
 
 function slider(startTime: number, endTime: number, nestedParts: RenderNested[]): RenderObject {
@@ -128,7 +129,7 @@ function spinner(startTime: number, endTime: number): RenderObject {
 	return {
 		...circle(startTime),
 		endTime,
-		kind: { type: "spinner", duration: endTime - startTime, spinsRequired: 3, maxBonusSpins: 1 }
+		kind: { type: "spinner", duration: endTime - startTime, spinsRequired: 3, maxBonusSpins: 1, bonusSamples: [] }
 	};
 }
 

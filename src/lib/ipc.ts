@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+	AudioSettings,
 	EditDelta,
 	EditingSettings,
 	EditOp,
 	EffectSettings,
 	ExportResult,
+	GameplaySettings,
 	IpcError,
 	KeybindOverrides,
 	LoadedScene,
@@ -69,13 +71,24 @@ export function invokeSetOsuStablePath(path: string | null): Promise<Settings> {
 
 export function invokeSetViewerPrefs(
 	volume: number,
+	audio: AudioSettings,
+	gameplay: GameplaySettings,
 	overlays: OverlaySettings,
 	editing: EditingSettings,
 	effects: EffectSettings,
 	timeline: TimelineSettings,
 	keybinds: KeybindOverrides
 ): Promise<Settings> {
-	return invoke<Settings>("set_viewer_prefs", { volume, overlays, editing, effects, timeline, keybinds });
+	return invoke<Settings>("set_viewer_prefs", {
+		volume,
+		audio,
+		gameplay,
+		overlays,
+		editing,
+		effects,
+		timeline,
+		keybinds
+	});
 }
 
 export function invokeClearRecents(): Promise<Settings> {
