@@ -48,6 +48,8 @@ export type KeybindAction =
 	| "frameStepBack"
 	| "frameStepForward"
 	| "restart"
+	| "volumeUp"
+	| "volumeDown"
 	| "viewportReset"
 	| "selectTool"
 	| "lassoTool"
@@ -175,6 +177,27 @@ export const KEYBINDS = {
 		label: "jump to the start",
 		locked: null,
 		defaults: one("Home", "Home")
+	},
+	// alt+arrow, matching lazer's own IncreaseVolume/DecreaseVolume
+	// (GlobalAction.cs). the master only: three more pairs for the channels
+	// would be keys spent on a balance that is set once
+	volumeUp: {
+		action: "volumeUp",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "master volume up",
+		locked: null,
+		defaults: one("Alt+ArrowUp", "ArrowUp")
+	},
+	volumeDown: {
+		action: "volumeDown",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "master volume down",
+		locked: null,
+		defaults: one("Alt+ArrowDown", "ArrowDown")
 	},
 	// written as Control rather than Mod: this chord has always demanded
 	// e.ctrlKey on every platform, and the fold normalises it per platform
