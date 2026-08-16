@@ -1,13 +1,16 @@
 // the signed beatmap-time clock (spec, frontend clock): rAF-driven internal
 // time below zero and without audio, drift-corrected audio master otherwise.
-// pure logic over an injected now() so bun tests can script it
+// pure logic over an injected now() so bun tests can script it.
+//
+// the clock owns TIME and nothing else. level belongs to the audio graph
+// (playback/audio-graph.ts), where the music element is one input to a gain
+// tree the hit samples share -- a clock that also set element volume would be
+// the second place deciding it
 
 export interface ClockAudio {
 	readonly currentTimeMs: number;
 	readonly durationMs: number | null;
 	setRate(rate: number): void;
-	/** linear amplitude, 0-1 */
-	setVolume(volume: number): void;
 	play(): void;
 	pause(): void;
 	seekMs(ms: number): void;
@@ -24,11 +27,6 @@ export function htmlAudioAdapter(el: HTMLAudioElement): ClockAudio {
 		},
 		setRate: (rate) => {
 			el.playbackRate = rate;
-		},
-		// HTMLMediaElement.volume throws on anything outside 0-1, so clamp at the
-		// boundary rather than trusting every caller
-		setVolume: (volume) => {
-			el.volume = Math.min(Math.max(volume, 0), 1);
 		},
 		play: () => {
 			void el.play().catch(() => {});
@@ -58,8 +56,8 @@ export class PlaybackClock {
 	private seeks = 0;
 	private isPlaying = false;
 	private currentRate = 1;
-	/** linear amplitude 0-1, held here so it survives audio swaps */
-	private currentVolume = 1;
+	/** the user's global audio offset, ms. see setOffset */
+	private offsetMs = 0;
 
 	constructor(private readonly now: () => number = () => performance.now()) {
 		this.lastNow = this.now();
@@ -77,8 +75,8 @@ export class PlaybackClock {
 	get rate() {
 		return this.currentRate;
 	}
-	get volume() {
-		return this.currentVolume;
+	get offset() {
+		return this.offsetMs;
 	}
 	/** how many seeks this clock has served. a consumer that time-stamped a
 	 * decision can compare times to notice playback drifting underneath it, but
@@ -92,10 +90,10 @@ export class PlaybackClock {
 	attachAudio(audio: ClockAudio | null): void {
 		this.audio?.pause();
 		this.audio = audio;
-		// re-apply both persistent settings: loading a second replay swaps in a
-		// fresh element that starts at full volume and 1x
+		// re-apply the persistent setting: loading a second replay swaps in a
+		// fresh element that starts at 1x. level is the audio graph's, and its
+		// gain nodes outlive every element, so nothing to re-apply there
 		audio?.setRate(this.currentRate);
-		audio?.setVolume(this.currentVolume);
 		this.mode = "internal";
 	}
 
@@ -131,19 +129,64 @@ export class PlaybackClock {
 		return this.time;
 	}
 
+	/**
+	 * the user's global audio offset, in ms. positive moves the playfield, the
+	 * judgements and the hit samples AHEAD of the music -- equivalently, delays
+	 * the music against everything else.
+	 *
+	 * ported from lazer's clock stack rather than invented: `FramedBeatmapClock`
+	 * wraps the interpolated track in an `OffsetCorrectionClock`, so gameplay
+	 * time is the track's time PLUS the offset, and `Seek(position)` puts the
+	 * source at `position - TotalAppliedOffset` -- which is why every seek here
+	 * is still in raw beatmap time and an offset never leaks into a seek target.
+	 *
+	 * two of lazer's offsets are deliberately NOT ported: the per-beatmap offset
+	 * is a separate setting with its own storage, and the Windows platform
+	 * offset (`WINDOWS_BASE_AUDIO_OFFSET`) is a BASS compensation with no
+	 * meaning outside BASS
+	 */
+	setOffset(offsetMs: number): void {
+		if (!Number.isFinite(offsetMs) || offsetMs === this.offsetMs) return;
+		this.offsetMs = offsetMs;
+		// the mapping between beatmap time and track time just moved, so the
+		// track has to move under a held beatmap time rather than the beatmap
+		// time moving under the user
+		this.resyncAudioPosition();
+	}
+
+	/** offsetcorrectionclock.cs:42 -- `base.Offset = Offset * Rate`. the same
+	 * REAL-WORLD shift has to land at every playback rate, which is the detail a
+	 * naive implementation loses at 0.5x */
+	private appliedOffset(): number {
+		return this.offsetMs * this.currentRate;
+	}
+
+	/** beatmap time -> the track position that carries it */
+	private sourceTimeFor(beatmapTime: number): number {
+		return beatmapTime - this.appliedOffset();
+	}
+
+	/** the track's own position, read back as beatmap time */
+	private audioTime(): number {
+		return this.audio!.currentTimeMs + this.appliedOffset();
+	}
+
+	/** put the track back under the current beatmap time. called whenever the
+	 * mapping between the two changes (offset, rate) rather than the time */
+	private resyncAudioPosition(): void {
+		if (this.audio === null) return;
+		if (this.isPlaying) this.enterModeFor(this.time);
+		else if (this.audioCovers(this.time)) this.audio.seekMs(this.sourceTimeFor(this.time));
+	}
+
 	setRate(rate: number): void {
 		// rebase the audio interpolation so the rate change applies from now
 		this.rebaseFromRaw();
 		this.currentRate = rate;
 		this.audio?.setRate(rate);
-	}
-
-	/** linear amplitude 0-1. osu-framework applies its aggregate volume
-	 * straight to the bass channel volume (TrackBass.cs:371), so linear is the
-	 * osu!-matching curve. remembered across attachAudio */
-	setVolume(volume: number): void {
-		this.currentVolume = Math.min(Math.max(volume, 0), 1);
-		this.audio?.setVolume(this.currentVolume);
+		// the applied offset is rate-scaled, so a rate change moves the
+		// beatmap-to-track mapping even though neither time moved
+		if (this.offsetMs !== 0) this.resyncAudioPosition();
 	}
 
 	play(): void {
@@ -168,7 +211,7 @@ export class PlaybackClock {
 		if (this.isPlaying) this.enterModeFor(this.time);
 		else {
 			// keep a paused audio element in sync so a later play resumes there
-			if (this.audioCovers(this.time)) this.audio!.seekMs(this.time);
+			if (this.audioCovers(this.time)) this.audio!.seekMs(this.sourceTimeFor(this.time));
 			this.audio?.pause();
 			this.mode = "internal";
 		}
@@ -187,7 +230,7 @@ export class PlaybackClock {
 			this.lastNow = nowMs;
 			// hand off to audio at the playable boundary
 			if (this.audioCovers(next)) {
-				this.audio!.seekMs(next);
+				this.audio!.seekMs(this.sourceTimeFor(next));
 				this.audio!.play();
 				this.mode = "audio";
 				this.rawBase = next;
@@ -204,12 +247,14 @@ export class PlaybackClock {
 				this.time = next;
 			}
 		} else {
-			const raw = this.audio!.currentTimeMs;
+			const raw = this.audioTime();
 			const duration = this.audio!.durationMs;
-			if (duration !== null && raw >= duration) {
+			// the duration is a TRACK length, so the comparison happens in track
+			// time -- the offset shifts which beatmap time the track's end is at
+			if (duration !== null && this.sourceTimeFor(raw) >= duration) {
 				// audio ran out; keep going internally from where the audio stopped
 				this.mode = "internal";
-				this.time = Math.max(this.time, duration);
+				this.time = Math.max(this.time, duration + this.appliedOffset());
 				this.lastNow = nowMs;
 			} else {
 				if (raw !== this.lastRaw) {
@@ -233,15 +278,19 @@ export class PlaybackClock {
 		return this.time;
 	}
 
+	/** `t` is a beatmap time; the track's own range is what decides, so the
+	 * question is asked in track time */
 	private audioCovers(t: number): boolean {
-		if (this.audio === null || t < 0) return false;
+		if (this.audio === null) return false;
+		const source = this.sourceTimeFor(t);
+		if (source < 0) return false;
 		const duration = this.audio.durationMs;
-		return duration === null || t < duration;
+		return duration === null || source < duration;
 	}
 
 	private enterModeFor(t: number): void {
 		if (this.audioCovers(t)) {
-			this.audio!.seekMs(t);
+			this.audio!.seekMs(this.sourceTimeFor(t));
 			this.audio!.play();
 			this.mode = "audio";
 			this.rawBase = t;

@@ -29,7 +29,6 @@ function fakeAudio(durationMs = 10_000, sampleInterval = 250) {
 		readonly playingNow: boolean;
 		readonly seeks: number[];
 		readonly rates: number[];
-		readonly volumes: number[];
 		pauseCalls: number;
 	} = {
 		get currentTimeMs() {
@@ -39,9 +38,6 @@ function fakeAudio(durationMs = 10_000, sampleInterval = 250) {
 		setRate: (r) => {
 			rate = r;
 			audio.rates.push(r);
-		},
-		setVolume: (v) => {
-			audio.volumes.push(v);
 		},
 		play: () => {
 			playing = true;
@@ -68,7 +64,6 @@ function fakeAudio(durationMs = 10_000, sampleInterval = 250) {
 		playingNow: false as boolean,
 		seeks: [] as number[],
 		rates: [] as number[],
-		volumes: [] as number[],
 		pauseCalls: 0
 	};
 	Object.defineProperty(audio, "playingNow", { get: () => playing });
@@ -89,7 +84,6 @@ function manualAudio(durationMs: number | null = 10_000) {
 		},
 		durationMs,
 		setRate: () => {},
-		setVolume: () => {},
 		play: () => {
 			playing = true;
 		},
@@ -579,62 +573,104 @@ describe("play/pause idempotency", () => {
 	});
 });
 
-describe("volume", () => {
-	test("setVolume forwards to the audio and clamps to 0-1", () => {
+describe("audio offset", () => {
+	// framedbeatmapclock.cs + offsetcorrectionclock.cs: gameplay time is the
+	// track's time PLUS the offset, so a positive offset delays the music
+	// against the playfield, judgements and hit samples alike -- all three read
+	// this one clock, which is exactly why an offset can never desync a hit
+	// sample from the circle it belongs to
+
+	test("seeking to a timestamp lands on that timestamp at any offset", () => {
+		// framedbeatmapclock.cs:214 -- Seek(position) puts the SOURCE at
+		// position - TotalAppliedOffset, so the seek target is raw beatmap time
+		// and the offset never leaks into it
 		const audio = fakeAudio();
 		const clock = new PlaybackClock(fakeNow().now);
 		clock.attachAudio(audio);
-		const afterAttach = audio.volumes.length;
+		clock.setBounds(0, 9000);
 
-		clock.setVolume(0.5);
-		expect(clock.volume).toBe(0.5);
-		expect(audio.volumes[afterAttach]).toBe(0.5);
-
-		clock.setVolume(1.7);
-		expect(clock.volume).toBe(1);
-		clock.setVolume(-0.2);
-		expect(clock.volume).toBe(0);
-		expect(audio.volumes.slice(afterAttach)).toEqual([0.5, 1, 0]);
+		for (const offset of [0, 120, -85]) {
+			clock.setOffset(offset);
+			clock.seekTo(4000);
+			expect(clock.currentTime()).toBe(4000);
+			// the track sits `offset` behind the beatmap time it is carrying
+			expect(audio.seeks.at(-1)).toBeCloseTo(4000 - offset, 6);
+		}
 	});
 
-	test("attachAudio re-applies the current volume to the new element", () => {
-		// loading a second replay swaps in a fresh <audio>, which starts at full
-		// volume; the level the user picked has to follow it across
-		const clock = new PlaybackClock(fakeNow().now);
-		clock.attachAudio(fakeAudio());
-		clock.setVolume(0.25);
-
-		const next = fakeAudio();
-		clock.attachAudio(next);
-		expect(next.volumes).toEqual([0.25]);
-		expect(clock.volume).toBe(0.25);
-	});
-
-	test("a volume set with no audio attached applies on the next attach", () => {
-		// hydration can finish before PlayerView has mounted an element
-		const clock = new PlaybackClock(fakeNow().now);
-		clock.setVolume(0.4);
-		expect(clock.volume).toBe(0.4);
-
+	test("the applied offset is rate-adjusted, so the real-world shift is the same at every rate", () => {
+		// offsetcorrectionclock.cs:42 -- base.Offset = Offset * Rate. this is the
+		// detail a naive implementation loses at 0.5x
 		const audio = fakeAudio();
+		const clock = new PlaybackClock(fakeNow().now);
 		clock.attachAudio(audio);
-		expect(audio.volumes).toEqual([0.4]);
+		clock.setBounds(0, 9000);
+		clock.setOffset(100);
+
+		clock.setRate(1);
+		clock.seekTo(4000);
+		expect(audio.seeks.at(-1)).toBeCloseTo(3900, 6);
+
+		clock.setRate(2);
+		clock.seekTo(4000);
+		expect(audio.seeks.at(-1)).toBeCloseTo(3800, 6);
+
+		clock.setRate(0.5);
+		clock.seekTo(4000);
+		expect(audio.seeks.at(-1)).toBeCloseTo(3950, 6);
 	});
 
-	test("volume defaults to full and survives rate changes and seeks", () => {
+	test("changing the offset moves the track under a held beatmap time", () => {
+		// the user is looking at one instant; nudging the offset must move the
+		// MUSIC against it, not jump the playhead out from under them
+		const audio = fakeAudio();
+		const clock = new PlaybackClock(fakeNow().now);
+		clock.attachAudio(audio);
+		clock.setBounds(0, 9000);
+		clock.seekTo(4000);
+
+		clock.setOffset(60);
+		expect(clock.currentTime()).toBe(4000);
+		expect(audio.seeks.at(-1)).toBeCloseTo(3940, 6);
+	});
+
+	test("a playing clock reads the track back through the same offset", () => {
 		const c = fakeNow();
 		const audio = fakeAudio();
 		const clock = new PlaybackClock(c.now);
-		expect(clock.volume).toBe(1);
 		clock.attachAudio(audio);
-		clock.setBounds(0, 12_000);
-		clock.setVolume(0.6);
-		clock.setRate(1.5);
-		clock.seekTo(3000);
+		clock.setBounds(0, 9000);
+		clock.setOffset(200);
+		clock.seekTo(1000);
 		clock.play();
-		c.advance(16);
-		audio.advance(16);
-		clock.tick();
-		expect(clock.volume).toBe(0.6);
+
+		// the track was seeked to 800 and has run 500ms; the beatmap time it
+		// reports is that plus the offset again, i.e. back to 1500
+		c.advance(500);
+		audio.advance(500);
+		expect(clock.tick()).toBeCloseTo(1500, 6);
+	});
+
+	test("a non-finite offset is ignored rather than poisoning the mapping", () => {
+		const clock = new PlaybackClock(fakeNow().now);
+		clock.setOffset(50);
+		clock.setOffset(Number.NaN);
+		expect(clock.offset).toBe(50);
+	});
+
+	test("the track's own start still bounds where audio can take over", () => {
+		// a positive offset means beatmap time 100 is track time -100, which no
+		// track covers; the clock must stay internal there rather than seeking
+		// an element to a negative position
+		const audio = fakeAudio();
+		const clock = new PlaybackClock(fakeNow().now);
+		clock.attachAudio(audio);
+		clock.setBounds(-1000, 9000);
+		clock.setOffset(300);
+		const before = audio.seeks.length;
+		clock.seekTo(100);
+		expect(audio.seeks.length).toBe(before);
+		clock.seekTo(500);
+		expect(audio.seeks.at(-1)).toBeCloseTo(200, 6);
 	});
 });
