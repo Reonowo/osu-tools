@@ -14,6 +14,13 @@
 //! v6 adds `timeline`: the timeline dock's per-layer visibility toggles.
 //! v7 adds `keybinds`: the frontend's sparse keybind override map, stored
 //! opaquely -- see `KeybindOverrides`.
+//! v8 adds `audio`: the channels under the master volume, plus the audio
+//! offset. `volume` itself stays exactly where it is, because it has always
+//! been the master -- so a v7 file loads with the level the user set and the
+//! new channels at full, which reproduces the behaviour they already had. no
+//! migration.
+//! v9 adds `gameplay`: the two gameplay preferences that are not render
+//! effects (positional hitsound level, always-play-first-combo-break).
 //!
 //! every field is `#[serde(default)]` at the container level, so a v1 file --
 //! or any future file written by an older build -- hydrates the new fields
@@ -45,6 +52,11 @@ pub const GRID_SPACINGS: [u32; 5] = [0, 4, 8, 16, 32];
 /// hardcoded before the control existed
 pub const BACKGROUND_DIM_MAX: u32 = 100;
 pub const BACKGROUND_DIM_DEFAULT: u32 = 70;
+
+/// inclusive bounds for `AudioPrefs::offset_ms`, mirroring lazer's own
+/// AudioOffset setting range (OsuConfigManager.cs:109)
+pub const AUDIO_OFFSET_MIN: f64 = -500.0;
+pub const AUDIO_OFFSET_MAX: f64 = 500.0;
 
 /// how many recently opened replays the start screen keeps
 pub const MAX_RECENTS: usize = 12;
@@ -103,10 +115,18 @@ pub struct Settings {
     /// the directory holding osu!.db; None means auto-detect from the
     /// standard install locations
     pub osu_stable_path: Option<String>,
-    /// linear amplitude percent, 0-100. linear because osu-framework applies
-    /// its aggregate volume straight to the bass channel volume
-    /// (TrackBass.cs:371), so a linear slider is the osu!-matching one
+    /// the MASTER volume: linear amplitude percent, 0-100. linear because
+    /// osu-framework applies its aggregate volume straight to the bass channel
+    /// volume (TrackBass.cs:371), so a linear slider is the osu!-matching one.
+    /// it keeps this top-level key -- which is where it has always been, and
+    /// what it has always behaved as -- so a settings file written before the
+    /// other channels existed loads with its level intact and no migration
     pub volume: u32,
+    /// the channels under the master, plus the rest of the audio category
+    pub audio: AudioPrefs,
+    /// gameplay preferences that are not render effects: how far hit samples
+    /// are panned, and whether the play's first combo break always sounds
+    pub gameplay: GameplayPrefs,
     pub overlays: OverlayPrefs,
     /// most-recent-first, capped at `MAX_RECENTS`
     pub recents: Vec<RecentReplay>,
@@ -125,12 +145,73 @@ impl Default for Settings {
         Settings {
             osu_stable_path: None,
             volume: 100,
+            audio: AudioPrefs::default(),
+            gameplay: GameplayPrefs::default(),
             overlays: OverlayPrefs::default(),
             recents: Vec::new(),
             editing: EditingPrefs::default(),
             effects: EffectPrefs::default(),
             timeline: TimelinePrefs::default(),
             keybinds: KeybindOverrides::new(),
+        }
+    }
+}
+
+/// the audio category's own preferences: the two channels under the master
+/// (`Settings::volume`), which stays where it has always been. effective gain
+/// is master x channel and zero anywhere is the mute, so a fresh install
+/// starts both at full and the master alone governs
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AudioPrefs {
+    /// linear amplitude percent, 0-100, on the same terms as the master
+    pub music_volume: u32,
+    pub hitsound_volume: u32,
+    /// the global audio offset in milliseconds, matching lazer's own setting
+    /// exactly: default 0, range -500..500, step 1
+    /// (OsuConfigManager.cs:109). positive moves the playfield, judgements and
+    /// hit samples ahead of the music
+    pub offset_ms: f64,
+    /// lazer's `BeatmapHitsounds` (beatmapskinprovidingcontainer.cs:26),
+    /// inverted so the stored default is `false`. drops the beatmap's own
+    /// sample FILES from the lookup chain; the map's design -- which bank each
+    /// object draws from, which additions fire, per-object volume -- is object
+    /// data and keeps applying
+    pub ignore_beatmap_hitsounds: bool,
+}
+
+impl Default for AudioPrefs {
+    fn default() -> AudioPrefs {
+        AudioPrefs {
+            music_volume: 100,
+            hitsound_volume: 100,
+            offset_ms: 0.0,
+            ignore_beatmap_hitsounds: false,
+        }
+    }
+}
+
+/// gameplay preferences that are not render effects. they live beside the
+/// effects rather than with the volumes because that is lazer's own split:
+/// `Sections/Gameplay/AudioSettings` holds these two while `Sections/Audio`
+/// holds the levels and the offset
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GameplayPrefs {
+    /// osuconfigmanager.cs:144 PositionalHitsoundsLevel, 0-1, default 0.2 --
+    /// how far a hit sample is panned toward its object's side of the
+    /// playfield
+    pub positional_hitsound_level: f64,
+    /// comboeffects.cs:59 -- whether the play's FIRST combo break sounds even
+    /// when the combo lost was small. lazer defaults it on
+    pub always_play_first_combo_break: bool,
+}
+
+impl Default for GameplayPrefs {
+    fn default() -> GameplayPrefs {
+        GameplayPrefs {
+            positional_hitsound_level: 0.2,
+            always_play_first_combo_break: true,
         }
     }
 }
@@ -288,7 +369,20 @@ impl Settings {
     /// audio element or the renderer would choke on
     pub fn sanitize(&mut self) {
         self.volume = self.volume.min(100);
+        self.audio.music_volume = self.audio.music_volume.min(100);
+        self.audio.hitsound_volume = self.audio.hitsound_volume.min(100);
+        // a hand-edited NaN would poison every time the clock computes, so it
+        // falls back to no offset rather than being clamped into range
+        self.audio.offset_ms = if self.audio.offset_ms.is_finite() {
+            self.audio.offset_ms.clamp(AUDIO_OFFSET_MIN, AUDIO_OFFSET_MAX)
+        } else {
+            0.0
+        };
         self.effects.background_dim = self.effects.background_dim.min(BACKGROUND_DIM_MAX);
+        // a level is a 0-1 ratio; a hand-edited NaN centres everything rather
+        // than poisoning the balance the samples are panned with
+        let level = self.gameplay.positional_hitsound_level;
+        self.gameplay.positional_hitsound_level = if level.is_finite() { level.clamp(0.0, 1.0) } else { 0.0 };
         let length = self.overlays.display_length;
         self.overlays.display_length = if length.is_finite() {
             length.clamp(DISPLAY_LENGTH_MIN, DISPLAY_LENGTH_MAX)
@@ -356,6 +450,16 @@ mod tests {
         Settings {
             osu_stable_path: Some(r"D:\games\osu!".into()),
             volume: 60,
+            audio: AudioPrefs {
+                music_volume: 80,
+                hitsound_volume: 35,
+                offset_ms: -12.0,
+                ignore_beatmap_hitsounds: true,
+            },
+            gameplay: GameplayPrefs {
+                positional_hitsound_level: 0.5,
+                always_play_first_combo_break: false,
+            },
             overlays: OverlayPrefs {
                 cursor_path: true,
                 click_markers: true,
@@ -481,6 +585,13 @@ mod tests {
             json!({
                 "osuStablePath": r"D:\games\osu!",
                 "volume": 60,
+                "audio": {
+                    "musicVolume": 80,
+                    "hitsoundVolume": 35,
+                    "offsetMs": -12.0,
+                    "ignoreBeatmapHitsounds": true,
+                },
+                "gameplay": { "positionalHitsoundLevel": 0.5, "alwaysPlayFirstComboBreak": false },
                 "overlays": {
                     "cursorPath": true,
                     "clickMarkers": true,
@@ -517,6 +628,13 @@ mod tests {
             json!({
                 "osuStablePath": null,
                 "volume": 100,
+                "audio": {
+                    "musicVolume": 100,
+                    "hitsoundVolume": 100,
+                    "offsetMs": 0.0,
+                    "ignoreBeatmapHitsounds": false,
+                },
+                "gameplay": { "positionalHitsoundLevel": 0.2, "alwaysPlayFirstComboBreak": true },
                 "overlays": {
                     "cursorPath": false,
                     "clickMarkers": false,
@@ -649,6 +767,55 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
         assert_eq!(load_settings(dir.path()).recents, Vec::new());
+    }
+
+    #[test]
+    fn a_file_holding_only_the_old_volume_key_keeps_its_level_and_defaults_the_channels() {
+        // the whole no-migration claim in one test: `volume` has always been
+        // the master, so a settings file written before the channels existed
+        // must load with the user's level untouched and the two new channels
+        // at full -- which reproduces exactly the behaviour they had
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), br#"{"volume":40}"#).unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.volume, 40);
+        assert_eq!(loaded.audio, AudioPrefs::default());
+    }
+
+    #[test]
+    fn hand_edited_channel_volumes_are_clamped_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"audio":{"musicVolume":900,"hitsoundVolume":101}}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.audio.music_volume, 100);
+        assert_eq!(loaded.audio.hitsound_volume, 100);
+    }
+
+    #[test]
+    fn a_hand_edited_audio_offset_is_clamped_and_a_non_finite_one_falls_back_to_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        for (written, expected) in [(r#"9000"#, AUDIO_OFFSET_MAX), (r#"-9000"#, AUDIO_OFFSET_MIN)] {
+            std::fs::write(
+                dir.path().join(SETTINGS_FILE),
+                format!(r#"{{"audio":{{"offsetMs":{written}}}}}"#).as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(load_settings(dir.path()).audio.offset_ms, expected);
+        }
+
+        // a NaN would poison every time the clock computes from it, so unlike
+        // the volumes it falls back to no offset rather than to a bound --
+        // neither bound is a neutral value (same rule as display length)
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"audio":{"offsetMs":null}}"#,
+        )
+        .unwrap();
+        assert_eq!(load_settings(dir.path()).audio.offset_ms, 0.0);
     }
 
     #[test]
