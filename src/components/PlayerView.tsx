@@ -3,12 +3,17 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { gesturePreview } from "@/editor/preview";
 import { isFullFrames, remapIndex } from "@/editor/splice";
 import { audioExtendedBounds } from "@/lib/timeline";
+import { audioGraph } from "@/playback/audio-graph";
 import { htmlAudioAdapter } from "@/playback/clock";
+import { buildHitsoundPlan } from "@/playback/hitsound-plan";
+import { bundledSampleUrlSet, hitsoundScheduler, sampleStore, setBeatmapSampleSource } from "@/playback/hitsounds";
+import { beatmapSampleSource, resolveSample, sampleSources } from "@/playback/sample-sources";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
+import type { LoadedScene } from "@/lib/scene-types";
 import { GameplayRenderer, type EditChromeSources } from "@/renderer/GameplayRenderer";
 import { effectiveOverlays } from "@/state/defaults";
-import { useViewerStore, viewerStore } from "@/state/store";
+import { useViewerStore, viewerStore, type ViewerState } from "@/state/store";
 
 // the one wiring of the renderer's edit-chrome getters: selection straight
 // off the store, preview and shapes off the imperative gesture module. a
@@ -20,6 +25,54 @@ const editChromeSources: EditChromeSources = {
 	shape: () => gesturePreview.shape,
 	brush: () => gesturePreview.brush
 };
+
+/** hit samples are audible only when their whole gain chain is: the master
+ * times the hitsound channel. a zero anywhere is the mute, and a muted channel
+ * is skipped rather than scheduled silently (skinnablesound.cs) */
+function hitsoundsAudible(state: ViewerState): boolean {
+	return state.volume > 0 && state.audio.hitsoundVolume > 0;
+}
+
+/**
+ * rebuild the hit-sound plan for the currently simulated play and make sure
+ * every sample it can ask for is decoded.
+ *
+ * called on every scene install and every landed edit, which is what keeps
+ * what is heard equal to what is currently simulated. the warm-up is fire and
+ * forget: a sample still decoding when its judgement arrives is silent rather
+ * than late, and the bundled set is already resident from startup
+ */
+function installHitsounds(scene: LoadedScene): void {
+	const state = viewerStore.getState();
+	const plan = buildHitsoundPlan(scene, {
+		positionalLevel: state.gameplay.positionalHitsoundLevel,
+		alwaysPlayFirstComboBreak: state.gameplay.alwaysPlayFirstComboBreak,
+		playfieldWidth: scene.renderPlan.playfield.width
+	});
+	hitsoundScheduler.setPlan(plan);
+
+	// the map's own files, ahead of the bundled default. rebuilt here rather
+	// than held, because the ignore-beatmap-hitsounds toggle changes what this
+	// source answers and the chain reads it live
+	const beatmap = beatmapSampleSource({
+		files: scene.sampleFiles,
+		toUrl: convertFileSrc,
+		ignoreBeatmapHitsounds: state.audio.ignoreBeatmapHitsounds
+	});
+	setBeatmapSampleSource(beatmap);
+
+	// resolve every distinct request the plan can make, and decode what the
+	// chain answered. resolution is cheap and the store dedupes by url, so the
+	// map's whole sample set is warmed with one pass rather than one fetch per
+	// judgement
+	const sources = sampleSources(beatmap);
+	const urls = new Set<string>();
+	for (const sample of plan) {
+		const answer = resolveSample(sources, sample.request);
+		if (answer.answer === "found") urls.add(answer.value.url);
+	}
+	void sampleStore.loadAll(urls);
+}
 
 export function PlayerView() {
 	const hostRef = useRef<HTMLDivElement>(null);
@@ -59,6 +112,11 @@ export function PlayerView() {
 			const loop = () => {
 				const t = playbackClock.tick();
 				renderer.render(t);
+				// the app's one render clock also drives the audio clock's
+				// lookahead: one tick decides the frame and the sounds inside it,
+				// so a sample can never be scheduled against a time the frame did
+				// not draw
+				hitsoundScheduler.update(t, playbackClock.rate, playbackClock.playing, playbackClock.seekVersion);
 				// reflect clock-side auto-pause (end of replay) back into the store
 				if (viewerStore.getState().playing !== playbackClock.playing) {
 					viewerStore.getState().setPlaying(playbackClock.playing);
@@ -89,11 +147,29 @@ export function PlayerView() {
 		playbackClock.setBounds(derived.bounds.minTime, derived.bounds.maxTime);
 		frameCursor.setFrames(scene.frames.map((f) => f.time));
 		playbackClock.seekTo(derived.bounds.minTime);
+		// a scene swap drops the previous map's own sample files; the bundled
+		// set is the same for every scene and stays resident. cleared HERE and
+		// not in installHitsounds, which also runs on every landed edit -- an
+		// edit changes when a sound plays, never which files exist
+		sampleStore.clear(bundledSampleUrlSet());
+		installHitsounds(scene);
 		if (scene.audioPath === null) return;
 
-		const audio = new Audio(convertFileSrc(scene.audioPath));
+		const audio = new Audio();
+		// BEFORE the src, and load-bearing: routing this element through the
+		// audio graph makes a MediaElementAudioSourceNode of it, and a source
+		// node built from a cross-origin element loaded in no-cors mode is
+		// tainted and outputs SILENCE rather than failing loudly. tauri's asset
+		// protocol answers with an explicit Access-Control-Allow-Origin for the
+		// window's own origin (tauri/src/protocol/asset.rs:21), so opting into
+		// CORS here is both possible and required
+		audio.crossOrigin = "anonymous";
+		audio.src = convertFileSrc(scene.audioPath);
 		audio.preload = "auto";
 		playbackClock.attachAudio(htmlAudioAdapter(audio));
+		// the graph carries the music level from here on; the element's own
+		// volume stays at 1 for its whole life (audio-graph.ts)
+		audioGraph.attachMusic(audio);
 		const onLoadedMetadata = () => {
 			// a metadata event can land late (this element's fetch/decode
 			// outlives audio.pause()): after a newer scene installed but before
@@ -125,6 +201,8 @@ export function PlayerView() {
 			audio.removeAttribute("src");
 			audio.load();
 			playbackClock.attachAudio(null);
+			audioGraph.attachMusic(null);
+			setBeatmapSampleSource(null);
 		};
 	}, [sceneId]);
 
@@ -144,6 +222,11 @@ export function PlayerView() {
 		gesturePreview.settleRendered();
 		const bounds = audioExtendedBounds(derived.bounds, audioDurationMs);
 		playbackClock.setBounds(bounds.minTime, bounds.maxTime);
+		// every landed edit re-derives the judgement timeline, so what was
+		// scheduled describes a simulation that no longer exists. rebuilding
+		// flushes, which is also what makes the combo-break "first break of the
+		// play" marker follow the edit rather than going stale
+		installHitsounds(scene);
 		frameCursor.setFrames(scene.frames.map((f) => f.time));
 		// an exact selection survives an index delta by remapping through the
 		// splice; a fullFrames delta has no splice, and the cursor's derived
@@ -154,18 +237,46 @@ export function PlayerView() {
 		}
 	}, [editRevision]);
 
-	// store -> clock: playing + rate + volume
+	// store -> clock: playing + rate + the audio offset. store -> graph: the
+	// three levels
 	useEffect(() => {
-		// the persisted volume can land before or after this mount, so apply
+		const levels = (state: ViewerState) => ({
+			master: state.volume,
+			music: state.audio.musicVolume,
+			hitsound: state.audio.hitsoundVolume
+		});
+		// the persisted levels can land before or after this mount, so apply
 		// whatever the store already holds instead of waiting for a change event
-		playbackClock.setVolume(viewerStore.getState().volume / 100);
+		audioGraph.setLevels(levels(viewerStore.getState()));
+		hitsoundScheduler.setEnabled(hitsoundsAudible(viewerStore.getState()));
+		playbackClock.setOffset(viewerStore.getState().audio.offsetMs);
 		return viewerStore.subscribe((state, prev) => {
 			if (state.playing !== prev.playing) {
-				if (state.playing) playbackClock.play();
-				else playbackClock.pause();
+				if (state.playing) {
+					// a context built before the first gesture starts suspended;
+					// pressing play is the gesture
+					audioGraph.resume();
+					playbackClock.play();
+				} else playbackClock.pause();
 			}
 			if (state.rate !== prev.rate) playbackClock.setRate(state.rate);
-			if (state.volume !== prev.volume) playbackClock.setVolume(state.volume / 100);
+			if (state.volume !== prev.volume || state.audio !== prev.audio) {
+				audioGraph.setLevels(levels(state));
+				// skinnablesound skips a sample whose aggregate volume is zero
+				// rather than playing it; there is nothing to schedule either
+				hitsoundScheduler.setEnabled(hitsoundsAudible(state));
+			}
+			// the positional level and the combo-break rule are baked into the
+			// plan, and the ignore-beatmap-hitsounds toggle changes which source
+			// answers, so either rebuilds
+			if (
+				(state.gameplay !== prev.gameplay ||
+					state.audio.ignoreBeatmapHitsounds !== prev.audio.ignoreBeatmapHitsounds) &&
+				state.scene !== null
+			) {
+				installHitsounds(state.scene);
+			}
+			if (state.audio.offsetMs !== prev.audio.offsetMs) playbackClock.setOffset(state.audio.offsetMs);
 		});
 	}, []);
 

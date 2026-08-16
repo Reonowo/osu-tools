@@ -12,6 +12,7 @@ import { invokeSetViewerPrefs } from "@/lib/ipc";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
 import { installFocusModality } from "@/playback/focus-modality";
+import { warmBundledSamples } from "@/playback/hitsounds";
 import { useHelpShortcut } from "@/playback/use-help-shortcut";
 import { asksPageZoomReset } from "@/playback/shortcut-guards";
 import { installPrefsPersistence } from "@/state/persist";
@@ -45,6 +46,14 @@ export default function App() {
 	useEffect(() => {
 		const cleanup = installDropHandler();
 		return () => void cleanup.then((unlisten) => unlisten());
+	}, []);
+
+	// the bundled default hit samples decode once, at startup: they are the
+	// same files for every scene, and a hit sound that has to wait for a fetch
+	// is a hit sound that arrives after its hit. failures are silences, not
+	// load failures, so nothing here surfaces
+	useEffect(() => {
+		void warmBundledSamples();
 	}, []);
 
 	// the focus-modality stamps the keyboard guard pivots on (see
