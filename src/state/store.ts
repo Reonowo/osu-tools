@@ -603,17 +603,33 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 		// no-op instead of overwriting -- or cancelling -- a newer publication
 		let settingsRefreshSeq = 0;
 
-		// the three volume levels are primitives (the audio group is an object,
-		// but its two members are numbers), so hydration cannot use a value
-		// compare to detect an in-flight edit -- a drag away and back lands on the
-		// starting value again. every setVolume/setAudio bumps this instead
-		// (overlays don't need one: setOverlay always builds a new object, so
-		// identity shows the edit). ONE counter for all three, because the race it
-		// guards is "did the user touch the audio surface at all"
-		let volumeEdits = 0;
+		// every preference the user has touched, counted under `group.key`.
+		// hydration cannot detect an in-flight edit by comparing values -- a drag
+		// away and back lands on the starting value again -- and cannot do it by
+		// comparing whole groups either: a group's setter builds a new object, so
+		// identity shows that SOMETHING moved but not what, and holding the whole
+		// group back reverts every sibling of the edit to its default and then
+		// writes those defaults over the file. so each setter records the one key
+		// it moved and hydration decides key by key.
+		//
+		// counts rather than a set of names, because the write-through loop asks
+		// the narrower question "did anything move while my save was in flight",
+		// and a second touch of an already-recorded key must answer yes
+		const prefEdits = new Map<string, number>();
+		function recordPrefEdit(key: string) {
+			prefEdits.set(key, (prefEdits.get(key) ?? 0) + 1);
+		}
+		/** whether anything at all has been touched since `before` was taken.
+		 * the ledger only ever grows, so a differing size or count is the whole
+		 * question */
+		function prefsEditedSince(before: ReadonlyMap<string, number>): boolean {
+			if (prefEdits.size !== before.size) return true;
+			for (const [key, count] of prefEdits) if (before.get(key) !== count) return true;
+			return false;
+		}
 
 		// the master level a mute replaced, so the next unmute can put it back.
-		// beside volumeEdits and for the same reason: it is session scratch the
+		// beside prefEdits and for the same reason: it is session scratch the
 		// ui never reads directly, and putting it in the state would publish a
 		// field every consumer would have to be told to ignore
 		let mutedFrom: number | null = null;
@@ -824,9 +840,13 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					// off rather than a value the renderer would have to interpret
 					next = clampPlayfieldGridSpacing(value as number) as OverlaySettings[typeof key];
 				}
+				recordPrefEdit(`overlays.${key}`);
 				set({ overlays: { ...get().overlays, [key]: next } });
 			},
-			setEditing: (key, value) => set({ editing: { ...get().editing, [key]: value } }),
+			setEditing: (key, value) => {
+				recordPrefEdit(`editing.${key}`);
+				set({ editing: { ...get().editing, [key]: value } });
+			},
 			// the master and the granular flags are stored side by side and
 			// written the same way: turning `enabled` off must not touch the five
 			// below it, so the user gets their own selection back when it returns
@@ -839,6 +859,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					if (!Number.isFinite(percent)) return;
 					next = clampBackgroundDim(percent) as EffectSettings[typeof key];
 				}
+				recordPrefEdit(`effects.${key}`);
 				set({ effects: { ...get().effects, [key]: next } });
 			},
 			setGameplay: (key, value) => {
@@ -848,41 +869,50 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					key === "positionalHitsoundLevel"
 						? (clampPositionalLevel(value as number) as GameplaySettings[typeof key])
 						: value;
+				recordPrefEdit(`gameplay.${key}`);
 				set({ gameplay: { ...get().gameplay, [key]: next } });
 			},
-			setTimeline: (key, value) => set({ timeline: { ...get().timeline, [key]: value } }),
-			setKeybinds: (overrides) => set(installKeybinds(overrides)),
+			setTimeline: (key, value) => {
+				recordPrefEdit(`timeline.${key}`);
+				set({ timeline: { ...get().timeline, [key]: value } });
+			},
+			setKeybinds: (overrides) => {
+				// one key for the whole map, matching how it hydrates: the map
+				// replaces wholesale rather than merging, so there is no
+				// per-action question to ask
+				recordPrefEdit("keybinds");
+				set(installKeybinds(overrides));
+			},
 			setPlaying: (playing) => set({ playing }),
 			setRate: (rate) => set({ rate }),
 			setVolume: (volume) => {
 				if (!Number.isFinite(volume)) return;
-				volumeEdits += 1;
+				recordPrefEdit("volume");
 				set({ volume: clampVolume(volume) });
 			},
 			toggleMute: () => {
-				// the same counter every other level edit bumps: a mute is a
-				// touch of the audio surface like any other, and a hydration
-				// landing on top of one would put the sound back
-				volumeEdits += 1;
+				// recorded like any other master edit: a mute is a level the user
+				// chose, and a hydration landing on top of one would put the
+				// sound back
+				recordPrefEdit("volume");
 				const next = toggleMute(get().volume, mutedFrom);
 				mutedFrom = next.mutedFrom;
 				set({ volume: clampVolume(next.volume) });
 			},
 			setAudio: (key, value) => {
-				// every member of this group shares the master's hydration
-				// counter -- one counter, because the race it exists for is "did
-				// the user touch the audio surface at all", not "which control
-				// did they touch"
-				volumeEdits += 1;
-				if (typeof value === "boolean") {
-					set({ audio: { ...get().audio, [key]: value } });
-					return;
+				// only the key that moved is recorded -- not the master, which
+				// persists under its own top-level key, and not this group's
+				// other three members. hydration reverts what it is told nobody
+				// touched, so a wider record here is a wider reset there
+				let next = value;
+				if (typeof value !== "boolean") {
+					const raw = value as number;
+					if (!Number.isFinite(raw)) return;
+					// the offset has its own range and its own zero; the two channels
+					// are percents on the master's terms
+					next = (key === "offsetMs" ? clampAudioOffset(raw) : clampVolume(raw)) as AudioSettings[typeof key];
 				}
-				const raw = value as number;
-				if (!Number.isFinite(raw)) return;
-				// the offset has its own range and its own zero; the two channels
-				// are percents on the master's terms
-				const next = key === "offsetMs" ? clampAudioOffset(raw) : clampVolume(raw);
+				recordPrefEdit(`audio.${key}`);
 				set({ audio: { ...get().audio, [key]: next } });
 			},
 			// watch hands the playfield the window; edit brings the panel
@@ -913,13 +943,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// loaded value over a fresher edit would visibly revert the control
 				// the user just touched (and the edit predates persistence install,
 				// so nothing would re-save it)
-				const gameplayBefore = get().gameplay;
-				const overlaysBefore = get().overlays;
-				const editingBefore = get().editing;
-				const effectsBefore = get().effects;
-				const timelineBefore = get().timeline;
-				const keybindsBefore = get().keybinds;
-				const volumeEditsBefore = volumeEdits;
+				const editsBefore = new Map(prefEdits);
 				// claimed at initiation, like install()'s refresh: bumping only at
 				// publication would let this read -- when it resolves late --
 				// both publish its older snapshot and cancel a refresh that
@@ -934,35 +958,41 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					// retries through loadSettings on its next open
 					return;
 				}
-				const volumeEdited = volumeEdits !== volumeEditsBefore;
-				// reference equality: setOverlay/setEditing/setEffect/setTimeline
-				// always build a new object
-				const gameplayEdited = get().gameplay !== gameplayBefore;
-				const overlaysEdited = get().overlays !== overlaysBefore;
-				const editingEdited = get().editing !== editingBefore;
-				const effectsEdited = get().effects !== effectsBefore;
-				const timelineEdited = get().timeline !== timelineBefore;
-				const keybindsEdited = get().keybinds !== keybindsBefore;
-				// volume/overlays/editing/effects/timeline/keybinds are
+				const editedInFlight = (key: string) => prefEdits.get(key) !== editsBefore.get(key);
+				/** the loaded group with the members the user moved mid-read left at
+				 * what they chose. per member, never per group: holding a whole group
+				 * back would keep every sibling of the edit at its default and then
+				 * write those defaults over the file */
+				const hydrateGroup = <T extends object>(group: string, loaded: T, current: T): T => {
+					const next = { ...loaded };
+					for (const key of Object.keys(next) as (keyof T & string)[]) {
+						if (editedInFlight(`${group}.${key}`)) next[key] = current[key];
+					}
+					return next;
+				};
+				const live = get();
+				// volume/audio/gameplay/overlays/editing/effects/timeline/keybinds are
 				// frontend-owned -- nothing backend-side ever changes them on its own
 				// -- so they apply even when a newer read has claimed the slot; the
 				// settings object itself (recents move under a concurrent load)
 				// publishes only while this read is still the newest claim
 				set({
 					...(refreshSeq === settingsRefreshSeq ? { settings } : {}),
-					...(volumeEdited
-						? {}
-						: { volume: clampVolume(settings.volume), audio: { ...DEFAULT_AUDIO, ...settings.audio } }),
-					...(gameplayEdited ? {} : { gameplay: { ...DEFAULT_GAMEPLAY, ...settings.gameplay } }),
-					...(overlaysEdited ? {} : { overlays: { ...DEFAULT_OVERLAYS, ...settings.overlays } }),
-					...(editingEdited ? {} : { editing: { ...DEFAULT_EDITING, ...settings.editing } }),
-					...(effectsEdited ? {} : { effects: { ...DEFAULT_EFFECTS, ...settings.effects } }),
-					...(timelineEdited ? {} : { timeline: { ...DEFAULT_TIMELINE, ...settings.timeline } }),
+					// the master persists under its own top-level key and hydrates on
+					// its own terms, so it is guarded on its own rather than with the
+					// channels it multiplies
+					...(editedInFlight("volume") ? {} : { volume: clampVolume(settings.volume) }),
+					audio: hydrateGroup("audio", { ...DEFAULT_AUDIO, ...settings.audio }, live.audio),
+					gameplay: hydrateGroup("gameplay", { ...DEFAULT_GAMEPLAY, ...settings.gameplay }, live.gameplay),
+					overlays: hydrateGroup("overlays", { ...DEFAULT_OVERLAYS, ...settings.overlays }, live.overlays),
+					editing: hydrateGroup("editing", { ...DEFAULT_EDITING, ...settings.editing }, live.editing),
+					effects: hydrateGroup("effects", { ...DEFAULT_EFFECTS, ...settings.effects }, live.effects),
+					timeline: hydrateGroup("timeline", { ...DEFAULT_TIMELINE, ...settings.timeline }, live.timeline),
 					// the whole map replaces, never merges: a merge would resurrect an
 					// override the user reverted in another window, and the sparse map
 					// is already only what they changed. a settings file written
 					// before this feature hydrates it empty
-					...(keybindsEdited ? {} : installKeybinds(settings.keybinds ?? NO_KEYBIND_OVERRIDES))
+					...(editedInFlight("keybinds") ? {} : installKeybinds(settings.keybinds ?? NO_KEYBIND_OVERRIDES))
 				});
 				// an edit made while the read was in flight predates the persistence
 				// subscription (App installs it only once this resolves), and the
@@ -973,18 +1003,10 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// while the save was in flight; edits after the stable save cannot
 				// slip past install, because App's subscription lands in the same
 				// microtask drain as this resolution, ahead of any queued input
-				if (
-					volumeEdited ||
-					gameplayEdited ||
-					overlaysEdited ||
-					editingEdited ||
-					effectsEdited ||
-					timelineEdited ||
-					keybindsEdited
-				) {
+				if (prefsEditedSince(editsBefore)) {
 					for (;;) {
 						const { volume, audio, gameplay, overlays, editing, effects, timeline, keybinds } = get();
-						const volumeEditsAtSave = volumeEdits;
+						const editsAtSave = new Map(prefEdits);
 						try {
 							const saved = await deps.setViewerPrefs(
 								volume,
@@ -996,15 +1018,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 								timeline,
 								keybinds
 							);
-							const stable =
-								volumeEdits === volumeEditsAtSave &&
-								get().gameplay === gameplay &&
-								get().overlays === overlays &&
-								get().editing === editing &&
-								get().effects === effects &&
-								get().timeline === timeline &&
-								get().keybinds === keybinds;
-							if (stable) {
+							if (!prefsEditedSince(editsAtSave)) {
 								publishSettings(saved);
 								break;
 							}

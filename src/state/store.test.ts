@@ -606,7 +606,90 @@ describe("viewer preferences", () => {
 		await hydrating;
 
 		expect(store.getState().overlays.frameMarkers).toBe(true); // the edit survives
+		expect(store.getState().overlays.cursorPath).toBe(true); // its own siblings hydrate around it
 		expect(store.getState().volume).toBe(60); // untouched fields still hydrate
+	});
+
+	test("an audio edit in flight leaves the audio prefs the user did not touch at their persisted values", async () => {
+		// one guard for the whole group would hold the other four at their
+		// defaults around the edit and then WRITE those defaults, so a slider
+		// touched during startup silently resets the offset, the other channel
+		// and the beatmap-hitsound toggle
+		const saved: { volume: number; audio: Settings["audio"] }[] = [];
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					}),
+				setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects) => {
+					saved.push({ volume, audio });
+					return { ...baseSettings, volume, audio, gameplay, overlays, editing, effects };
+				}
+			})
+		);
+		const stored = { musicVolume: 55, hitsoundVolume: 20, offsetMs: -30, ignoreBeatmapHitsounds: true };
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setAudio("musicVolume", 12);
+		resolveSettings({ ...baseSettings, volume: 80, audio: stored });
+		await hydrating;
+
+		expect(store.getState().audio).toEqual({ ...stored, musicVolume: 12 });
+		expect(store.getState().volume).toBe(80); // the master is its own touch, not the group's
+		expect(saved[0].audio).toEqual({ ...stored, musicVolume: 12 }); // and what reaches disk agrees
+	});
+
+	test("a master edit in flight does not hold the channels under it at their defaults", async () => {
+		// the transport's slider and the audio group share a surface, not a
+		// guard: the master is the only value a master drag chose
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					})
+			})
+		);
+		const stored = { musicVolume: 55, hitsoundVolume: 20, offsetMs: -30, ignoreBeatmapHitsounds: true };
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setVolume(37);
+		resolveSettings({ ...baseSettings, volume: 80, audio: stored });
+		await hydrating;
+
+		expect(store.getState().volume).toBe(37);
+		expect(store.getState().audio).toEqual(stored);
+	});
+
+	test("a gameplay edit in flight leaves the gameplay prefs the user did not touch at their persisted values", async () => {
+		// the two hitsound prefs render side by side in the audio category, so
+		// the slider and the toggle are one reach apart -- moving one must not
+		// reset the other
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					})
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setGameplay("positionalHitsoundLevel", 0.8);
+		resolveSettings({
+			...baseSettings,
+			gameplay: { positionalHitsoundLevel: 0.1, alwaysPlayFirstComboBreak: false }
+		});
+		await hydrating;
+
+		expect(store.getState().gameplay).toEqual({
+			positionalHitsoundLevel: 0.8,
+			alwaysPlayFirstComboBreak: false
+		});
 	});
 
 	test("hydration does not stomp an editing pref changed while it was in flight", async () => {
@@ -773,11 +856,10 @@ describe("viewer preferences", () => {
 		expect(store.getState().audio.offsetMs).toBe(-500); // unchanged
 	});
 
-	test("a channel edit made while hydration is in flight wins over the loaded levels", async () => {
-		// the hydration guard is ONE counter for all three levels, because the
-		// race it exists for is "did the user touch the audio surface at all" --
-		// so a drag on the music slider must protect the master's value too, not
-		// just its own
+	test("a channel edit that returns to its starting value still wins over the loaded level", async () => {
+		// the same property setVolume's guard has, one level down: a drag away
+		// and back lands on the pre-hydration value, so only the record of the
+		// touch can tell it apart from a channel nobody moved
 		let resolveSettings!: (s: Settings) => void;
 		const store = createViewerStore(
 			deps({
@@ -790,15 +872,15 @@ describe("viewer preferences", () => {
 
 		const hydrating = store.getState().hydrateSettings();
 		store.getState().setAudio("musicVolume", 20);
+		store.getState().setAudio("musicVolume", 100); // back to the initial default
 		resolveSettings({
 			...baseSettings,
-			volume: 42,
 			audio: { musicVolume: 90, hitsoundVolume: 90, offsetMs: 0, ignoreBeatmapHitsounds: false }
 		});
 		await hydrating;
 
-		expect(store.getState().audio.musicVolume).toBe(20);
-		expect(store.getState().volume).toBe(100); // the master rides the same guard
+		expect(store.getState().audio.musicVolume).toBe(100);
+		expect(store.getState().audio.hitsoundVolume).toBe(90); // the channel beside it hydrates
 	});
 
 	test("setOverlay clamps displayLength on commit and ignores a blank field", () => {
