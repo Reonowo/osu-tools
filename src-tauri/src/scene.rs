@@ -34,6 +34,15 @@ pub struct LoadedScene {
     /// already allowed it on the asset protocol scope
     pub audio_path: Option<String>,
     pub background_path: Option<String>,
+    /// the beatmap's OWN hit-sample files, keyed by the lookup name the
+    /// frontend's chain asks for (a lowercased stem, or a full file name for
+    /// an explicit `hitSample`). empty for a map that ships none, which is
+    /// most of them -- the bundled default set answers those.
+    ///
+    /// resolved rust-side because the candidate names are derivable only from
+    /// the engine's own resolution, which is also what lets the `.osz`
+    /// extractor stay a targeted allow-list
+    pub sample_files: std::collections::BTreeMap<String, String>,
     pub warnings: Vec<Warning>,
     /// the header-vs-simulated comparison, shipped only for pre-lazer
     /// authoritative scenes; always describes the loaded file, never
@@ -278,7 +287,11 @@ pub enum JudgementKindDto {
     Circle { grade: GradeDto },
     SliderHead { hit: bool },
     SliderTick { hit: bool },
-    SliderRepeat { hit: bool },
+    /// `repeat_index` is 0-based: the repeat that ends span `repeat_index`,
+    /// i.e. lazer's node `repeat_index + 1`. it crosses the wire because a
+    /// consumer picking a repeat's samples must not have to recover the node
+    /// by counting repeat events (engine `simulation::score::JudgementKind`)
+    SliderRepeat { hit: bool, repeat_index: u32 },
     SliderTail { hit: bool },
     SliderAggregate { grade: GradeDto },
     SpinnerSpin,
@@ -292,7 +305,9 @@ impl From<&JudgementKind> for JudgementKindDto {
             JudgementKind::Circle(g) => JudgementKindDto::Circle { grade: g.into() },
             JudgementKind::SliderHead { hit } => JudgementKindDto::SliderHead { hit },
             JudgementKind::SliderTick { hit } => JudgementKindDto::SliderTick { hit },
-            JudgementKind::SliderRepeat { hit } => JudgementKindDto::SliderRepeat { hit },
+            JudgementKind::SliderRepeat { hit, repeat_index } => {
+                JudgementKindDto::SliderRepeat { hit, repeat_index }
+            }
             JudgementKind::SliderTail { hit } => JudgementKindDto::SliderTail { hit },
             JudgementKind::SliderAggregate(g) => JudgementKindDto::SliderAggregate { grade: g.into() },
             JudgementKind::SpinnerSpin => JudgementKindDto::SpinnerSpin,
@@ -375,6 +390,7 @@ pub fn assemble_scene(
     simulation: SimulationDto,
     audio_path: Option<PathBuf>,
     background_path: Option<PathBuf>,
+    sample_files: std::collections::BTreeMap<String, PathBuf>,
     warnings: Vec<Warning>,
     integrity: Option<IntegrityDto>,
     incompleteness: Option<IncompletenessDto>,
@@ -418,6 +434,10 @@ pub fn assemble_scene(
         simulation,
         audio_path: audio_path.map(|p| p.to_string_lossy().into_owned()),
         background_path: background_path.map(|p| p.to_string_lossy().into_owned()),
+        sample_files: sample_files
+            .into_iter()
+            .map(|(name, path)| (name, path.to_string_lossy().into_owned()))
+            .collect(),
         warnings,
         integrity,
         incompleteness,
@@ -456,6 +476,17 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&kind).unwrap(),
             json!({ "type": "spinnerBonus" })
+        );
+
+        // the repeat's node identity crosses as its own field, never implied
+        // by the event's position among the other repeats
+        let kind = JudgementKindDto::from(&JudgementKind::SliderRepeat {
+            hit: true,
+            repeat_index: 2,
+        });
+        assert_eq!(
+            serde_json::to_value(&kind).unwrap(),
+            json!({ "type": "sliderRepeat", "hit": true, "repeatIndex": 2 })
         );
     }
 
@@ -532,6 +563,12 @@ mod tests {
             },
             Some(std::path::PathBuf::from(r"C:\somewhere\audio.mp3")),
             None,
+            [(
+                "normal-hitnormal".to_string(),
+                std::path::PathBuf::from(r"C:\somewhere\normal-hitnormal.wav"),
+            )]
+            .into_iter()
+            .collect(),
             vec![crate::error::Warning::AudioMissing],
             None,
             None,

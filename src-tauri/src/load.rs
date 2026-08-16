@@ -17,7 +17,7 @@ use engine::simulation::simulate;
 use crate::cache::CacheLease;
 use crate::error::{IpcError, Warning};
 use crate::limits::MAX_RECENT_DIR_OSU_FILES;
-use crate::media::{read_file_capped, resolve_media_path};
+use crate::media::{read_file_capped, resolve_media_path, resolve_sample_files, SAMPLE_EXTENSIONS};
 use crate::osz::{open_osz, MatchedOsu, OszArchive};
 use crate::scene::{assemble_scene, LoadedScene, NotSimulatedReason, SimulationDto};
 use crate::stable::{detect_install, find_beatmap_by_md5, ListingCache};
@@ -208,6 +208,12 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         warnings.push(Warning::AudioMissing);
     }
     let background_path = resolve_media_path(&source.dir, &source.map.background_file);
+    // the map's OWN hit-sample files, if it ships any. the candidate names
+    // come from the engine's resolution, so this asks the folder for exactly
+    // what the frontend's chain will ask the beatmap source for -- nothing
+    // wider, which is the same reason the .osz extractor can stay an
+    // allow-list
+    let sample_files = resolve_sample_files(&source.dir, &engine::render_plan::sample_file_stems(&render_plan))?;
 
     // computed before assemble_scene consumes simulation, and cloned rather
     // than derived from the scene afterwards -- the scene's copy is a dto,
@@ -225,6 +231,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         simulation,
         audio_path,
         background_path,
+        sample_files,
         warnings,
         integrity,
         incompleteness,
@@ -291,9 +298,37 @@ fn osz_source(
         .filter(|s| !s.is_empty())
         .collect();
     let media: Vec<&str> = media_owned.iter().map(String::as_str).collect();
+    // the hit-sample members, as an EXPLICIT allow-list: every candidate stem
+    // the engine's resolution produces, crossed with the extensions osu!
+    // accepts. deriving it is what lets this stay targeted -- switching to
+    // "extract every audio entry" would hand an attacker the decompression
+    // budget the targeted extractor exists to bound.
+    //
+    // a name the archive lacks is skipped rather than failing the load, which
+    // is what makes crossing stems with extensions safe: the vast majority of
+    // these never exist
+    let processed = engine::beatmap::process_beatmap(&map)?;
+    let plan = build_render_plan(&map, &processed);
+    let mut sample_owned: Vec<String> = Vec::new();
+    for stem in engine::render_plan::sample_file_stems(&plan) {
+        // a stem that already carries an extension is an explicit `hitSample`
+        // filename and is asked for verbatim as well
+        sample_owned.push(stem.clone());
+        for extension in SAMPLE_EXTENSIONS {
+            sample_owned.push(format!("{stem}.{extension}"));
+        }
+    }
+    let samples: Vec<&str> = sample_owned.iter().map(String::as_str).collect();
     // md5 is 32 hex chars; the first 8 keep cache dir names readable
     let label = matched.md5[..8].to_string();
-    let extracted = archive.extract_scene(matched.index, &matched.bytes, &media, cache_root, &label)?;
+    let extracted = archive.extract_scene(
+        matched.index,
+        &matched.bytes,
+        &media,
+        &samples,
+        cache_root,
+        &label,
+    )?;
 
     Ok(BeatmapSource {
         map,
@@ -1029,6 +1064,61 @@ mod tests {
             outcome.scene.warnings[0],
             Warning::BeatmapMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn a_maps_own_hit_samples_are_extracted_and_carried_on_the_scene() {
+        // the whole ticket-07 path in one: the engine's resolution produces
+        // the candidate names, the extractor takes exactly those members out
+        // of the archive, and the scene carries them keyed by the lookup name
+        // the frontend's chain will ask for
+        let dir = tempfile::tempdir().unwrap();
+        let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("samples-banks-v14.osu")).unwrap();
+        let md5 = format!("{:x}", md5::compute(&osu_bytes));
+        let osz_path = dir.path().join("set.osz");
+        crate::testutil::write_osz(
+            &osz_path,
+            &[
+                ("map.osu", osu_bytes.as_slice()),
+                // named by an object's explicit hitSample field
+                ("custom-hit.wav", b"custom".as_slice()),
+                // a default lookup the map's banks resolve to
+                ("soft-hitnormal.wav", b"soft".as_slice()),
+                // audio, not a hit sample, and never in the allow-list
+                ("unrelated-song.mp3", b"song".as_slice()),
+            ],
+        );
+        let osr_path = dir.path().join("replay.osr");
+        std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
+
+        let outcome = load_with_beatmap(&osr_path, &osz_path, false, &dir.path().join("cache")).unwrap();
+        let files = &outcome.scene.sample_files;
+
+        // the explicit filename is registered both ways: an object asks for it
+        // by full name first and by stem second
+        assert!(files.contains_key("custom-hit.wav"), "{files:?}");
+        assert!(files.contains_key("custom-hit"), "{files:?}");
+        assert!(files.contains_key("soft-hitnormal"), "{files:?}");
+        // an audio member the map never asks for stays in the archive
+        assert!(!files.contains_key("unrelated-song"), "{files:?}");
+        // every carried path is inside the lease, so the asset-protocol
+        // allowance install_scene grants cannot reach outside it
+        let lease_dir = dunce::canonicalize(outcome.session.lease.as_ref().unwrap().dir()).unwrap();
+        for path in files.values() {
+            assert!(std::path::Path::new(path).starts_with(&lease_dir), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_map_shipping_no_sample_files_carries_none() {
+        // most maps: the bundled default set answers everything, and the scene
+        // says so by carrying an empty map rather than a partial one
+        let (dir, osz_path, md5) = fixture_osz(&[("audio.mp3", b"mp3".as_slice())]);
+        let osr_path = dir.path().join("replay.osr");
+        std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
+
+        let outcome = load_with_beatmap(&osr_path, &osz_path, false, &dir.path().join("cache")).unwrap();
+        assert!(outcome.scene.sample_files.is_empty(), "{:?}", outcome.scene.sample_files);
     }
 
     #[test]

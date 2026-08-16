@@ -11,8 +11,8 @@ use crate::error::{editor_engine_error, IpcError};
 use crate::load::{self, LoadOutcome, SavedBeatmap, SessionState};
 use crate::scene::LoadedScene;
 use crate::settings::{
-    save_settings, EditingPrefs, EffectPrefs, KeybindOverrides, OverlayPrefs, RecentReplay, Settings,
-    TimelinePrefs,
+    save_settings, AudioPrefs, EditingPrefs, EffectPrefs, GameplayPrefs, KeybindOverrides, OverlayPrefs,
+    RecentReplay, Settings, TimelinePrefs,
 };
 use crate::state::AppState;
 use engine::formats::osr::FIRST_LAZER_VERSION;
@@ -37,9 +37,14 @@ fn install_scene<R: Runtime>(app: &AppHandle<R>, state: &AppState, outcome: Load
     scene.epoch = epoch;
     session.epoch = epoch;
     let scope = app.asset_protocol_scope();
+    // the map's own hit-sample files ride the same protocol as its audio and
+    // background. every one of them was resolved strictly inside the beatmap's
+    // own directory (media::resolve_sample_files), so allowing them widens the
+    // scope by exactly the files the lookup chain can ask for
     for path in [scene.audio_path.as_deref(), scene.background_path.as_deref()]
         .into_iter()
         .flatten()
+        .chain(scene.sample_files.values().map(String::as_str))
     {
         let _ = scope.allow_file(Path::new(path));
     }
@@ -226,6 +231,8 @@ pub fn set_osu_stable_path(state: State<'_, AppState>, path: Option<String>) -> 
 pub fn set_viewer_prefs(
     state: State<'_, AppState>,
     volume: u32,
+    audio: AudioPrefs,
+    gameplay: GameplayPrefs,
     overlays: OverlayPrefs,
     editing: EditingPrefs,
     effects: EffectPrefs,
@@ -236,6 +243,8 @@ pub fn set_viewer_prefs(
     // persist before publishing, as in set_osu_stable_path
     let mut candidate = settings.clone();
     candidate.volume = volume;
+    candidate.audio = audio;
+    candidate.gameplay = gameplay;
     candidate.overlays = overlays;
     candidate.editing = editing;
     candidate.effects = effects;
@@ -1004,6 +1013,16 @@ mod tests {
         let updated = set_viewer_prefs(
             app.state(),
             250,
+            AudioPrefs {
+                music_volume: 250,
+                hitsound_volume: 40,
+                offset_ms: 900.0,
+                ignore_beatmap_hitsounds: true,
+            },
+            GameplayPrefs {
+                positional_hitsound_level: 9.0,
+                always_play_first_combo_break: false,
+            },
             prefs,
             editing.clone(),
             effects.clone(),
@@ -1051,6 +1070,8 @@ mod tests {
         let updated = set_viewer_prefs(
             app.state(),
             30,
+            AudioPrefs::default(),
+            GameplayPrefs::default(),
             OverlayPrefs::default(),
             EditingPrefs::default(),
             EffectPrefs::default(),
@@ -1078,6 +1099,8 @@ mod tests {
         let err = set_viewer_prefs(
             app.state(),
             25,
+            AudioPrefs::default(),
+            GameplayPrefs::default(),
             OverlayPrefs::default(),
             EditingPrefs::default(),
             EffectPrefs::default(),
