@@ -547,6 +547,9 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 2.0,
             combo_colors: Vec::new(),
+            default_sample_bank: crate::formats::samples::SampleBank::Normal,
+            default_sample_volume: 100,
+            samples_match_playback_rate: false,
             breaks: Vec::new(),
             timing_points: vec![TimingPoint {
                 time: 0.0,
@@ -563,6 +566,7 @@ mod tests {
             pos,
             new_combo,
             combo_offset,
+            samples: Vec::new(),
             kind: HitObjectKind::Circle,
         }
     }
@@ -573,6 +577,7 @@ mod tests {
             pos: Vec2::new(100.0, 100.0),
             new_combo: false,
             combo_offset: 0,
+            samples: Vec::new(),
             kind: HitObjectKind::Spinner { duration },
         }
     }
@@ -583,6 +588,7 @@ mod tests {
             pos,
             new_combo: false,
             combo_offset: 0,
+            samples: Vec::new(),
             kind: HitObjectKind::Slider(SliderData {
                 control_points: vec![
                     PathControlPoint {
@@ -596,6 +602,7 @@ mod tests {
                 ],
                 expected_distance: Some(length),
                 repeat_count,
+                node_samples: Vec::new(),
             }),
         }
     }
@@ -704,6 +711,7 @@ mod tests {
             pos: Vec2::ZERO,
             new_combo: false,
             combo_offset: 0,
+            samples: Vec::new(),
             kind: HitObjectKind::Slider(SliderData {
                 control_points: (0..limits::MAX_SLIDER_PATH_VERTICES)
                     .map(|i| PathControlPoint {
@@ -713,6 +721,7 @@ mod tests {
                     .collect(),
                 expected_distance: None,
                 repeat_count: 0,
+                node_samples: Vec::new(),
             }),
         };
 
@@ -907,6 +916,7 @@ mod tests {
             pos: Vec2::new(100.0, 100.0),
             new_combo: false,
             combo_offset: 0,
+            samples: Vec::new(),
             kind: HitObjectKind::Spinner { duration: 4.0e11 },
         }]);
         map.overall_difficulty = 10.0;

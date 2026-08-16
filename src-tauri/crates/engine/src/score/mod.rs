@@ -105,6 +105,7 @@ mod tests {
             pos: Vec2::new(256.0, 192.0),
             new_combo: false,
             combo_offset: 0,
+            samples: Vec::new(),
             kind: HitObjectKind::Circle,
         }
     }
@@ -130,6 +131,9 @@ mod tests {
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
             combo_colors: Vec::new(),
+            default_sample_bank: crate::formats::samples::SampleBank::Normal,
+            default_sample_volume: 100,
+            samples_match_playback_rate: false,
             breaks,
             timing_points: Vec::new(),
             difficulty_points: Vec::new(),

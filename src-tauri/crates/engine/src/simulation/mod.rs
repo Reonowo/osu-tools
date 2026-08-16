@@ -438,6 +438,9 @@ pub(crate) mod test_support {
             slider_multiplier: 1.4,
             slider_tick_rate: 1.0,
             combo_colors: Vec::new(),
+            default_sample_bank: crate::formats::samples::SampleBank::Normal,
+            default_sample_volume: 100,
+            samples_match_playback_rate: false,
             breaks: Vec::new(),
             timing_points: vec![TimingPoint {
                 time: 0.0,
@@ -457,6 +460,7 @@ pub(crate) mod test_support {
                     pos: Vec2::new(x, y),
                     new_combo: false,
                     combo_offset: 0,
+                    samples: Vec::new(),
                     kind: HitObjectKind::Circle,
                 })
                 .collect(),
@@ -472,6 +476,7 @@ pub(crate) mod test_support {
             pos,
             new_combo: false,
             combo_offset: 0,
+            samples: Vec::new(),
             kind: HitObjectKind::Slider(SliderData {
                 control_points: vec![
                     PathControlPoint {
@@ -485,6 +490,7 @@ pub(crate) mod test_support {
                 ],
                 expected_distance: Some(length),
                 repeat_count,
+                node_samples: Vec::new(),
             }),
         }
     }
@@ -536,6 +542,7 @@ pub(crate) mod test_support {
             pos: Vec2::ZERO,
             new_combo: false,
             combo_offset: 0,
+            samples: Vec::new(),
             kind: HitObjectKind::Spinner { duration },
         }]);
         map.overall_difficulty = od;
@@ -556,6 +563,7 @@ pub(crate) mod test_support {
                 pos: Vec2::new(256.0, 192.0),
                 new_combo: false,
                 combo_offset: 0,
+                samples: Vec::new(),
                 kind: HitObjectKind::Circle,
             },
             linear_slider(2000.0, Vec2::new(100.0, 100.0), 100.0, 0),
@@ -564,6 +572,7 @@ pub(crate) mod test_support {
                 pos: Vec2::ZERO,
                 new_combo: false,
                 combo_offset: 0,
+                samples: Vec::new(),
                 kind: HitObjectKind::Spinner { duration: 2000.0 },
             },
             HitObject {
@@ -571,6 +580,7 @@ pub(crate) mod test_support {
                 pos: Vec2::new(256.0, 192.0),
                 new_combo: false,
                 combo_offset: 0,
+                samples: Vec::new(),
                 kind: HitObjectKind::Circle,
             },
         ]);

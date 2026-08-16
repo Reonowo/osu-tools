@@ -8,6 +8,9 @@
 //! |---|---|---|---|
 //! | [`MAX_OSU_FILE_BYTES`] | 32 MiB | raw `.osu` file byte length, checked in `formats::beatmap::decode_beatmap_bytes` before rosu-map parses anything, and independently in `formats::beatmap::decode_beatmap_path` against the file's declared length *before* the file is read, so the path entry point cannot allocate an oversized buffer on the way to the byte-length check | `formats::beatmap::tests::osu_byte_size_cap_boundary` and `...::osu_byte_size_cap_boundary_through_the_path_entry_point` |
 //! | [`MAX_HIT_OBJECTS`] | 500,000 | parsed hit object count, checked in `formats::beatmap::convert` after rosu-map has parsed the file | `formats::beatmap::tests::hit_object_count_cap_boundary` |
+//! | [`MAX_BEATMAP_SLIDER_NODES`] | 2,000,000 | map-wide slider node-sample lists, charged from DECLARED repeat counts by the same pre-parse scan as the point caps. rosu-map materialises `repeat_count + 2` lists per slider *while parsing* and accepts repeat counts up to 9,000, so a 50 KiB file can force ~18 million of them; `MAX_HIT_OBJECTS` is checked after that parse returns and cannot help | `formats::beatmap::tests::slider_node_count_cap_boundary` and `...::a_repeat_count_bomb_is_refused_before_the_parse_allocates` |
+//! | [`MAX_BEATMAP_SAMPLE_LOOKUPS`] | 4,096 | distinct hit-sample lookups one beatmap asks for, keyed on `(bank, name, suffix)` -- the identity a skin resolves on. bounds the extract-and-decode fan-out a single load can demand, whose unbounded axis is the per-object explicit `hitSample` filename | `formats::beatmap::tests::sample_lookup_count_cap_boundary` |
+//! | [`MAX_SAMPLE_BYTES`] | 256 MiB | total sample audio one scene may extract and decode. declared in this crate beside the count cap but charged outside it, since the engine never opens an audio file: the `.osz` extractor charges written bytes, the folder scan charges declared file sizes (a folder load has no extraction step, so without it the cap would be reached only at decode time and surface as an unexplained silence), and the frontend charges decoded bytes -- all three per resolved source path, so a file several lookups share is charged once | `osz::tests::sample_byte_budget_boundary` (app crate, archive side), `media::tests::folder_sample_byte_budget_boundary` (app crate, folder side) and `playback/sample-store.test.ts`'s budget case (frontend, decode side) |
 //! | [`MAX_SLIDER_CONTROL_POINTS`] | 100,000 | the ceiling for a slider whose every segment is *provably linear*, enforced two different ways at two different times: `formats::beatmap::reject_oversized_slider_paths` is a cheap pre-parse scan over the raw file that counts every declared coordinate token and rejects before rosu-map's curve computation ever runs; `formats::beatmap::convert` then re-checks this cap against rosu-map's actual, deduped control point list, which is the authoritative check for the count as such. the pre-parse scan is deliberately the stricter of the two -- it is a declared-count policy, not an attempt to predict rosu-map's duplicate-point collapsing, so a slider built from many small dedup-friendly segments can be rejected by the pre-parse scan even though its final parsed size would fit comfortably under the cap | `formats::beatmap::tests::slider_control_point_count_cap_boundary` covers the accept-at-limit case, which is the one that actually reaches `convert`; its past-limit case is intercepted by the pre-parse scan first, since `decode_beatmap_bytes` runs that scan before rosu-map. in fact the post-parse *rejection* is unreachable through `decode_beatmap_bytes` at all: rosu-map can only keep or drop declared points, never invent them, so the parsed count is always `<=` the declared count the pre-scan already bounded. it stands as defence in depth for a direct `convert` call. the `precheck_*` tests in the same module exercise the stricter pre-parse policy, including its declared-vs-dedup divergence |
 //! | [`MAX_NONLINEAR_SLIDER_CONTROL_POINTS`] | 10,000 | the same pre-parse declared-count policy, but for every slider not proven linear. what it guards differs by family: bezier and b-spline paths (and any perfect curve that is not exactly three points, which `curve.rs:408-414` degrades to `approximate_bezier`) subdivide quadratically in point count, which is the measured hazard; catmull is linear in knots but emits `CATMULL_DETAIL * 2 = 100` vertices per knot (`curve.rs:473`), so at the 100,000 ceiling it would still materialise ~10 million vertices; a well-formed three-point perfect curve is bounded by construction and cannot reach either cap. the 100,000 ceiling above is therefore safe only for the genuinely O(n) linear case. `formats::beatmap::declares_only_linear_segments` decides which applies, mirroring rosu-map's own segment model exactly (first token always types the first segment; later segments start at ascii-alphabetic tokens; a segment is linear iff its leading token's first character is `L`) and failing safe toward this stricter cap | `formats::beatmap::tests::nonlinear_slider_cap_boundary` (accept at the limit, reject past it), `...::a_curved_slider_at_the_linear_cap_is_rejected_before_the_quadratic_parse` (the hazard itself, with a wall-clock assertion), `...::a_coordinate_shaped_first_token_does_not_buy_the_linear_budget` and `...::linear_classification_matches_rosu_maps_first_character_rule` (the classifier), plus the `precheck_*` tests that assert this cap on `B` sliders |
 //! | [`MAX_SLIDER_NESTED_OBJECTS`] | 1,000,000 | bounds the slider events (head + ticks + repeats + tail) `beatmap::slider_events` may generate for a single slider. lazer imposes no such cap: tick count is `length / tick_distance` per span and span count is read straight from the file, so a crafted `.osu` can declare a slider whose event generation alone is unbounded (e.g. i32::MAX slides, or a tick distance of 1e-9 -- rosu-map's clamps bound tick distance only through beat length and multiplier, and the 100000 length ceiling still admits ~1e14 ticks at the extreme). real maps, aspire included, sit in the low tens of thousands. this is a policy ceiling, not a parity limit; checked as events are pushed so rejection is O(cap) not O(declared) | `beatmap::slider_events::tests::nested_object_cap_boundary` and `beatmap::slider_events::tests::huge_span_counts_hit_the_cap_instead_of_spinning` |
@@ -27,6 +30,66 @@
 
 pub const MAX_OSU_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_HIT_OBJECTS: usize = 500_000;
+
+/// the map-wide ceiling on slider node-sample lists, charged from DECLARED
+/// repeat counts by `formats::beatmap::reject_oversized_slider_paths` before
+/// rosu-map parses anything.
+///
+/// rosu-map materialises `repeat_count + 2` node lists per slider while
+/// parsing (matching lazer's `PopulateNodeSamples`), and the engine then
+/// retains the converted result for the loaded scene's whole life. it accepts
+/// repeat counts up to 9,000, and a slider line declaring one costs about 22
+/// file bytes -- so without a pre-parse charge a 50 KiB file forces ~18
+/// million node lists (measured: 4.2 s and over a gigabyte in release), and a
+/// 32 MiB one ([`MAX_OSU_FILE_BYTES`]) reaches hundreds of gigabytes and an
+/// allocation abort. [`MAX_HIT_OBJECTS`] cannot help: it is checked after the
+/// parse that did the allocating returns.
+///
+/// 2,000,000 matches [`MAX_TOTAL_SLIDER_NESTED_OBJECTS`], bounding worst-case
+/// retention near 150 MiB and parse cost near a quarter second, while sitting
+/// far above anything real: a map where every one of [`MAX_HIT_OBJECTS`] is a
+/// plain unrepeated slider declares 1,000,000, and real maps sit in the low
+/// tens of thousands
+pub const MAX_BEATMAP_SLIDER_NODES: usize = 2_000_000;
+
+/// how many DISTINCT sounds one beatmap may ask for, counted by the identity
+/// a source resolves on -- `(bank, name, suffix)`, which is lazer's own
+/// `HitSampleInfo` equality minus volume (hitsampleinfo.cs:115-121). checked
+/// in `formats::beatmap::check_sample_lookup_count` once the objects are
+/// converted.
+///
+/// the default names close over a tiny space: four banks times five names
+/// times whatever custom indices the file declares, which real maps keep in
+/// the low tens. the unbounded axis is an object's explicit `hitSample`
+/// filename -- a 32 MiB file can name hundreds of thousands of distinct ones,
+/// and each becomes a separate archive member to extract
+/// ([`MAX_SAMPLE_BYTES`]) and a separate decoded buffer to hold. charging at
+/// decode means a crafted map is refused once, at the boundary that produced
+/// it, rather than being discovered halfway through a load.
+///
+/// 4,096 sits three orders of magnitude above any real mapset's custom
+/// hitsounding (the heaviest ship a few hundred files) while keeping the
+/// worst-case extract-and-decode fan-out bounded
+pub const MAX_BEATMAP_SAMPLE_LOOKUPS: usize = 4_096;
+
+/// the total bytes of sample audio one loaded scene may extract and decode,
+/// across the beatmap's own files and any skin's. declared here beside the
+/// count cap it works with, but charged where the bytes are actually spent
+/// rather than in this crate -- the engine never opens an audio file:
+///
+/// - the `.osz` extractor charges it as it writes sample members out
+///   (`osz.rs`), alongside the archive budgets in the app crate's own
+///   `limits` module
+/// - the frontend charges it as it decodes buffers into the WebAudio graph
+///   (`src/playback/sample-store.ts`), which is what actually bounds resident
+///   memory: several lookups legitimately resolve to one file, so the budget
+///   is charged per resolved source path, once
+///
+/// 256 MiB is roughly two orders of magnitude above the heaviest real
+/// hitsounded mapset while staying well inside a webview's decode headroom;
+/// decoded PCM runs about 10x its compressed size, which is why this is a
+/// decoded-bytes budget rather than a file-size one
+pub const MAX_SAMPLE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// bounds a slider two different ways, at two different times. `formats::beatmap`'s pre-parse
 /// scan counts every token in a slider's curve field whose first two `:`-separated parts are both

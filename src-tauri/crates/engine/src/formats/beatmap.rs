@@ -6,6 +6,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::error::{resource_limit, EngineError, Result};
+use crate::formats::samples::{HitSample, SampleBank, SampleName};
 use crate::formats::GameMode;
 use crate::limits;
 use crate::math::Vec2;
@@ -65,6 +66,26 @@ pub struct Beatmap {
     pub slider_multiplier: f64,
     pub slider_tick_rate: f64,
     pub combo_colors: Vec<[u8; 4]>,
+    /// `[General] SampleSet`. rosu-map has already folded this into every
+    /// parsed sample control point that did not override it (its timing-point
+    /// decode `unwrap_or`s it), so nothing downstream needs to re-apply it;
+    /// it is carried for the metadata surfaces and so the decoded map is a
+    /// faithful record of the file
+    pub default_sample_bank: SampleBank,
+    /// `[General] SampleVolume`, 100 when absent -- folded into the control
+    /// points on the same terms as `default_sample_bank`
+    pub default_sample_volume: i32,
+    /// `[General] SamplesMatchPlaybackRate`, deliberately read by nothing.
+    ///
+    /// lazer parses it, encodes it, and shows it in the editor, but no
+    /// gameplay path reads it: `MasterGameplayClockContainer.cs:210` applies
+    /// the user playback rate as a Frequency adjustment to the TRACK only,
+    /// and the container the hit samples live in (`DrawableRuleset.Audio`) is
+    /// touched by exactly one thing in lazer -- `ModMuted.cs:79`, which
+    /// adjusts volume. a reader here would therefore be a parity regression
+    /// rather than a feature: it would pitch hit samples that lazer leaves
+    /// alone
+    pub samples_match_playback_rate: bool,
     pub breaks: Vec<BreakPeriod>,
     pub timing_points: Vec<TimingPoint>,
     pub difficulty_points: Vec<DifficultyPoint>,
@@ -77,6 +98,11 @@ pub struct HitObject {
     pub pos: Vec2,
     pub new_combo: bool,
     pub combo_offset: i32,
+    /// the object's own samples, with its sample control point already
+    /// applied by rosu-map's decode. a circle and a spinner sound these
+    /// directly; a slider sounds its NODES instead and uses these only to
+    /// derive its tick sample (`slider.cs:263`)
+    pub samples: Vec<HitSample>,
     pub kind: HitObjectKind,
 }
 
@@ -92,6 +118,12 @@ pub struct SliderData {
     pub control_points: Vec<PathControlPoint>,
     pub expected_distance: Option<f64>,
     pub repeat_count: i32,
+    /// one entry per node, in lazer's own indexing: 0 is the head, `n` is
+    /// repeat `n - 1`, and the last (`repeat_count + 1`) is the tail
+    /// (`ihasrepeats.cs:21-28`). rosu-map builds exactly `repeat_count + 2`
+    /// of them, which is what lazer's `PopulateNodeSamples` guarantees, so
+    /// `GetNodeSamples` never needs its out-of-range fallback here
+    pub node_samples: Vec<Vec<HitSample>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,6 +199,7 @@ pub fn decode_beatmap_bytes(bytes: &[u8]) -> Result<Beatmap> {
 // removed
 fn reject_oversized_slider_paths(bytes: &[u8]) -> Result<()> {
     let mut in_hit_objects = false;
+    let mut declared_nodes: usize = 0;
 
     // mirrors rosu_map::reader::decoder::Decoder::curr_line: every decoded
     // line is trim_end()'d before section/content inspection, so a section
@@ -190,9 +223,49 @@ fn reject_oversized_slider_paths(bytes: &[u8]) -> Result<()> {
         }
 
         check_slider_declared_point_count(line)?;
+
+        declared_nodes = declared_nodes.saturating_add(declared_slider_nodes(line));
+        if declared_nodes > limits::MAX_BEATMAP_SLIDER_NODES {
+            return Err(resource_limit(
+                "MAX_BEATMAP_SLIDER_NODES",
+                limits::MAX_BEATMAP_SLIDER_NODES as u64,
+                declared_nodes as u64,
+            ));
+        }
     }
 
     Ok(())
+}
+
+// the node-sample lists a slider line DECLARES: rosu-map materialises
+// `repeat_count + 2` of them per slider while parsing (its
+// `section/hit_objects/decode.rs` builds `node_bank_infos`/`node_sound_types`
+// at that size), matching lazer's `PopulateNodeSamples`, and the engine then
+// retains the converted result for the loaded scene's whole life.
+//
+// this has to be a PRE-parse scan for the same reason the point counts above
+// do: the allocation happens inside rosu-map, so MAX_HIT_OBJECTS -- checked
+// after the parse returns -- is far too late. the repeat count is a handful of
+// file bytes and rosu-map accepts up to 9,000 of them, so a 50 KiB file of
+// 2,000 such sliders already costs ~4 seconds and over a gigabyte, and it
+// scales linearly with file size from there.
+//
+// policy, not prediction, exactly like the point scan: any line whose 7th
+// comma field parses as a non-negative integer is charged. a circle has only
+// six fields and a spinner's 7th is its `hitSample` string, so neither is ever
+// charged, and a line shaped like a slider is charged whether or not the type
+// bitfield agrees -- over-charging is the safe direction for a guard
+fn declared_slider_nodes(line: &str) -> usize {
+    let mut fields = trim_comment(line).split(',');
+    // x, y, time, type, hitSound, curvePoints, then slides
+    let Some(slides) = fields.nth(6) else {
+        return 0;
+    };
+    let Ok(slides) = slides.trim().parse::<i64>() else {
+        return 0;
+    };
+    // rosu-map's `repeat_count = max(0, slides - 1)`, nodes = repeat_count + 2
+    (slides.saturating_sub(1).max(0) as usize).saturating_add(2)
 }
 
 // mirrors rosu_map::decode::DecodeBeatmap::should_skip_line exactly
@@ -493,12 +566,14 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
 
     let mut hit_objects = Vec::with_capacity(raw.hit_objects.len());
     for obj in &raw.hit_objects {
+        let samples = convert_samples(&obj.samples);
         let converted = match &obj.kind {
             RosuKind::Circle(c) => HitObject {
                 start_time: obj.start_time + offset,
                 pos: Vec2::new(c.pos.x, c.pos.y),
                 new_combo: c.new_combo,
                 combo_offset: c.combo_offset,
+                samples,
                 kind: HitObjectKind::Circle,
             },
             RosuKind::Slider(s) => {
@@ -517,6 +592,7 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
                     pos: Vec2::new(s.pos.x, s.pos.y),
                     new_combo: s.new_combo,
                     combo_offset: s.combo_offset,
+                    samples,
                     kind: HitObjectKind::Slider(SliderData {
                         control_points: raw_cps
                             .iter()
@@ -527,6 +603,7 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
                             .collect(),
                         expected_distance: s.path.expected_dist(),
                         repeat_count: s.repeat_count,
+                        node_samples: s.node_samples.iter().map(|n| convert_samples(n)).collect(),
                     }),
                 }
             }
@@ -535,6 +612,7 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
                 pos: Vec2::new(s.pos.x, s.pos.y),
                 new_combo: s.new_combo,
                 combo_offset: 0,
+                samples,
                 kind: HitObjectKind::Spinner { duration: s.duration },
             },
             RosuKind::Hold(_) => {
@@ -543,6 +621,7 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         };
         hit_objects.push(converted);
     }
+    check_sample_lookup_count(&hit_objects)?;
 
     // the early-version offset applies to break times exactly as it does to
     // objects and control points (legacybeatmapdecoder.cs handleEvent routes
@@ -601,11 +680,99 @@ fn convert(raw: rosu_map::Beatmap) -> Result<Beatmap> {
         slider_multiplier: raw.slider_multiplier,
         slider_tick_rate: raw.slider_tick_rate,
         combo_colors: raw.custom_combo_colors.iter().map(|c| c.0).collect(),
+        default_sample_bank: convert_bank(raw.default_sample_bank),
+        default_sample_volume: raw.default_sample_volume,
+        samples_match_playback_rate: raw.samples_match_playback_rate,
         breaks,
         timing_points,
         difficulty_points,
         hit_objects,
     })
+}
+
+fn convert_bank(bank: rosu_map::section::hit_objects::hit_samples::SampleBank) -> SampleBank {
+    use rosu_map::section::hit_objects::hit_samples::SampleBank as RosuBank;
+    match bank {
+        RosuBank::None => SampleBank::None,
+        RosuBank::Normal => SampleBank::Normal,
+        RosuBank::Soft => SampleBank::Soft,
+        RosuBank::Drum => SampleBank::Drum,
+    }
+}
+
+/// rosu-map has already applied the sample control points by the time these
+/// are read (`section/hit_objects/decode.rs:462-485`), including the
+/// `CONTROL_POINT_LENIENCY` offsets lazer's `applySamples` uses, so this is a
+/// shape conversion and nothing more -- no resolution logic lives here.
+///
+/// ONE divergence from lazer, and it is rosu-map's rather than ours:
+/// `LegacyBeatmapDecoder.applySamples` resolves an `IHasRepeats` object's own
+/// samples at `start + LENIENCY + 1`, while rosu-map resolves EVERY object's
+/// at `end + LENIENCY`. for circles and spinners the two agree (start == end);
+/// for a slider they disagree whenever a sample point falls inside it. the
+/// slider's own samples feed exactly one thing -- the tick sample
+/// (`slider.cs:263`) -- so the reachable effect is a tick sounding with the
+/// bank/volume in force at the slider's END rather than its START. it is not
+/// correctable downstream: `SamplePoint::apply` only fills unset fields and
+/// erases the "was this specified?" bit as it goes, so the pre-application
+/// sample cannot be recovered from what rosu-map returns. recorded in TODO.md
+fn convert_samples(samples: &[rosu_map::section::hit_objects::hit_samples::HitSampleInfo]) -> Vec<HitSample> {
+    use rosu_map::section::hit_objects::hit_samples::{HitSampleDefaultName, HitSampleInfoName};
+    samples
+        .iter()
+        .map(|s| HitSample {
+            bank: convert_bank(s.bank),
+            name: match &s.name {
+                HitSampleInfoName::Default(HitSampleDefaultName::Normal) => SampleName::Normal,
+                HitSampleInfoName::Default(HitSampleDefaultName::Whistle) => SampleName::Whistle,
+                HitSampleInfoName::Default(HitSampleDefaultName::Finish) => SampleName::Finish,
+                HitSampleInfoName::Default(HitSampleDefaultName::Clap) => SampleName::Clap,
+                HitSampleInfoName::File(filename) => SampleName::File(filename.clone()),
+            },
+            suffix: s.suffix.map(|n| n.get()),
+            volume: s.volume,
+            is_layered: s.is_layered,
+        })
+        .collect()
+}
+
+/// how many distinct sounds one beatmap may ask for, counted by the identity
+/// a source resolves on -- `(bank, name, suffix)`, which is lazer's own
+/// `HitSampleInfo` equality minus volume (hitsampleinfo.cs:115-121).
+///
+/// the default names close over a tiny space (four banks x five names x the
+/// suffixes a file bothers to declare); the unbounded axis is an object's
+/// explicit `hitSample` filename, of which a 32 MiB file can name hundreds of
+/// thousands, each one a separate archive member to extract and a separate
+/// buffer to decode. the cap is charged here rather than at those sites so a
+/// crafted map is refused once, at the boundary that produced it
+fn check_sample_lookup_count(hit_objects: &[HitObject]) -> Result<()> {
+    let mut seen: std::collections::HashSet<(SampleBank, SampleName, Option<u32>)> =
+        std::collections::HashSet::new();
+    let mut charge = |sample: &HitSample| -> Result<()> {
+        seen.insert((sample.bank, sample.name.clone(), sample.suffix));
+        if seen.len() > limits::MAX_BEATMAP_SAMPLE_LOOKUPS {
+            return Err(resource_limit(
+                "MAX_BEATMAP_SAMPLE_LOOKUPS",
+                limits::MAX_BEATMAP_SAMPLE_LOOKUPS as u64,
+                seen.len() as u64,
+            ));
+        }
+        Ok(())
+    };
+    for obj in hit_objects {
+        for sample in &obj.samples {
+            charge(sample)?;
+        }
+        if let HitObjectKind::Slider(slider) = &obj.kind {
+            for node in &slider.node_samples {
+                for sample in node {
+                    charge(sample)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn convert_mode(mode: rosu_map::section::general::GameMode) -> GameMode {
@@ -843,6 +1010,184 @@ SliderTickRate:1
             }) => {}
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn slider_node_count_cap_boundary() {
+        // charged from the DECLARED slides field: `max(0, slides - 1) + 2`
+        // nodes per slider, summed across the file
+        let build = |sliders: usize, slides: i64| {
+            let mut s = String::from("osu file format v14\n\n[General]\nMode: 0\n\n[HitObjects]\n");
+            for i in 0..sliders {
+                s.push_str(&format!("0,0,{i},2,0,L|1:1,{slides},1\n"));
+            }
+            s
+        };
+        // 1,000 sliders x 2,000 nodes each lands exactly on the cap
+        let at_limit = build(1_000, 1_999);
+        assert_eq!(limits::MAX_BEATMAP_SLIDER_NODES, 1_000 * 2_000);
+        assert!(decode_beatmap_bytes(at_limit.as_bytes()).is_ok());
+
+        match decode_beatmap_bytes(build(1_000, 2_000).as_bytes()) {
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_BEATMAP_SLIDER_NODES",
+                ..
+            }) => {}
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_repeat_count_bomb_is_refused_before_the_parse_allocates() {
+        // the hazard the cap exists for: 2,000 sliders at rosu-map's maximum
+        // repeat count is ~50 KiB of file and, unguarded, ~18 million node
+        // sample lists -- measured at 4.2 s and over a gigabyte in release
+        // before this scan existed. the wall-clock assertion is what proves
+        // the rejection happens BEFORE the parse rather than after it, the
+        // same shape as the curved-slider cap's own hazard test
+        let mut s = String::from("osu file format v14\n\n[General]\nMode: 0\n\n[HitObjects]\n");
+        for i in 0..2_000 {
+            s.push_str(&format!("0,0,{i},2,0,L|1:1,9000,1\n"));
+        }
+        let start = std::time::Instant::now();
+        let result = decode_beatmap_bytes(s.as_bytes());
+        let elapsed = start.elapsed();
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::ResourceLimit {
+                    cap: "MAX_BEATMAP_SLIDER_NODES",
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "rejection took {elapsed:?}; the scan must run before rosu-map allocates"
+        );
+    }
+
+    #[test]
+    fn circles_and_spinners_are_not_charged_slider_nodes() {
+        // a circle has six fields and a spinner's seventh is its hitSample
+        // string, so neither can be mistaken for a declared repeat count --
+        // otherwise an ordinary map would spend its whole node budget
+        assert_eq!(declared_slider_nodes("256,192,1000,1,0,0:0:0:0:"), 0);
+        assert_eq!(declared_slider_nodes("256,192,1000,12,0,5000,0:0:0:0:"), 0);
+        assert_eq!(declared_slider_nodes("0,0,0,2,0,L|1:1,1,100"), 2);
+        assert_eq!(declared_slider_nodes("0,0,0,2,0,L|1:1,3,100"), 4);
+        // a nonsensical slides field cannot charge a negative budget
+        assert_eq!(declared_slider_nodes("0,0,0,2,0,L|1:1,-5,100"), 2);
+    }
+
+    #[test]
+    fn sample_lookup_count_cap_boundary() {
+        // the unbounded axis is the per-object explicit `hitSample` filename:
+        // every distinct one is another archive member to extract and another
+        // buffer to decode, and a 32 MiB file can name hundreds of thousands
+        let build = |count: usize| {
+            let mut s = String::from("osu file format v14\n\n[General]\nMode: 0\n\n[HitObjects]\n");
+            for i in 0..count {
+                s.push_str(&format!("256,192,{},1,0,0:0:0:0:c{i}.wav\n", 1000 + i));
+            }
+            s
+        };
+        // one lookup per distinct filename; nothing else in the file declares
+        // a sample, so the count is exactly the object count
+        assert!(decode_beatmap_bytes(build(limits::MAX_BEATMAP_SAMPLE_LOOKUPS).as_bytes()).is_ok());
+
+        match decode_beatmap_bytes(build(limits::MAX_BEATMAP_SAMPLE_LOOKUPS + 1).as_bytes()) {
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_BEATMAP_SAMPLE_LOOKUPS",
+                ..
+            }) => {}
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_lookup_cap_counts_distinct_sounds_not_objects() {
+        // a real map is far past MAX_HIT_OBJECTS-many samples and nowhere
+        // near the cap, because they all resolve to the same handful of
+        // sounds. the cap must not fire on repetition
+        let mut s = String::from("osu file format v14\n\n[General]\nMode: 0\n\n[HitObjects]\n");
+        for i in 0..(limits::MAX_BEATMAP_SAMPLE_LOOKUPS * 4) {
+            s.push_str(&format!("256,192,{},1,0,0:0:0:0:shared.wav\n", 1000 + i));
+        }
+        assert!(decode_beatmap_bytes(s.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn hit_samples_thread_through_decode_with_their_control_points_applied() {
+        // the timing point at 500 declares sample set 2 (soft), custom index
+        // 1, volume 60; the circle declares hitsound 2 (whistle) and no bank
+        // of its own, so both its normal and its whistle inherit soft/60
+        let map = decode_beatmap_bytes(MINIMAL_OSU.as_bytes()).unwrap();
+        let circle = &map.hit_objects[0];
+        assert_eq!(
+            circle.samples,
+            vec![HitSample {
+                bank: SampleBank::Soft,
+                name: SampleName::Normal,
+                suffix: None,
+                volume: 60,
+                is_layered: false,
+            }]
+        );
+
+        // the slider carries one node list per node -- head, one repeat, tail
+        // -- exactly as lazer's PopulateNodeSamples guarantees
+        let HitObjectKind::Slider(slider) = &map.hit_objects[1].kind else {
+            panic!("expected a slider")
+        };
+        assert_eq!(slider.repeat_count, 1);
+        assert_eq!(slider.node_samples.len(), 3);
+        for node in &slider.node_samples {
+            assert_eq!(node[0].bank, SampleBank::Soft);
+            assert_eq!(node[0].volume, 60);
+        }
+    }
+
+    #[test]
+    fn an_addition_makes_the_normal_layered() {
+        // hitsound 2 with no NORMAL bit set: the hitnormal still plays, but
+        // UNDER the whistle rather than instead of it
+        let osu = "osu file format v14\n\n[General]\nMode: 0\n\n[HitObjects]\n\
+                   256,192,1000,1,2,0:0:0:0:\n256,192,2000,1,3,0:0:0:0:\n";
+        let map = decode_beatmap_bytes(osu.as_bytes()).unwrap();
+
+        let layered = &map.hit_objects[0].samples;
+        assert_eq!(layered.len(), 2);
+        assert_eq!(layered[0].name, SampleName::Normal);
+        assert!(layered[0].is_layered);
+        assert_eq!(layered[1].name, SampleName::Whistle);
+
+        // hitsound 3 sets the NORMAL bit too, so the normal is the object's
+        // own sound and not a layer under the addition
+        let explicit = &map.hit_objects[1].samples;
+        assert_eq!(explicit[0].name, SampleName::Normal);
+        assert!(!explicit[0].is_layered);
+    }
+
+    #[test]
+    fn a_custom_index_of_two_or_more_becomes_the_lookup_suffix() {
+        let osu = "osu file format v14\n\n[General]\nMode: 0\n\n[HitObjects]\n\
+                   256,192,1000,1,0,3:0:1:0:\n256,192,2000,1,0,3:0:4:0:\n";
+        let map = decode_beatmap_bytes(osu.as_bytes()).unwrap();
+        assert_eq!(map.hit_objects[0].samples[0].suffix, None);
+        assert_eq!(map.hit_objects[0].samples[0].bank, SampleBank::Drum);
+        assert_eq!(map.hit_objects[1].samples[0].suffix, Some(4));
+    }
+
+    #[test]
+    fn the_general_sample_fields_are_carried_and_samples_match_playback_rate_is_read_by_nobody() {
+        let osu = "osu file format v14\n\n[General]\nMode: 0\nSampleSet: None\nSampleVolume: 42\n\
+                   SamplesMatchPlaybackRate: 1\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n";
+        let map = decode_beatmap_bytes(osu.as_bytes()).unwrap();
+        assert_eq!(map.default_sample_bank, SampleBank::None);
+        assert_eq!(map.default_sample_volume, 42);
+        assert!(map.samples_match_playback_rate);
     }
 
     #[test]

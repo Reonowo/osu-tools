@@ -58,6 +58,7 @@
 //! | [`path::slider_path`] | `osu.game/rulesets/objects/sliderpath.cs` (pin 83b8a64), including the osu!stable expected-distance quirks it reproduces |
 //! | [`math`] | osuTK `Vector2` (osu-framework's vector nuget dependency), `osu.framework/utils/precision.cs`, and .net's `System.Array.BinarySearch` |
 //! | [`formats::osr`] | byte framing follows `LegacyScoreDecoder.cs`/`LegacyScoreEncoder.cs`; decompression tolerance is checked against `SharpCompress.Compressors.LZMA.LzmaStream`'s actual runtime behaviour, which is looser than lazer's own encoder output |
+//! | [`formats::samples`] | `osu.game/audio/hitsampleinfo.cs` (lookup names, the bank/name/suffix identity a skin resolves on) plus `osu.game/rulesets/objects/legacy/converthitobjectparser.cs`'s `LegacyHitSampleInfo`/`FileHitSampleInfo`. this is lazer's `ISampleInfo` -> `ISkin.GetSample` seam: the engine resolves a sample and stops, and whichever source answers the lookup names owns the file |
 //! | [`formats::beatmap`] | not a port of a lazer source file -- it wraps the third-party `rosu-map` crate for the actual `.osu` parse and only converts the result into engine-owned types. its pre-parse slider-size guard is checked against `rosu-map`'s own internal line/section/point-parsing behaviour (see [`limits`]) rather than against lazer, since `rosu-map` is the parser being guarded here |
 //! | [`beatmap`]`::*` | assembly order follows `workingbeatmap.cs:291-351` (convert -> combo pre-process -> per-object defaults -> stacking); per-submodule citations: `osubeatmapprocessor.cs` (combo enforcement, stacking), `slidereventgenerator.cs` (slider nested events), `ibeatmapdifficultyinfo.cs`/`legacyrulesetextensions.cs:46-59`/`osuhitobject.cs`/`osuhitwindows.cs` (cs/ar/od derivations, hit windows), `controlpointinfo.cs`/`timingcontrolpoint.cs`/`slider.cs:158-170`/`osubeatmapconverter.cs:47-51` (timing/velocity/tick distance) |
 //! | [`replay`]`::*` | `legacyscoredecoder.cs:268-352` (frame conversion: cumulative times, stable's first-frame fixups, intro-frame removal); `framedreplayinputhandler.cs`/`osuframedreplayinputhandler.cs`/`interpolation.cs:351-361` (cursor interpolation, frame-accurate replay of `MousePositionAbsoluteInput`); `replay::document`'s undo/redo and export rules come from this crate's own spec, not a lazer port |
@@ -84,13 +85,18 @@
 //! replay and hand-derived expected totals, so decode -> process -> simulate
 //! runs end to end on every ci run even with no local corpus at all.
 //!
-//! beneath the count-level oracle, two lazer-dump fixture families back
-//! `beatmap` and `replay` directly with values lazer itself computed: the
-//! `.osu`-decoded `fixtures/beatmap/*.json` dumps (stacking, scale, preempt,
-//! windows, nested slider objects, per-slider ball samples) and the replay
-//! dumps (`fixtures/replays/cursor_interpolation.json`,
+//! beneath the count-level oracle, three lazer-dump fixture families back
+//! `beatmap`, `replay` and `formats::samples` directly with values lazer
+//! itself computed: the `.osu`-decoded `fixtures/beatmap/*.json` dumps
+//! (stacking, scale, preempt, windows, nested slider objects, per-slider ball
+//! samples), the replay dumps (`fixtures/replays/cursor_interpolation.json`,
 //! `fixtures/replays/frame_conversion_*.json`) covering cursor interpolation
-//! and frame conversion.
+//! and frame conversion, and `fixtures/samples/*.json`, which pins hit sample
+//! RESOLUTION -- which sound each object and nested object asks for -- read
+//! after lazer's own `applySamples` and `Slider.UpdateNestedSamples`. that
+//! last family covers resolution and nothing else: which sample fires off
+//! which judgement, and when, is the app's own composition with no lazer
+//! analogue to dump, and lives in frontend tests instead.
 //!
 //! this crate has exactly one deliberate scoring divergence from lazer: the
 //! classic slider tail increments combo (stable semantics), evidenced by
