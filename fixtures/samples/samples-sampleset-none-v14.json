@@ -1,0 +1,88 @@
+{
+  "objects": [
+    {
+      "kind": "circle",
+      "start_time": 1000,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 55,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/normal-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 1200,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 55,
+          "is_layered": true,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/normal-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        },
+        {
+          "bank": "normal",
+          "name": "hitwhistle",
+          "suffix": null,
+          "volume": 55,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/normal-hitwhistle",
+            "Gameplay/hitwhistle"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 1400,
+      "samples": [
+        {
+          "bank": "soft",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 55,
+          "is_layered": true,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/soft-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        },
+        {
+          "bank": "soft",
+          "name": "hitwhistle",
+          "suffix": null,
+          "volume": 55,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/soft-hitwhistle",
+            "Gameplay/hitwhistle"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    }
+  ]
+}

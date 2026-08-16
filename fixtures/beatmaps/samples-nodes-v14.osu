@@ -1,0 +1,59 @@
+osu file format v14
+
+// hitsound resolution cases that live on a SLIDER's nodes: per-node sounds
+// and per-node banks on a repeating slider, the tail resolving under whatever
+// point its own (leniency-shifted) time lands in, and the tick sample the
+// slider's own hitsound produces.
+//
+// beat length 500 with SliderMultiplier 1.4 gives 140 px/beat; every slider
+// below is 140 px per span, i.e. exactly 500 ms per span, so the node times
+// are whole beats and it is obvious which sample point each one falls under.
+
+[General]
+AudioFilename: audio.mp3
+Mode: 0
+
+[Metadata]
+Title:Sample Nodes
+Artist:fixture
+Creator:fixture
+Version:Nodes
+BeatmapID:0
+BeatmapSetID:-1
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:8
+ApproachRate:9
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[TimingPoints]
+0,500,4,1,0,100,1,0
+3200,-100,4,3,0,40,0,0
+6000,-100,4,2,0,90,0,0
+
+[HitObjects]
+// three spans (two repeats) => four nodes. edgeSounds names a different
+// addition per node and edgeSets a different bank per node, so head, repeat 0,
+// repeat 1 and tail must each resolve to their own sound
+32,192,1000,2,0,L|172:192,3,140,2|4|8|2,1:1|2:2|3:3|2:0,0:0:0:0:
+// no edgeSounds/edgeSets at all: every node falls back to the object's own
+// hitsound, which is what PopulateNodeSamples copies in
+32,240,3000,2,4,L|172:240,1,140,,,0:0:0:0:
+// this slider STARTS under the normal/volume 100 point and ENDS under the
+// drum/volume 40 one at 3200: its head keeps normal while its tail takes drum,
+// which is the CONTROL_POINT_LENIENCY case -- each node resolves at its own
+// time, not at the object's
+32,288,3100,2,0,L|172:288,1,140,,,0:0:0:0:
+// a slider hitsounded onto drum: its ticks must inherit drum, never the
+// normal bank the nodes below would otherwise suggest
+32,336,4000,2,0,L|312:336,1,280,0|0,3:3|1:1,3:3:0:0:
+// a long slider that CROSSES the 6000 sample point, with ticks on both sides
+// of it. lazer resolves a slider's own samples -- the ones its tick sample is
+// derived from -- at start + LENIENCY + 1, so every tick here takes the bank
+// and volume in force at 5000. this is the one case where the decoder the
+// engine wraps disagrees with lazer (see formats::beatmap::convert_samples and
+// TODO.md), so it is carried deliberately rather than avoided
+32,48,5000,2,0,L|312:48,1,560,,,0:0:0:0:

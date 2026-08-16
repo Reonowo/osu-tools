@@ -1,0 +1,59 @@
+osu file format v14
+
+// hitsound resolution cases that live on the OBJECT: bank inheritance across
+// sample points, an unspecified bank falling through to the timing point, a
+// custom index >= 2 producing the lookup suffix, an explicit hitSample
+// filename, per-object volume, and the layering an addition without the
+// normal bit produces.
+//
+// the timing section deliberately changes sample set / custom index / volume
+// three times so every object below sits under a different point.
+
+[General]
+AudioFilename: audio.mp3
+Mode: 0
+
+[Metadata]
+Title:Sample Banks
+Artist:fixture
+Creator:fixture
+Version:Banks
+BeatmapID:0
+BeatmapSetID:-1
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:8
+ApproachRate:9
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[TimingPoints]
+0,500,4,1,0,100,1,0
+2000,-100,4,2,0,70,0,0
+4000,-100,4,3,2,45,0,0
+
+[HitObjects]
+// under the normal/index 0/volume 100 point: no local bank, so both the
+// hitnormal and the finish inherit `normal`
+64,64,1000,1,4,0:0:0:0:
+// same point, but the object names its own banks: normal for the hitnormal,
+// drum for the addition
+128,64,1200,1,2,1:3:0:0:
+// under the soft/volume 70 point: unspecified bank falls through to soft, and
+// the sample volume with it
+192,64,2500,1,0,0:0:0:0:
+// the addition without the NORMAL bit set: the hitnormal still resolves and
+// plays UNDER the clap rather than instead of it
+256,64,2700,1,8,0:0:0:0:
+// under the drum/index 2/volume 45 point: the inherited custom index becomes
+// the lookup suffix
+320,64,4500,1,2,0:0:0:0:
+// a local custom index of 5 overrides the point's 2
+64,128,4700,1,0,0:0:5:0:
+// a local volume of 90 overrides the point's 45
+128,128,4900,1,0,0:0:0:90:
+// an explicit hitSample filename: bank and suffix stop mattering, and the
+// filename leads the lookup names
+192,128,5100,1,2,3:3:7:80:custom-hit.wav

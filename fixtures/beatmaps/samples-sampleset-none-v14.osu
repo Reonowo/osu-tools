@@ -1,0 +1,44 @@
+osu file format v14
+
+// [General] SampleSet: None -- the map-wide default bank a timing point that
+// declares no sample set of its own inherits. the resolved objects below name
+// a bank no shipped file is called after, which is precisely the case the
+// third (bare `Gameplay/{name}`) lookup name exists to rescue.
+//
+// SampleVolume is set too, so a point that declares no volume inherits it.
+
+[General]
+AudioFilename: audio.mp3
+Mode: 0
+SampleSet: None
+SampleVolume: 55
+
+[Metadata]
+Title:Sample Set None
+Artist:fixture
+Creator:fixture
+Version:None
+BeatmapID:0
+BeatmapSetID:-1
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:8
+ApproachRate:9
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[TimingPoints]
+// deliberately a SHORT timing line: with no sample set and no volume of its
+// own, the point inherits both from [General], which is the fallback this map
+// exists to pin
+0,500
+
+[HitObjects]
+// no local bank: falls through the point to the [General] default
+64,64,1000,1,0,0:0:0:0:
+// an addition inherits the same default
+128,64,1200,1,2,0:0:0:0:
+// a local bank still wins outright
+192,64,1400,1,2,2:2:0:0:

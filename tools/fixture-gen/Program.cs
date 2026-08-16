@@ -186,6 +186,19 @@ if (onlyFamily == null)
         "number handling, so an accidental non-finite value in one of those would still throw at " +
         "generation time.",
 
+        "samples/*.json pins hit sample RESOLUTION only -- which sound each object and each nested " +
+        "object asks for, read off lazer's decoded beatmap after applySamples and " +
+        "Slider.UpdateNestedSamples. it deliberately does not cover scheduling: which sample fires " +
+        "off which judgement, and when, is this app's own composition with no lazer analogue to " +
+        "dump, and is covered by frontend tests over a synthetic judgement timeline instead. two " +
+        "shapes in the dump are worth knowing: a slider's `tail` nested row carries NO samples " +
+        "because lazer plays the tail node off the slider itself at the right time " +
+        "(Slider.cs:285-289), which the extra `tailSamples` row records; and " +
+        "samples-nodes-v14's 5000 slider deliberately crosses a sample point, pinning the one " +
+        "divergence between lazer and the rosu-map decoder the engine wraps (object samples " +
+        "resolved at start + LENIENCY + 1 there, end + LENIENCY here), which reaches exactly the " +
+        "slider tick sample. see engine tests/sample_fixtures.rs and TODO.md.",
+
         "judgement/*.json is the scenario judgement-dump family: lazer gameplay itself (a headless " +
         "ReplayPlayer under the Classic mod, the legacy rules path the engine ports) judges the " +
         "hand-built replays recorded in each dump's frames array over the committed minimal maps in " +
@@ -438,6 +451,13 @@ if (runFamily("beatmap"))
     DumpBeatmapFixtures();
 
 void DumpBeatmapFixtures() => FixtureGen.BeatmapDumps.Run(outDir, namedFloatLiteralJsonOptions);
+
+// the resolution half of hitsounding: which sound each object and nested
+// object asks for, read after applySamples and UpdateNestedSamples. the
+// scheduling half -- which sample fires off which judgement, and when -- has
+// no lazer analogue to dump and is covered by frontend tests instead
+if (runFamily("samples"))
+    FixtureGen.SampleDumps.Run(outDir, jsonOptions);
 
 if (runFamily("replays"))
     FixtureGen.ReplayDumps.Run(outDir, jsonOptions);

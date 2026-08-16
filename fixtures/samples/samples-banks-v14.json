@@ -1,0 +1,231 @@
+{
+  "objects": [
+    {
+      "kind": "circle",
+      "start_time": 1000,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 100,
+          "is_layered": true,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/normal-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        },
+        {
+          "bank": "normal",
+          "name": "hitfinish",
+          "suffix": null,
+          "volume": 100,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/normal-hitfinish",
+            "Gameplay/hitfinish"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 1200,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 100,
+          "is_layered": true,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/normal-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        },
+        {
+          "bank": "drum",
+          "name": "hitwhistle",
+          "suffix": null,
+          "volume": 100,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/drum-hitwhistle",
+            "Gameplay/hitwhistle"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 2500,
+      "samples": [
+        {
+          "bank": "soft",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 70,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/soft-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 2700,
+      "samples": [
+        {
+          "bank": "soft",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 70,
+          "is_layered": true,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/soft-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        },
+        {
+          "bank": "soft",
+          "name": "hitclap",
+          "suffix": null,
+          "volume": 70,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/soft-hitclap",
+            "Gameplay/hitclap"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 4500,
+      "samples": [
+        {
+          "bank": "drum",
+          "name": "hitnormal",
+          "suffix": "2",
+          "volume": 45,
+          "is_layered": true,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/drum-hitnormal2",
+            "Gameplay/drum-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        },
+        {
+          "bank": "drum",
+          "name": "hitwhistle",
+          "suffix": "2",
+          "volume": 45,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/drum-hitwhistle2",
+            "Gameplay/drum-hitwhistle",
+            "Gameplay/hitwhistle"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 4700,
+      "samples": [
+        {
+          "bank": "drum",
+          "name": "hitnormal",
+          "suffix": "5",
+          "volume": 45,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/drum-hitnormal5",
+            "Gameplay/drum-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 4900,
+      "samples": [
+        {
+          "bank": "drum",
+          "name": "hitnormal",
+          "suffix": "2",
+          "volume": 90,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/drum-hitnormal2",
+            "Gameplay/drum-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    },
+    {
+      "kind": "circle",
+      "start_time": 5100,
+      "samples": [
+        {
+          "bank": "normal",
+          "name": "hitnormal",
+          "suffix": null,
+          "volume": 80,
+          "is_layered": false,
+          "filename": "custom-hit.wav",
+          "lookup_names": [
+            "custom-hit.wav",
+            "custom-hit",
+            "Gameplay/normal-hitnormal",
+            "Gameplay/hitnormal"
+          ]
+        },
+        {
+          "bank": "drum",
+          "name": "hitwhistle",
+          "suffix": "7",
+          "volume": 80,
+          "is_layered": false,
+          "filename": null,
+          "lookup_names": [
+            "Gameplay/drum-hitwhistle7",
+            "Gameplay/drum-hitwhistle",
+            "Gameplay/hitwhistle"
+          ]
+        }
+      ],
+      "node_samples": null,
+      "nested": null
+    }
+  ]
+}
