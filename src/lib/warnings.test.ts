@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { EditDelta, LoadedSceneWarning, Settings } from "@/lib/scene-types";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "@/state/defaults";
+import {
+	DEFAULT_AUDIO,
+	DEFAULT_EDITING,
+	DEFAULT_EFFECTS,
+	DEFAULT_GAMEPLAY,
+	DEFAULT_OVERLAYS,
+	DEFAULT_TIMELINE
+} from "@/state/defaults";
 import { createViewerStore, type ViewerState } from "@/state/store";
 import { testScene } from "@/test/scene";
 import { selectWarnings, warningList, warningText } from "./warnings";
@@ -8,6 +15,8 @@ import { selectWarnings, warningList, warningText } from "./warnings";
 const settings: Settings = {
 	osuStablePath: null,
 	volume: 100,
+	audio: DEFAULT_AUDIO,
+	gameplay: DEFAULT_GAMEPLAY,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,

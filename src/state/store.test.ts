@@ -19,9 +19,11 @@ import { defaultKeybinds } from "../playback/keybinds";
 import { testScene } from "../test/scene";
 import { VIEWPORT_ZOOM_MAX, VIEWPORT_ZOOM_MIN } from "../renderer/playfield";
 import {
+	DEFAULT_AUDIO,
 	DEFAULT_BACKGROUND_DIM,
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
+	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
 	DEFAULT_TIMELINE,
 	DETAIL_SPAN_MAX,
@@ -33,6 +35,8 @@ import { createViewerStore, type IpcDeps, type ViewerState } from "./store";
 const baseSettings: Settings = {
 	osuStablePath: null,
 	volume: 100,
+	audio: DEFAULT_AUDIO,
+	gameplay: DEFAULT_GAMEPLAY,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,
@@ -62,9 +66,11 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing, effects, timeline, keybinds) => ({
+		setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects, timeline, keybinds) => ({
 			...baseSettings,
 			volume,
+			audio,
+			gameplay,
 			overlays,
 			editing,
 			effects,
@@ -440,6 +446,8 @@ describe("viewer preferences", () => {
 		const stored = {
 			osuStablePath: "D:\\osu!",
 			volume: 42,
+			audio: { musicVolume: 55, hitsoundVolume: 20, offsetMs: -30, ignoreBeatmapHitsounds: true },
+			gameplay: { positionalHitsoundLevel: 0.6, alwaysPlayFirstComboBreak: false },
 			overlays: { ...DEFAULT_OVERLAYS, cursorPath: true, keyOverlay: false, displayLength: 1400 },
 			recents: [],
 			editing: { ...DEFAULT_EDITING, snapToLattice: false },
@@ -453,6 +461,8 @@ describe("viewer preferences", () => {
 		await store.getState().hydrateSettings();
 
 		expect(store.getState().volume).toBe(42);
+		expect(store.getState().audio).toEqual(stored.audio);
+		expect(store.getState().gameplay).toEqual(stored.gameplay);
 		expect(store.getState().overlays).toEqual(stored.overlays);
 		expect(store.getState().editing).toEqual(stored.editing);
 		expect(store.getState().settings).toEqual(stored);
@@ -631,9 +641,9 @@ describe("viewer preferences", () => {
 					new Promise<Settings>((resolve) => {
 						resolveSettings = resolve;
 					}),
-				setViewerPrefs: async (volume, overlays, editing, effects) => {
+				setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects) => {
 					saved.push({ volume, editing });
-					return { ...baseSettings, volume, overlays, editing, effects };
+					return { ...baseSettings, volume, audio, gameplay, overlays, editing, effects };
 				}
 			})
 		);
@@ -663,10 +673,12 @@ describe("viewer preferences", () => {
 					new Promise<Settings>((resolve) => {
 						resolveSettings = resolve;
 					}),
-				setViewerPrefs: (volume, overlays, editing, effects) => {
+				setViewerPrefs: (volume, audio, gameplay, overlays, editing, effects) => {
 					saved.push(editing);
 					return new Promise<Settings>((resolve) => {
-						resolvers.push(() => resolve({ ...baseSettings, volume, overlays, editing, effects }));
+						resolvers.push(() =>
+							resolve({ ...baseSettings, volume, audio, gameplay, overlays, editing, effects })
+						);
 					});
 				}
 			})
@@ -695,9 +707,9 @@ describe("viewer preferences", () => {
 		let saves = 0;
 		const store = createViewerStore(
 			deps({
-				setViewerPrefs: async (volume, overlays, editing, effects) => {
+				setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects) => {
 					saves += 1;
-					return { ...baseSettings, volume, overlays, editing, effects };
+					return { ...baseSettings, volume, audio, gameplay, overlays, editing, effects };
 				}
 			})
 		);
@@ -733,6 +745,60 @@ describe("viewer preferences", () => {
 		expect(store.getState().volume).toBe(0);
 		store.getState().setVolume(Number.NaN);
 		expect(store.getState().volume).toBe(0); // unchanged
+	});
+
+	test("setAudio rounds and clamps each channel on the master's terms", () => {
+		const store = createViewerStore(deps());
+		store.getState().setAudio("musicVolume", 63.4);
+		expect(store.getState().audio.musicVolume).toBe(63);
+		store.getState().setAudio("hitsoundVolume", 250);
+		expect(store.getState().audio.hitsoundVolume).toBe(100);
+		store.getState().setAudio("hitsoundVolume", Number.NaN);
+		expect(store.getState().audio.hitsoundVolume).toBe(100); // unchanged
+		// the two channels are independent: setting one must not disturb the other
+		expect(store.getState().audio.musicVolume).toBe(63);
+	});
+
+	test("setAudio clamps the offset on its own range, not the volumes'", () => {
+		// the offset is signed and its neutral value is 0, so it shares neither
+		// the 0-100 range nor the "fall back to a bound" rule
+		const store = createViewerStore(deps());
+		store.getState().setAudio("offsetMs", -120.4);
+		expect(store.getState().audio.offsetMs).toBe(-120);
+		store.getState().setAudio("offsetMs", 9000);
+		expect(store.getState().audio.offsetMs).toBe(500);
+		store.getState().setAudio("offsetMs", -9000);
+		expect(store.getState().audio.offsetMs).toBe(-500);
+		store.getState().setAudio("offsetMs", Number.NaN);
+		expect(store.getState().audio.offsetMs).toBe(-500); // unchanged
+	});
+
+	test("a channel edit made while hydration is in flight wins over the loaded levels", async () => {
+		// the hydration guard is ONE counter for all three levels, because the
+		// race it exists for is "did the user touch the audio surface at all" --
+		// so a drag on the music slider must protect the master's value too, not
+		// just its own
+		let resolveSettings!: (s: Settings) => void;
+		const store = createViewerStore(
+			deps({
+				getSettings: () =>
+					new Promise<Settings>((resolve) => {
+						resolveSettings = resolve;
+					})
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		store.getState().setAudio("musicVolume", 20);
+		resolveSettings({
+			...baseSettings,
+			volume: 42,
+			audio: { musicVolume: 90, hitsoundVolume: 90, offsetMs: 0, ignoreBeatmapHitsounds: false }
+		});
+		await hydrating;
+
+		expect(store.getState().audio.musicVolume).toBe(20);
+		expect(store.getState().volume).toBe(100); // the master rides the same guard
 	});
 
 	test("setOverlay clamps displayLength on commit and ignores a blank field", () => {
@@ -856,9 +922,9 @@ describe("effect settings", () => {
 					new Promise<Settings>((resolve) => {
 						resolveSettings = resolve;
 					}),
-				setViewerPrefs: async (volume, overlays, editing, effects) => {
+				setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects) => {
 					saved.push(effects);
-					return { ...baseSettings, volume, overlays, editing, effects };
+					return { ...baseSettings, volume, audio, gameplay, overlays, editing, effects };
 				}
 			})
 		);
@@ -918,9 +984,9 @@ describe("timeline settings", () => {
 					new Promise<Settings>((resolve) => {
 						resolveSettings = resolve;
 					}),
-				setViewerPrefs: async (volume, overlays, editing, effects, timeline) => {
+				setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects, timeline) => {
 					saved.push(timeline);
-					return { ...baseSettings, volume, overlays, editing, effects, timeline };
+					return { ...baseSettings, volume, audio, gameplay, overlays, editing, effects, timeline };
 				}
 			})
 		);

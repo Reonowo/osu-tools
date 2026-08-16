@@ -24,6 +24,7 @@ import {
 } from "../lib/ipc";
 import { inferLattice, summarizeOffLattice, type Lattice, type OffLatticeSummary } from "../lib/lattice";
 import type {
+	AudioSettings,
 	EditDelta,
 	EditingSettings,
 	EditOp,
@@ -32,6 +33,7 @@ import type {
 	FrameChanges,
 	FrameDto,
 	IpcError,
+	GameplaySettings,
 	KeybindOverrides,
 	LoadedScene,
 	OverlaySettings,
@@ -44,6 +46,7 @@ import { widenBounds, type TimeBounds } from "../lib/timeline";
 import { foldKeybinds, NO_KEYBIND_OVERRIDES, type EffectiveKeybind } from "../playback/keybinds";
 import { clampViewportZoom, DEFAULT_VIEWPORT_ZOOM, NO_VIEWPORT_PAN, type ViewportPan } from "../renderer/playfield";
 import {
+	clampAudioOffset,
 	clampBackgroundDim,
 	clampDetailSpan,
 	clampDisplayLength,
@@ -51,21 +54,25 @@ import {
 	clampPlayfieldGridSpacing,
 	clampStrength,
 	clampVolume,
+	clampPositionalLevel,
+	DEFAULT_AUDIO,
 	DEFAULT_DETAIL_SPAN,
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_FEATHER_MS,
+	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
 	DEFAULT_SMOOTH_STRENGTH,
 	DEFAULT_TIMELINE,
 	DEFAULT_VOLUME
 } from "./defaults";
 import { describeIpcError } from "./errors";
+import { toggleMute } from "@/playback/audio-levels";
 
 // OverlaySettings moved to the wire contract (scene-types.ts) when the
 // overlays became a persisted setting; re-exported so the renderer and the
 // settings dialog keep importing it from here
-export type { EditingSettings, EffectSettings, OverlaySettings, TimelineSettings };
+export type { AudioSettings, EditingSettings, EffectSettings, GameplaySettings, OverlaySettings, TimelineSettings };
 
 // watch shows a replay; edit is the (future) mutation surface
 export type ViewerMode = "watch" | "edit";
@@ -84,6 +91,8 @@ export interface IpcDeps {
 	setOsuStablePath(path: string | null): Promise<Settings>;
 	setViewerPrefs(
 		volume: number,
+		audio: AudioSettings,
+		gameplay: GameplaySettings,
 		overlays: OverlaySettings,
 		editing: EditingSettings,
 		effects: EffectSettings,
@@ -224,9 +233,16 @@ export interface ViewerState {
 	effectiveKeybinds: EffectiveKeybind[];
 	playing: boolean;
 	rate: number;
-	/** linear amplitude percent 0-100; persisted (unlike rate, which belongs
-	 * to the replay being watched rather than to the app) */
+	/** the MASTER volume, linear amplitude percent 0-100; persisted (unlike
+	 * rate, which belongs to the replay being watched rather than to the app) */
 	volume: number;
+	/** the channels under the master. effective gain is master x channel, so
+	 * zero anywhere is the mute -- music to 0 leaves hitsounds, and the other
+	 * way round */
+	audio: AudioSettings;
+	/** the gameplay preferences that are not render effects: how far hit
+	 * samples are panned and whether the play's first combo break sounds */
+	gameplay: GameplaySettings;
 	mode: ViewerMode;
 	panelOpen: boolean;
 	panelTab: PanelTab;
@@ -281,6 +297,14 @@ export interface ViewerState {
 	setPlaying(playing: boolean): void;
 	setRate(rate: number): void;
 	setVolume(volume: number): void;
+	/** the speaker's click: silence the master, or put back the level the
+	 * silencing replaced. the level it remembers is transient on purpose --
+	 * only `volume` persists, so a relaunch that was left muted comes back
+	 * muted and unmutes to the fallback rather than to a level from a session
+	 * the user no longer remembers */
+	toggleMute(): void;
+	setAudio<K extends keyof AudioSettings>(key: K, value: AudioSettings[K]): void;
+	setGameplay<K extends keyof GameplaySettings>(key: K, value: GameplaySettings[K]): void;
 	setMode(mode: ViewerMode): void;
 	togglePanel(): void;
 	setPanelTab(tab: PanelTab): void;
@@ -579,11 +603,20 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 		// no-op instead of overwriting -- or cancelling -- a newer publication
 		let settingsRefreshSeq = 0;
 
-		// volume is a primitive, so hydration cannot use a value compare to
-		// detect an in-flight edit -- a drag away and back lands on the starting
-		// value again. every setVolume bumps this instead (overlays don't need
-		// one: setOverlay always builds a new object, so identity shows the edit)
+		// the three volume levels are primitives (the audio group is an object,
+		// but its two members are numbers), so hydration cannot use a value
+		// compare to detect an in-flight edit -- a drag away and back lands on the
+		// starting value again. every setVolume/setAudio bumps this instead
+		// (overlays don't need one: setOverlay always builds a new object, so
+		// identity shows the edit). ONE counter for all three, because the race it
+		// guards is "did the user touch the audio surface at all"
 		let volumeEdits = 0;
+
+		// the master level a mute replaced, so the next unmute can put it back.
+		// beside volumeEdits and for the same reason: it is session scratch the
+		// ui never reads directly, and putting it in the state would publish a
+		// field every consumer would have to be told to ignore
+		let mutedFrom: number | null = null;
 
 		// a direct settings write carries newer backend state than any refresh
 		// still in flight from install(), so it invalidates those refreshes too
@@ -744,6 +777,8 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			playing: false,
 			rate: 1,
 			volume: DEFAULT_VOLUME,
+			audio: DEFAULT_AUDIO,
+			gameplay: DEFAULT_GAMEPLAY,
 			mode: "watch",
 			panelOpen: false,
 			panelTab: "replay",
@@ -806,6 +841,15 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				}
 				set({ effects: { ...get().effects, [key]: next } });
 			},
+			setGameplay: (key, value) => {
+				// the level is the group's one number and gets the same
+				// validation every other numeric pref gets
+				const next =
+					key === "positionalHitsoundLevel"
+						? (clampPositionalLevel(value as number) as GameplaySettings[typeof key])
+						: value;
+				set({ gameplay: { ...get().gameplay, [key]: next } });
+			},
 			setTimeline: (key, value) => set({ timeline: { ...get().timeline, [key]: value } }),
 			setKeybinds: (overrides) => set(installKeybinds(overrides)),
 			setPlaying: (playing) => set({ playing }),
@@ -814,6 +858,32 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				if (!Number.isFinite(volume)) return;
 				volumeEdits += 1;
 				set({ volume: clampVolume(volume) });
+			},
+			toggleMute: () => {
+				// the same counter every other level edit bumps: a mute is a
+				// touch of the audio surface like any other, and a hydration
+				// landing on top of one would put the sound back
+				volumeEdits += 1;
+				const next = toggleMute(get().volume, mutedFrom);
+				mutedFrom = next.mutedFrom;
+				set({ volume: clampVolume(next.volume) });
+			},
+			setAudio: (key, value) => {
+				// every member of this group shares the master's hydration
+				// counter -- one counter, because the race it exists for is "did
+				// the user touch the audio surface at all", not "which control
+				// did they touch"
+				volumeEdits += 1;
+				if (typeof value === "boolean") {
+					set({ audio: { ...get().audio, [key]: value } });
+					return;
+				}
+				const raw = value as number;
+				if (!Number.isFinite(raw)) return;
+				// the offset has its own range and its own zero; the two channels
+				// are percents on the master's terms
+				const next = key === "offsetMs" ? clampAudioOffset(raw) : clampVolume(raw);
+				set({ audio: { ...get().audio, [key]: next } });
 			},
 			// watch hands the playfield the window; edit brings the panel
 			// back. the rail toggle still overrides either way
@@ -843,6 +913,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// loaded value over a fresher edit would visibly revert the control
 				// the user just touched (and the edit predates persistence install,
 				// so nothing would re-save it)
+				const gameplayBefore = get().gameplay;
 				const overlaysBefore = get().overlays;
 				const editingBefore = get().editing;
 				const effectsBefore = get().effects;
@@ -866,6 +937,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				const volumeEdited = volumeEdits !== volumeEditsBefore;
 				// reference equality: setOverlay/setEditing/setEffect/setTimeline
 				// always build a new object
+				const gameplayEdited = get().gameplay !== gameplayBefore;
 				const overlaysEdited = get().overlays !== overlaysBefore;
 				const editingEdited = get().editing !== editingBefore;
 				const effectsEdited = get().effects !== effectsBefore;
@@ -878,7 +950,10 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// publishes only while this read is still the newest claim
 				set({
 					...(refreshSeq === settingsRefreshSeq ? { settings } : {}),
-					...(volumeEdited ? {} : { volume: clampVolume(settings.volume) }),
+					...(volumeEdited
+						? {}
+						: { volume: clampVolume(settings.volume), audio: { ...DEFAULT_AUDIO, ...settings.audio } }),
+					...(gameplayEdited ? {} : { gameplay: { ...DEFAULT_GAMEPLAY, ...settings.gameplay } }),
 					...(overlaysEdited ? {} : { overlays: { ...DEFAULT_OVERLAYS, ...settings.overlays } }),
 					...(editingEdited ? {} : { editing: { ...DEFAULT_EDITING, ...settings.editing } }),
 					...(effectsEdited ? {} : { effects: { ...DEFAULT_EFFECTS, ...settings.effects } }),
@@ -900,6 +975,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// microtask drain as this resolution, ahead of any queued input
 				if (
 					volumeEdited ||
+					gameplayEdited ||
 					overlaysEdited ||
 					editingEdited ||
 					effectsEdited ||
@@ -907,11 +983,13 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					keybindsEdited
 				) {
 					for (;;) {
-						const { volume, overlays, editing, effects, timeline, keybinds } = get();
+						const { volume, audio, gameplay, overlays, editing, effects, timeline, keybinds } = get();
 						const volumeEditsAtSave = volumeEdits;
 						try {
 							const saved = await deps.setViewerPrefs(
 								volume,
+								audio,
+								gameplay,
 								overlays,
 								editing,
 								effects,
@@ -920,6 +998,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 							);
 							const stable =
 								volumeEdits === volumeEditsAtSave &&
+								get().gameplay === gameplay &&
 								get().overlays === overlays &&
 								get().editing === editing &&
 								get().effects === effects &&

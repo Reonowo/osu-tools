@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "../state/defaults";
+import {
+	DEFAULT_AUDIO,
+	DEFAULT_EDITING,
+	DEFAULT_EFFECTS,
+	DEFAULT_GAMEPLAY,
+	DEFAULT_OVERLAYS,
+	DEFAULT_TIMELINE
+} from "../state/defaults";
 import type {
 	EffectSettings,
 	IpcError,
@@ -21,7 +28,7 @@ describe("scene contract mirror", () => {
 			{ type: "sliderAggregate", grade: "ok" },
 			{ type: "spinnerBonus" },
 			{ type: "sliderTick", hit: true },
-			{ type: "sliderRepeat", hit: true },
+			{ type: "sliderRepeat", hit: true, repeatIndex: 2 },
 			{ type: "sliderTail", hit: true },
 			{ type: "spinnerSpin" },
 			{ type: "spinnerFinal", grade: "miss" }
@@ -77,11 +84,12 @@ describe("scene contract mirror", () => {
 						position: [100, 100],
 						pathProgress: 0,
 						preempt: 600,
-						fadeIn: 400
+						fadeIn: 400,
+						samples: []
 					}
 				]
 			},
-			{ type: "spinner", duration: 2000, spinsRequired: 5, maxBonusSpins: 5 }
+			{ type: "spinner", duration: 2000, spinsRequired: 5, maxBonusSpins: 5, bonusSamples: [] }
 		];
 		expect(kinds[1].type).toBe("slider");
 	});
@@ -150,6 +158,8 @@ describe("scene contract mirror", () => {
 		const settings: Settings = {
 			osuStablePath: null,
 			volume: 100,
+			audio: DEFAULT_AUDIO,
+			gameplay: DEFAULT_GAMEPLAY,
 			overlays: DEFAULT_OVERLAYS,
 			recents: [],
 			editing: DEFAULT_EDITING,

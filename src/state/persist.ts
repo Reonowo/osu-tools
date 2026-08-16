@@ -9,8 +9,10 @@
 import type { StoreApi } from "zustand";
 import { isIpcError } from "../lib/ipc";
 import type {
+	AudioSettings,
 	EditingSettings,
 	EffectSettings,
+	GameplaySettings,
 	IpcError,
 	KeybindOverrides,
 	OverlaySettings,
@@ -20,6 +22,8 @@ import type { ViewerState } from "./store";
 
 export type PrefsSaver = (
 	volume: number,
+	audio: AudioSettings,
+	gameplay: GameplaySettings,
 	overlays: OverlaySettings,
 	editing: EditingSettings,
 	effects: EffectSettings,
@@ -54,8 +58,8 @@ export function installPrefsPersistence(
 	// reads at call time, so a burst collapses to one save carrying the
 	// latest values rather than the ones that scheduled it
 	const flush = () => {
-		const { volume, overlays, editing, effects, timeline, keybinds } = store.getState();
-		save(volume, overlays, editing, effects, timeline, keybinds).catch((e: unknown) => {
+		const { volume, audio, gameplay, overlays, editing, effects, timeline, keybinds } = store.getState();
+		save(volume, audio, gameplay, overlays, editing, effects, timeline, keybinds).catch((e: unknown) => {
 			// a silently dropped rejection would let the ui imply the prefs were
 			// saved while they revert on restart; route it through the same toast
 			// flow as saveStablePath
@@ -65,12 +69,15 @@ export function installPrefsPersistence(
 	};
 
 	const unsubscribe = store.subscribe((state, prev) => {
-		// reference equality on overlays/editing/effects/timeline/keybinds:
-		// setOverlay/setEditing/setEffect/setTimeline/setKeybinds always build a
-		// new object, and every other store write (scene installs, playback,
-		// rate) leaves all six fields untouched, so those never schedule a save
+		// reference equality on audio/overlays/editing/effects/timeline/keybinds:
+		// setAudio/setOverlay/setEditing/setEffect/setTimeline/setKeybinds always
+		// build a new object, and every other store write (scene installs,
+		// playback, rate) leaves all seven fields untouched, so those never
+		// schedule a save
 		if (
 			state.volume === prev.volume &&
+			state.audio === prev.audio &&
+			state.gameplay === prev.gameplay &&
 			state.overlays === prev.overlays &&
 			state.editing === prev.editing &&
 			state.effects === prev.effects &&

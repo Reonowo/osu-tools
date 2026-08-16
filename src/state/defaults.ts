@@ -3,7 +3,14 @@
 // mirror settings.rs's OverlayPrefs::default / Settings::default, which is
 // what a fresh (or legacy) settings.json hydrates to
 
-import type { EditingSettings, EffectSettings, OverlaySettings, TimelineSettings } from "../lib/scene-types";
+import type {
+	AudioSettings,
+	EditingSettings,
+	GameplaySettings,
+	EffectSettings,
+	OverlaySettings,
+	TimelineSettings
+} from "../lib/scene-types";
 
 /** osurulesetconfigmanager.cs:27-31 */
 export const DEFAULT_OVERLAYS: OverlaySettings = {
@@ -94,10 +101,46 @@ export function effectiveOverlays(overlays: OverlaySettings, mode: "watch" | "ed
 	return { ...overlays, cursorPath: true, frameMarkers: true };
 }
 
-/** linear amplitude percent */
+/** linear amplitude percent. the master; the two channels under it are in
+ * DEFAULT_AUDIO below */
 export const DEFAULT_VOLUME = 100;
 export const VOLUME_MIN = 0;
 export const VOLUME_MAX = 100;
+
+/** mirrors settings.rs AudioPrefs::default(). the master keeps its own
+ * top-level `volume` key so no existing settings file needs migrating; these
+ * are the channels under it, each starting where a user who has never opened
+ * the audio category expects them -- full, so the product is the master */
+export const DEFAULT_AUDIO: AudioSettings = {
+	musicVolume: 100,
+	hitsoundVolume: 100,
+	offsetMs: 0,
+	ignoreBeatmapHitsounds: false
+};
+
+/** mirrors settings.rs GameplayPrefs::default() -- lazer's own defaults */
+export const DEFAULT_GAMEPLAY: GameplaySettings = {
+	positionalHitsoundLevel: 0.2,
+	alwaysPlayFirstComboBreak: true
+};
+
+/** the positional level is a 0-1 ratio; a blank field centres everything
+ * rather than poisoning the balance samples are panned with */
+export function clampPositionalLevel(level: number): number {
+	if (!Number.isFinite(level)) return 0;
+	return Math.min(Math.max(level, 0), 1);
+}
+
+/** lazer's own AudioOffset range and step (OsuConfigManager.cs:109) */
+export const AUDIO_OFFSET_MIN = -500;
+export const AUDIO_OFFSET_MAX = 500;
+
+/** rounds and clamps an offset; a blank field arrives as NaN and falls back to
+ * no offset rather than to a bound, since neither bound is a neutral value */
+export function clampAudioOffset(ms: number): number {
+	if (!Number.isFinite(ms)) return 0;
+	return Math.round(Math.min(Math.max(ms, AUDIO_OFFSET_MIN), AUDIO_OFFSET_MAX));
+}
 
 export const DISPLAY_LENGTH_MIN = 200;
 export const DISPLAY_LENGTH_MAX = 2000;

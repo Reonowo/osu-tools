@@ -19,7 +19,14 @@ import type { EditDelta, EditOp, FrameDto, IndexedFrame, LoadedScene, Settings }
 import { audioExtendedBounds } from "../lib/timeline";
 import { timeToPixels, windowAround } from "../lib/timeline-view";
 import { testScene } from "../test/scene";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "./defaults";
+import {
+	DEFAULT_AUDIO,
+	DEFAULT_EDITING,
+	DEFAULT_EFFECTS,
+	DEFAULT_GAMEPLAY,
+	DEFAULT_OVERLAYS,
+	DEFAULT_TIMELINE
+} from "./defaults";
 import { createViewerStore, type IpcDeps, type ViewerState } from "./store";
 import type { StoreApi } from "zustand";
 
@@ -52,6 +59,7 @@ function circle(startTime: number): LoadedScene["renderPlan"]["objects"][number]
 		indexInCombo: 0,
 		preempt: 600,
 		fadeIn: 400,
+		samples: [],
 		kind: { type: "circle" }
 	};
 }
@@ -111,6 +119,8 @@ function applyOps(
 const settings: Settings = {
 	osuStablePath: null,
 	volume: 100,
+	audio: DEFAULT_AUDIO,
+	gameplay: DEFAULT_GAMEPLAY,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,

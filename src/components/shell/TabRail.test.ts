@@ -6,13 +6,22 @@
 import { describe, expect, test } from "bun:test";
 import type { EditDelta, Settings } from "../../lib/scene-types";
 import { testScene } from "../../test/scene";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "../../state/defaults";
+import {
+	DEFAULT_AUDIO,
+	DEFAULT_EDITING,
+	DEFAULT_EFFECTS,
+	DEFAULT_GAMEPLAY,
+	DEFAULT_OVERLAYS,
+	DEFAULT_TIMELINE
+} from "../../state/defaults";
 import { createViewerStore, type IpcDeps } from "../../state/store";
 import { railTabClick } from "./TabRail";
 
 const baseSettings: Settings = {
 	osuStablePath: null,
 	volume: 100,
+	audio: DEFAULT_AUDIO,
+	gameplay: DEFAULT_GAMEPLAY,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,
@@ -42,9 +51,11 @@ function deps(): IpcDeps {
 		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing, effects) => ({
+		setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects) => ({
 			...baseSettings,
 			volume,
+			audio,
+			gameplay,
 			overlays,
 			editing,
 			effects

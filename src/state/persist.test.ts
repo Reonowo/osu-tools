@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type {
+	AudioSettings,
 	EditDelta,
 	EditingSettings,
 	EffectSettings,
+	GameplaySettings,
 	IpcError,
 	KeybindOverrides,
 	OverlaySettings,
@@ -10,13 +12,22 @@ import type {
 	TimelineSettings
 } from "../lib/scene-types";
 import { testScene } from "../test/scene";
-import { DEFAULT_EDITING, DEFAULT_EFFECTS, DEFAULT_OVERLAYS, DEFAULT_TIMELINE } from "./defaults";
+import {
+	DEFAULT_AUDIO,
+	DEFAULT_EDITING,
+	DEFAULT_EFFECTS,
+	DEFAULT_GAMEPLAY,
+	DEFAULT_OVERLAYS,
+	DEFAULT_TIMELINE
+} from "./defaults";
 import { installPrefsPersistence, type Scheduler } from "./persist";
 import { createViewerStore, type IpcDeps } from "./store";
 
 const baseSettings: Settings = {
 	osuStablePath: null,
 	volume: 100,
+	audio: DEFAULT_AUDIO,
+	gameplay: DEFAULT_GAMEPLAY,
 	overlays: DEFAULT_OVERLAYS,
 	recents: [],
 	editing: DEFAULT_EDITING,
@@ -46,9 +57,11 @@ function deps(): IpcDeps {
 		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, overlays, editing, effects, timeline, keybinds) => ({
+		setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects, timeline, keybinds) => ({
 			...baseSettings,
 			volume,
+			audio,
+			gameplay,
 			overlays,
 			editing,
 			effects,
@@ -106,6 +119,8 @@ function manualScheduler() {
 function saveRecorder() {
 	const calls: {
 		volume: number;
+		audio: AudioSettings;
+		gameplay: GameplaySettings;
 		overlays: OverlaySettings;
 		editing: EditingSettings;
 		effects: EffectSettings;
@@ -116,13 +131,15 @@ function saveRecorder() {
 		calls,
 		save: async (
 			volume: number,
+			audio: AudioSettings,
+			gameplay: GameplaySettings,
 			overlays: OverlaySettings,
 			editing: EditingSettings,
 			effects: EffectSettings,
 			timeline: TimelineSettings,
 			keybinds: KeybindOverrides
 		) => {
-			calls.push({ volume, overlays, editing, effects, timeline, keybinds });
+			calls.push({ volume, audio, gameplay, overlays, editing, effects, timeline, keybinds });
 			return baseSettings;
 		}
 	};
