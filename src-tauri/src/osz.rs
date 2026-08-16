@@ -532,6 +532,7 @@ impl OszArchive {
         osu_index: usize,
         osu_bytes: &[u8],
         media_names: &[&str],
+        sample_names: &[&str],
         cache_root: &Path,
         label: &str,
     ) -> Result<ExtractedScene, IpcError> {
@@ -539,24 +540,34 @@ impl OszArchive {
             osu_index,
             osu_bytes,
             media_names,
+            sample_names,
             cache_root,
             label,
             MAX_OSZ_EXTRACTED_BYTES,
+            engine::limits::MAX_SAMPLE_BYTES,
         )
     }
 
-    /// the budget is a parameter so the boundary test can drive it with tiny
-    /// members; the public method passes MAX_OSZ_EXTRACTED_BYTES. on any
-    /// error the fresh lease drops with the early return, deleting the
-    /// partial directory
+    /// both budgets are parameters so the boundary tests can drive them with
+    /// tiny members; the public method passes MAX_OSZ_EXTRACTED_BYTES and
+    /// engine::limits::MAX_SAMPLE_BYTES. on any error the fresh lease drops
+    /// with the early return, deleting the partial directory.
+    ///
+    /// `sample_names` is separated from `media_names` because the two are
+    /// bounded differently: the media list is one audio file and one image,
+    /// while the sample list is derived from the map's own hitsounding and is
+    /// charged against the sample budget as well as the archive one
+    #[allow(clippy::too_many_arguments)]
     pub fn extract_scene_with_budget(
         &mut self,
         osu_index: usize,
         osu_bytes: &[u8],
         media_names: &[&str],
+        sample_names: &[&str],
         cache_root: &Path,
         label: &str,
         max_total: u64,
+        max_samples: u64,
     ) -> Result<ExtractedScene, IpcError> {
         std::fs::create_dir_all(cache_root)?;
         let lease = create_leased_dir(cache_root, label)?;
@@ -565,6 +576,21 @@ impl OszArchive {
             max: max_total,
             cap: "MAX_OSZ_EXTRACTED_BYTES",
         };
+        let mut sample_budget = ByteBudget {
+            used: 0,
+            max: max_samples,
+            cap: "MAX_SAMPLE_BYTES",
+        };
+        // one pass over the entry names rather than a scan per wanted name:
+        // the sample allow-list is derived from the map's hitsounding and can
+        // reach tens of thousands of candidates, almost none of which exist,
+        // so a linear scan each would be quadratic in archive size
+        let by_name: std::collections::HashMap<String, usize> = self
+            .names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (normalize_entry_name(name), index))
+            .collect();
 
         let osu_rel = {
             let entry = self.archive.by_index(osu_index).map_err(archive_err)?;
@@ -576,15 +602,40 @@ impl OszArchive {
         budget.charge(osu_bytes.len() as u64)?;
         write_member(&osu_path, osu_bytes)?;
 
-        for media in media_names {
-            let want = normalize_entry_name(media);
-            let found = (0..self.names.len()).find(|&i| normalize_entry_name(&self.names[i]) == want);
-            let Some(index) = found else {
-                // a beatmap referencing media its archive lacks is common;
-                // the scene simply loads without it (AudioMissing warning
-                // downstream)
+        // every requested name is folded onto its member BEFORE anything is
+        // written, because a member can be reached by several names and the
+        // roles those names carry decide which budgets it owes. two names
+        // sharing one member must extract it once (a stem and its explicit
+        // filename), and a member ANY sample name reached owes the sample
+        // budget even when a media name reached it first -- otherwise a map
+        // whose `AudioFilename` is also one of its hitsound candidates buys
+        // that file past the sample cap on the media budget's much larger
+        // allowance
+        let mut wanted: Vec<(usize, bool)> = Vec::new();
+        let mut position: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (name, is_sample) in media_names
+            .iter()
+            .map(|name| (name, false))
+            .chain(sample_names.iter().map(|name| (name, true)))
+        {
+            let want = normalize_entry_name(name);
+            let Some(&index) = by_name.get(&want) else {
+                // a beatmap referencing media its archive lacks is common --
+                // and for the sample allow-list it is the NORM, since the list
+                // is every candidate name rather than a manifest. the scene
+                // simply loads without it (AudioMissing warning downstream)
                 continue;
             };
+            match position.get(&index) {
+                Some(&at) => wanted[at].1 |= is_sample,
+                None => {
+                    position.insert(index, wanted.len());
+                    wanted.push((index, is_sample));
+                }
+            }
+        }
+
+        for (index, is_sample) in wanted {
             let mut entry = self.archive.by_index(index).map_err(archive_err)?;
             let rel = entry
                 .enclosed_name()
@@ -600,8 +651,11 @@ impl OszArchive {
                 if n == 0 {
                     break;
                 }
-                // charge before writing so the cap also bounds bytes on disk
+                // charge before writing so the caps also bound bytes on disk
                 budget.charge(n as u64)?;
+                if is_sample {
+                    sample_budget.charge(n as u64)?;
+                }
                 out.write_all(&buf[..n])?;
             }
         }
@@ -1103,6 +1157,7 @@ mod tests {
                 matched.index,
                 &matched.bytes,
                 &["audio.mp3", "sb\\bg.jpg"],
+                &[],
                 cache_root.path(),
                 "test",
             )
@@ -1140,11 +1195,168 @@ mod tests {
                 matched.index,
                 &matched.bytes,
                 &["nope.mp3"],
+                &[],
                 cache_root.path(),
                 "t",
             )
             .unwrap();
         assert!(!extracted.beatmap_dir.join("nope.mp3").exists());
+    }
+
+    #[test]
+    fn sample_members_extract_through_the_allow_list_and_nothing_else() {
+        // the allow-list is derived from the map's own hitsounding, so it is
+        // mostly names the archive does not have -- a miss is the norm here,
+        // not an error. what must NOT happen is a member outside the list
+        // riding along just because it is audio
+        let (_dir, path) = temp_osz(&[
+            ("map.osu", b"osu".as_slice()),
+            ("normal-hitnormal.wav", b"wav bytes".as_slice()),
+            ("unrelated-loop.wav", b"never asked for".as_slice()),
+        ]);
+        let cache_root = tempfile::tempdir().unwrap();
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+
+        let extracted = archive
+            .extract_scene(
+                matched.index,
+                &matched.bytes,
+                &[],
+                &["normal-hitnormal.wav", "normal-hitnormal.mp3", "soft-hitclap.wav"],
+                cache_root.path(),
+                "t",
+            )
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(extracted.beatmap_dir.join("normal-hitnormal.wav")).unwrap(),
+            b"wav bytes"
+        );
+        assert!(
+            !extracted.beatmap_dir.join("unrelated-loop.wav").exists(),
+            "an audio member outside the allow-list must not be extracted"
+        );
+    }
+
+    #[test]
+    fn one_member_named_twice_is_extracted_and_charged_once() {
+        // a stem and its explicit filename can normalize onto the same
+        // member; charging it twice would spend the budget on one file
+        let (_dir, path) = temp_osz(&[("map.osu", b"osu".as_slice()), ("kick.wav", b"123456".as_slice())]);
+        let cache_root = tempfile::tempdir().unwrap();
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+
+        // 3 (.osu) + 6 (kick.wav) = 9 written bytes, even though the name is
+        // asked for twice
+        assert!(archive
+            .extract_scene_with_budget(
+                matched.index,
+                &matched.bytes,
+                &[],
+                &["kick.wav", "KICK.WAV"],
+                cache_root.path(),
+                "t",
+                9,
+                9,
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn sample_byte_budget_boundary() {
+        // engine::limits::MAX_SAMPLE_BYTES on the EXTRACT side. it is charged
+        // separately from the archive budget: a mapset whose samples alone
+        // exceed it is refused even when the archive budget has room
+        let (_dir, path) = temp_osz(&[("map.osu", b"osu".as_slice()), ("kick.wav", b"123456".as_slice())]);
+        let cache_root = tempfile::tempdir().unwrap();
+
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        assert!(archive
+            .extract_scene_with_budget(
+                matched.index,
+                &matched.bytes,
+                &[],
+                &["kick.wav"],
+                cache_root.path(),
+                "t",
+                u64::MAX,
+                6,
+            )
+            .is_ok());
+
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        match archive.extract_scene_with_budget(
+            matched.index,
+            &matched.bytes,
+            &[],
+            &["kick.wav"],
+            cache_root.path(),
+            "t",
+            u64::MAX,
+            5,
+        ) {
+            Err(IpcError::ResourceLimit { cap, limit: 5, .. }) => assert_eq!(cap, "MAX_SAMPLE_BYTES"),
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+        // the .osu itself is never charged against the SAMPLE budget, only
+        // against the archive one -- otherwise a large difficulty would eat
+        // the hitsound allowance
+    }
+
+    #[test]
+    fn a_member_that_is_both_media_and_a_sample_still_owes_the_sample_budget() {
+        // the alias a crafted set would reach for: name the audio file after
+        // one of the map's own hitsound candidates and the member is requested
+        // twice, as media and as a sample. extracting it under the first role
+        // and skipping the second would let it through on the archive budget's
+        // much larger allowance, which is the one thing the sample cap exists
+        // to stop
+        let (_dir, path) = temp_osz(&[
+            ("map.osu", b"osu".as_slice()),
+            ("normal-hitnormal.wav", b"123456".as_slice()),
+        ]);
+        let cache_root = tempfile::tempdir().unwrap();
+
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        match archive.extract_scene_with_budget(
+            matched.index,
+            &matched.bytes,
+            &["normal-hitnormal.wav"],
+            &["normal-hitnormal.wav"],
+            cache_root.path(),
+            "t",
+            u64::MAX,
+            5,
+        ) {
+            Err(IpcError::ResourceLimit { cap, limit: 5, .. }) => assert_eq!(cap, "MAX_SAMPLE_BYTES"),
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+
+        // and it is still written exactly ONCE when both budgets have room --
+        // the aliasing must not charge the archive budget twice either
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        let scene = archive
+            .extract_scene_with_budget(
+                matched.index,
+                &matched.bytes,
+                &["normal-hitnormal.wav"],
+                &["normal-hitnormal.wav"],
+                cache_root.path(),
+                "t",
+                9,
+                6,
+            )
+            .expect("3 osu bytes + 6 member bytes fits the archive budget exactly");
+        assert_eq!(
+            std::fs::read(scene.beatmap_dir.join("normal-hitnormal.wav")).unwrap(),
+            b"123456"
+        );
     }
 
     #[test]
@@ -1160,9 +1372,11 @@ mod tests {
                 matched.index,
                 &matched.bytes,
                 &["a.mp3"],
+                &[],
                 cache_root.path(),
                 "t",
-                10
+                10,
+                u64::MAX
             )
             .is_ok());
 
@@ -1172,9 +1386,11 @@ mod tests {
             matched.index,
             &matched.bytes,
             &["a.mp3"],
+            &[],
             cache_root.path(),
             "t",
             9,
+            u64::MAX,
         ) {
             Err(IpcError::ResourceLimit { cap, limit: 9, .. }) => {
                 assert_eq!(cap, "MAX_OSZ_EXTRACTED_BYTES");

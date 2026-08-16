@@ -3,10 +3,127 @@
 //! directory (or its .osz cache dir) before being exposed; traversal and
 //! absolute references are treated as missing (spec, tauri layer)
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::IpcError;
+
+/// the extensions osu! accepts for a sample, in the order a store tries them.
+/// `.wav` first is osu-framework's own preference and matters when a folder
+/// ships the same stem twice
+pub const SAMPLE_EXTENSIONS: [&str; 3] = ["wav", "mp3", "ogg"];
+
+/// every hit-sample file the beatmap's own folder holds, keyed by the LOOKUP
+/// NAME the frontend's chain will ask for.
+///
+/// keyed both ways on purpose: a default sample is asked for by stem
+/// (`normal-hitnormal`) while an object's explicit `hitSample` is asked for
+/// by full file name first and by stem second
+/// (converthitobjectparser.cs:693-697), so both forms are registered when the
+/// engine's stem set contains them.
+///
+/// this needs no new path handling: `read_dir` over the canonicalized
+/// directory yields only its own entries, so the "strictly inside" property
+/// `resolve_media_path` enforces for a named file holds here by construction.
+/// names are compared case-insensitively, which is what osu! itself does.
+///
+/// the total is charged against `engine::limits::MAX_SAMPLE_BYTES`, the same
+/// budget the `.osz` extractor charges as it writes. a folder load has no
+/// extraction step to bound it, so without this a folder holding gigabytes of
+/// sample files would surface as the frontend quietly declining to decode --
+/// a silence with no explanation, where the archive path gets a typed error
+pub fn resolve_sample_files(
+    dir: &Path,
+    stems: &BTreeSet<String>,
+) -> Result<BTreeMap<String, PathBuf>, IpcError> {
+    resolve_sample_files_with_budget(dir, stems, engine::limits::MAX_SAMPLE_BYTES)
+}
+
+/// the budget is a parameter so the boundary test can drive it with tiny
+/// files, mirroring every other capped entry point in this crate
+pub fn resolve_sample_files_with_budget(
+    dir: &Path,
+    stems: &BTreeSet<String>,
+    max_bytes: u64,
+) -> Result<BTreeMap<String, PathBuf>, IpcError> {
+    let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let Ok(dir) = dunce::canonicalize(dir) else {
+        return Ok(found);
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(found);
+    };
+    // RESOLUTION FIRST, BUDGET SECOND. extension precedence decides which file
+    // a stem resolves to, and only that winner is ever fetched and decoded --
+    // so charging as the walk goes would bill an `.mp3` a `.wav` then beat,
+    // and a folder could be refused over bytes nothing would ever read. sizes
+    // are collected here and spent below, once the winners are known
+    let mut sizes: BTreeMap<PathBuf, u64> = BTreeMap::new();
+    // the keys an exact filename has claimed, which no stem-inferred candidate
+    // may take back -- see the branch below
+    let mut exact: BTreeSet<String> = BTreeSet::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        let Some((stem, extension)) = name.rsplit_once('.') else {
+            continue;
+        };
+        if !SAMPLE_EXTENSIONS.contains(&extension) {
+            continue;
+        }
+        let wanted = stems.contains(&name) || stems.contains(stem);
+        if !wanted {
+            continue;
+        }
+        let path = entry.path();
+        sizes.insert(path.clone(), entry.metadata().map(|m| m.len()).unwrap_or(0));
+        // the full name answers an explicit hitSample; the stem answers every
+        // default lookup. a stem already claimed by an earlier extension keeps
+        // it, which is what makes SAMPLE_EXTENSIONS an order rather than a set.
+        //
+        // an EXACT name match outranks an inferred one unconditionally, and
+        // that is not hypothetical tidiness: `foo.wav.mp3` carries the stem
+        // `foo.wav`, so a map whose hitSample names `foo.wav` would resolve to
+        // whichever of the two `read_dir` happened to reach first -- the same
+        // folder answering differently on different machines
+        if stems.contains(&name) && exact.insert(name.clone()) {
+            found.insert(name.clone(), path.clone());
+        }
+        if stems.contains(stem) && !exact.contains(stem) {
+            let existing = found.get(stem).and_then(|path| sample_extension_rank(path));
+            let rank = SAMPLE_EXTENSIONS.iter().position(|e| *e == extension);
+            if existing.is_none() || rank < existing {
+                found.insert(stem.to_string(), path);
+            }
+        }
+    }
+
+    // charged per RESOLVED SOURCE PATH, which is the identity the frontend's
+    // decode cache keys on too: several lookup names legitimately resolve to
+    // one file (a stem and the explicit full name beside it), and that is one
+    // file to decode and one charge to make. the set also fixes the order, so
+    // which file tips the budget no longer depends on readdir order
+    let mut used: u64 = 0;
+    for path in found.values().collect::<BTreeSet<_>>() {
+        used = used.saturating_add(sizes.get(path).copied().unwrap_or(0));
+        if used > max_bytes {
+            return Err(IpcError::ResourceLimit {
+                cap: "MAX_SAMPLE_BYTES".to_string(),
+                limit: max_bytes,
+                actual: used,
+            });
+        }
+    }
+    Ok(found)
+}
+
+fn sample_extension_rank(path: &Path) -> Option<usize> {
+    let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    SAMPLE_EXTENSIONS.iter().position(|e| *e == extension)
+}
 
 /// dunce instead of std: std's canonicalize returns \\?\-verbatim windows
 /// paths, which break the asset protocol url round-trip; dunce resolves
@@ -48,7 +165,7 @@ pub fn read_file_capped(path: &Path, cap: u64, cap_name: &'static str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{read_file_capped, resolve_media_path};
+    use super::{read_file_capped, resolve_media_path, resolve_sample_files, resolve_sample_files_with_budget};
     use crate::error::IpcError;
 
     #[test]
@@ -104,5 +221,120 @@ mod tests {
             }) => assert_eq!(cap, "TEST_CAP"),
             other => panic!("expected ResourceLimit, got {other:?}"),
         }
+    }
+
+    fn stems<const N: usize>(names: [&str; N]) -> std::collections::BTreeSet<String> {
+        names.into_iter().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn resolves_a_folders_own_sample_files_by_lookup_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("normal-hitnormal.wav"), b"x").unwrap();
+        std::fs::write(dir.path().join("Kick.WAV"), b"x").unwrap();
+        std::fs::write(dir.path().join("unrelated.wav"), b"x").unwrap();
+        std::fs::write(dir.path().join("bg.jpg"), b"x").unwrap();
+
+        let found = resolve_sample_files(dir.path(), &stems(["normal-hitnormal", "kick.wav", "kick"])).unwrap();
+
+        // a default lookup asks by stem; an explicit hitSample asks by full
+        // name first and by stem second, so both are registered
+        assert!(found.contains_key("normal-hitnormal"));
+        assert!(found.contains_key("kick.wav"));
+        assert!(found.contains_key("kick"));
+        // nothing the engine's resolution never asks for
+        assert!(!found.contains_key("unrelated"));
+        // and nothing that is not a sample at all
+        assert!(!found.contains_key("bg"));
+    }
+
+    #[test]
+    fn a_stem_shipped_twice_takes_the_extension_a_sample_store_prefers() {
+        // osu-framework tries .wav before .mp3; a folder holding both must
+        // resolve the same way whichever order read_dir happens to yield
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("soft-hitclap.mp3"), b"x").unwrap();
+        std::fs::write(dir.path().join("soft-hitclap.wav"), b"x").unwrap();
+
+        let found = resolve_sample_files(dir.path(), &stems(["soft-hitclap"])).unwrap();
+        assert_eq!(
+            found.get("soft-hitclap").unwrap().extension().unwrap(),
+            "wav"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_directory_resolves_nothing_rather_than_failing() {
+        // a map whose folder vanished between load and scan is a scene without
+        // custom hitsounds, not a failed load
+        let found = resolve_sample_files(std::path::Path::new("does/not/exist"), &stems(["normal-hitnormal"])).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn folder_sample_byte_budget_boundary() {
+        // engine::limits::MAX_SAMPLE_BYTES on the folder side. the archive path
+        // is charged by the extractor as it writes; a folder load has no such
+        // step, so without this the cap would be reached only at decode time
+        // and surface as an unexplained silence
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("normal-hitnormal.wav"), vec![0u8; 6]).unwrap();
+        let wanted = stems(["normal-hitnormal"]);
+
+        assert!(resolve_sample_files_with_budget(dir.path(), &wanted, 6).is_ok());
+        match resolve_sample_files_with_budget(dir.path(), &wanted, 5) {
+            Err(IpcError::ResourceLimit { cap, limit: 5, .. }) => assert_eq!(cap, "MAX_SAMPLE_BYTES"),
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_file_registered_under_two_keys_is_charged_once() {
+        // an explicit hitSample registers its file under both its full name
+        // and its stem; charging twice would halve the real allowance
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("kick.wav"), vec![0u8; 6]).unwrap();
+        let found = resolve_sample_files_with_budget(dir.path(), &stems(["kick.wav", "kick"]), 6).unwrap();
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn an_extension_that_loses_precedence_is_not_charged() {
+        // SAMPLE_EXTENSIONS is an ORDER: a stem holding both a .wav and a .mp3
+        // resolves to the .wav, and the .mp3 is never fetched or decoded.
+        // charging it anyway would refuse a folder over bytes nothing reads
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("soft-hitnormal.wav"), vec![0u8; 6]).unwrap();
+        std::fs::write(dir.path().join("soft-hitnormal.mp3"), vec![0u8; 20]).unwrap();
+        let wanted = stems(["soft-hitnormal"]);
+
+        let found = resolve_sample_files_with_budget(dir.path(), &wanted, 6)
+            .expect("the winning .wav fits; the losing .mp3 is not the budget's business");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found["soft-hitnormal"].extension().unwrap().to_string_lossy(),
+            "wav"
+        );
+
+        // and the winner is still charged: one byte under and it is refused
+        match resolve_sample_files_with_budget(dir.path(), &wanted, 5) {
+            Err(IpcError::ResourceLimit { cap, limit: 5, .. }) => assert_eq!(cap, "MAX_SAMPLE_BYTES"),
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_exact_filename_outranks_a_file_that_merely_stems_to_it() {
+        // `foo.wav.mp3` carries the stem `foo.wav`, so both files answer the
+        // key an explicit `hitSample: foo.wav` asks for. without exact
+        // matches outranking inferred ones the winner is whichever `read_dir`
+        // reached first -- the same folder resolving differently on different
+        // machines, which is the failure mode this repo refuses everywhere else
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foo.wav"), vec![0u8; 4]).unwrap();
+        std::fs::write(dir.path().join("foo.wav.mp3"), vec![0u8; 4]).unwrap();
+
+        let found = resolve_sample_files_with_budget(dir.path(), &stems(["foo.wav"]), u64::MAX).unwrap();
+        assert_eq!(found["foo.wav"], dir.path().join("foo.wav"));
     }
 }
