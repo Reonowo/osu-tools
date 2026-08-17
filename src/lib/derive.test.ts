@@ -73,13 +73,14 @@ describe("deriveScene", () => {
 	test("judgements group by object and severity ticks keep non-great grades", () => {
 		const d = deriveScene(testScene());
 		expect(d.judgementsByObject[0]).toHaveLength(1);
-		expect(d.severityTicks).toEqual([{ time: 980, grade: "ok" }]);
+		expect(d.severityTicks).toEqual([{ time: 980, grade: "ok", objectIndex: 0 }]);
 	});
 
 	test("notSimulated scenes derive empty judgement data", () => {
 		const d = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
 		expect(d.judgementsByObject[0]).toEqual([]);
 		expect(d.severityTicks).toEqual([]);
+		expect(d.severityTargets).toEqual({ ok: [], meh: [], miss: [] });
 		expect(d.presses).toHaveLength(1); // analysis data still derives
 	});
 });
@@ -334,10 +335,39 @@ describe("deriveScene object lane", () => {
 			)
 		);
 		expect(d.severityTicks).toEqual([
-			{ time: 1005, grade: "meh" },
-			{ time: 2500, grade: "ok" },
-			{ time: 4000, grade: "miss" }
+			{ time: 1005, grade: "meh", objectIndex: 0 },
+			{ time: 2500, grade: "ok", objectIndex: 1 },
+			{ time: 4000, grade: "miss", objectIndex: 2 }
 		]);
+	});
+
+	test("the derived target lists agree with the ticks they were built from", () => {
+		// what is pinned here is the join, not the search: which ticks exist and
+		// which grades they carry is the test above, and where a jump lands is
+		// judgement-nav's own. this is the one seam between them -- that every
+		// mark the strip draws is reachable, under its own grade, at its own
+		// object's appearance
+		const d = deriveScene(
+			laneScene(
+				[circle(1000), slider(2000, 2500, [nested("head", 2000)]), spinner(3000, 4000), circle(5000)],
+				[
+					event(1005, 0, { type: "circle", grade: "meh" }),
+					event(2500, 1, { type: "sliderAggregate", grade: "ok" }),
+					event(4000, 2, { type: "spinnerFinal", grade: "miss" }),
+					event(5000, 3, { type: "circle", grade: "great" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		const objects = Object.values(d.severityTargets).flat();
+		expect(objects.map((target) => target.objectIndex).sort()).toEqual(
+			d.severityTicks.map((tick) => tick.objectIndex).sort()
+		);
+		// each landing is its object's own start time, never the event time the
+		// tick beside it carries (1005 / 2500 / 4000 above)
+		expect(d.severityTargets.meh).toEqual([{ objectIndex: 0, landingTime: 1000, grade: "meh" }]);
+		expect(d.severityTargets.ok).toEqual([{ objectIndex: 1, landingTime: 2000, grade: "ok" }]);
+		expect(d.severityTargets.miss).toEqual([{ objectIndex: 2, landingTime: 3000, grade: "miss" }]);
 	});
 
 	test("invariant: objects carrying a tether equal the analysis hit-error list in count", () => {

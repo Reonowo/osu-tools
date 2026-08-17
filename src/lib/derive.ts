@@ -5,6 +5,7 @@ import { HIT_FADE_OUT_TIME } from "../engine/argon";
 import type { PhysicalKey } from "../engine/buttons";
 import { buttonEdges, pressEdges, type ButtonEdges, type Press } from "../engine/interpolation";
 import { analyseScene, judgedTime, type ReplayAnalysis } from "./analysis";
+import { severityTargets, type SeverityTargets, type SeverityTick } from "./judgement-nav";
 import type { Grade, JudgementEventDto, LoadedScene } from "./scene-types";
 
 /** the tether: the bond from an object to its judging press. exists exactly
@@ -62,7 +63,13 @@ export interface DerivedScene {
 	 * renderPlan.objects */
 	objectLane: ObjectLaneEntry[];
 	/** the overview strip's below-great marks, height meaning severity */
-	severityTicks: { time: number; grade: "ok" | "meh" | "miss" }[];
+	severityTicks: SeverityTick[];
+	/** the same marks as navigable targets, per grade and sorted by where a
+	 * jump lands rather than when the judgement fired (lib/judgement-nav.ts).
+	 * built here rather than by its consumers so it re-derives on every landed
+	 * edit for free: fix a miss, the engine re-simulates, this walk runs again
+	 * and the target is gone with no invalidation logic anywhere */
+	severityTargets: SeverityTargets;
 	/** hit-timing and cursor statistics for the analysis panel */
 	analysis: ReplayAnalysis;
 	/** the replay panel's numbers, simulated-primary with header references */
@@ -209,7 +216,7 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		nestedMarks:
 			object.kind.type === "slider" ? object.kind.nested.filter((n) => n.kind !== "tick").map((n) => n.time) : []
 	}));
-	const severityTicks: DerivedScene["severityTicks"] = [];
+	const severityTicks: SeverityTick[] = [];
 	// a late judgement extends its drawable's fade past the object's endTime
 	// (objectLifetime in renderer/playfield.ts), and the playback bounds must
 	// cover that full fade or the clock pauses mid-animation when the audio
@@ -227,7 +234,12 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 			// circles, the aggregate for sliders, the final for spinners -- kind
 			// alone names the source, so no per-object-kind dispatch is needed
 			if (kind.type === "circle" || kind.type === "sliderAggregate" || kind.type === "spinnerFinal") {
-				if (kind.grade !== "great") severityTicks.push({ time: event.time, grade: kind.grade });
+				// the object rides along with the mark: the strip draws by time, but
+				// navigating to a mark needs the object it belongs to, and this push
+				// is the one place both are already in hand
+				if (kind.grade !== "great") {
+					severityTicks.push({ time: event.time, grade: kind.grade, objectIndex: event.objectIndex });
+				}
 				if (entry !== undefined) entry.grade = kind.grade;
 			}
 			if (entry === undefined || object === undefined) continue;
@@ -264,6 +276,7 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		judgementsByObject,
 		objectLane,
 		severityTicks,
+		severityTargets: severityTargets(severityTicks, objects),
 		analysis: analyseScene(scene, presses),
 		stats: replayStats(scene)
 	};
