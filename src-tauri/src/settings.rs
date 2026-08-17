@@ -58,7 +58,14 @@ pub const BACKGROUND_DIM_DEFAULT: u32 = 70;
 pub const AUDIO_OFFSET_MIN: f64 = -500.0;
 pub const AUDIO_OFFSET_MAX: f64 = 500.0;
 
-/// how many recently opened replays the start screen keeps
+/// how many recently opened replays the list keeps.
+///
+/// this also bounds how long a beatmap association lives: every open resolves
+/// through the association stored on the `.osr`'s entry, and the entry is
+/// evicted here, so a hand-paired beatmap (and a recorded mismatch consent) is
+/// forgotten once this many *other* replays have been opened since. deliberate
+/// for now -- TODO.md tracks it beside the other association-repair gap -- but
+/// it is a cap on a *pairing*, not only on a list, which is why it says so here
 pub const MAX_RECENTS: usize = 12;
 
 /// the defensive caps on the keybind override map. the frontend owns what an
@@ -219,10 +226,12 @@ impl Default for GameplayPrefs {
     }
 }
 
-/// one entry in the start screen's recents list: what the card renders, plus
-/// the beatmap association `commands::load_recent_replay` reopens through.
-/// every association field hydrates absent, so an entry written before they
-/// existed simply reopens the way it always did (the osu! stable lookup)
+/// one entry in the recents list: what the card renders, plus the beatmap
+/// association every open resolves through (`commands::saved_beatmap`). the
+/// association belongs to the `.osr`, not to this entry -- the entry is only
+/// where it is stored (docs/adr/0005). every association field hydrates absent,
+/// so an entry written before they existed simply opens the way it always did
+/// (the osu! stable lookup)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecentReplay {

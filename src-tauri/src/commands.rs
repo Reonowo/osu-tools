@@ -103,9 +103,10 @@ fn record_recent(state: &AppState, osr_path: &str, outcome: &LoadOutcome) {
     }
 }
 
-/// the association the recents entry for `osr_path` carries, if any. an
-/// unknown path (or a legacy entry) yields an empty association, which the
-/// pipeline resolves exactly like a plain auto load
+/// the beatmap association `osr_path` carries, if any. the recents entry is
+/// where it is stored, not what it belongs to (docs/adr/0005): an unknown path
+/// -- or a legacy entry written before the association existed -- yields an
+/// empty one, which the pipeline resolves exactly like a plain auto load
 fn saved_beatmap(settings: &Settings, osr_path: &str) -> SavedBeatmap {
     let Some(entry) = settings.recents.iter().find(|r| r.osr_path == osr_path) else {
         return SavedBeatmap::default();
@@ -118,26 +119,34 @@ fn saved_beatmap(settings: &Settings, osr_path: &str) -> SavedBeatmap {
     }
 }
 
+/// the one open: a picked file, a drop, a recents card, and every future route
+/// alike. the frontend sends only the `.osr` path -- the beatmap association
+/// lives in the settings file this process owns, so passing it across the
+/// boundary would only be a second copy to keep in sync
 #[tauri::command]
 pub async fn load_replay<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     osr_path: String,
 ) -> Result<LoadedScene, IpcError> {
-    let override_path = state
-        .settings
-        .lock()
-        .expect("settings lock")
-        .osu_stable_path
-        .clone();
+    let (override_path, saved) = {
+        let settings = state.settings.lock().expect("settings lock");
+        (
+            settings.osu_stable_path.clone(),
+            saved_beatmap(&settings, &osr_path),
+        )
+    };
     let listing_cache = Arc::clone(&state.listing_cache);
+    let cache_root = state.cache_root.clone();
     let osr_path_for_recents = osr_path.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         load::load_replay_auto(
             Path::new(&osr_path),
+            &saved,
             override_path.as_deref().map(Path::new),
             &crate::stable::default_candidates(),
             &listing_cache,
+            &cache_root,
         )
     })
     .await
@@ -161,41 +170,6 @@ pub async fn load_replay_with_beatmap<R: Runtime>(
             Path::new(&osr_path),
             Path::new(&beatmap_path),
             allow_mismatch,
-            &cache_root,
-        )
-    })
-    .await
-    .map_err(|e| join_err("load", e))??;
-    record_recent(state.inner(), &osr_path_for_recents, &outcome);
-    Ok(install_scene(&app, state.inner(), outcome))
-}
-
-/// reopening from the recents list. the frontend sends only the .osr path:
-/// the beatmap association lives in the settings file this process owns, so
-/// passing it across the boundary would only be a second copy to keep in sync
-#[tauri::command]
-pub async fn load_recent_replay<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-    osr_path: String,
-) -> Result<LoadedScene, IpcError> {
-    let (override_path, saved) = {
-        let settings = state.settings.lock().expect("settings lock");
-        (
-            settings.osu_stable_path.clone(),
-            saved_beatmap(&settings, &osr_path),
-        )
-    };
-    let listing_cache = Arc::clone(&state.listing_cache);
-    let cache_root = state.cache_root.clone();
-    let osr_path_for_recents = osr_path.clone();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        load::load_recent_replay(
-            Path::new(&osr_path),
-            &saved,
-            override_path.as_deref().map(Path::new),
-            &crate::stable::default_candidates(),
-            &listing_cache,
             &cache_root,
         )
     })
@@ -733,7 +707,6 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 load_replay,
                 load_replay_with_beatmap,
-                load_recent_replay,
                 get_settings,
                 set_osu_stable_path,
                 set_viewer_prefs,
@@ -1225,7 +1198,10 @@ mod tests {
     }
 
     #[test]
-    fn reopening_a_recent_resolves_through_its_association_and_refreshes_it() {
+    fn an_open_resolves_through_the_saved_association_and_refreshes_it() {
+        // the plain open command, not a second "reopen" one: after the collapse
+        // (docs/adr/0005) a browse, a drop and a recents card are the same call,
+        // so the association a hand-paired beatmap left behind answers all three
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("config");
         let app = mock_app(config_dir.clone(), dir.path().join("cache"));
@@ -1250,7 +1226,7 @@ mod tests {
         let renamed = dir.path().join("renamed.osu");
         std::fs::rename(&osu_path, &renamed).unwrap();
 
-        let scene = tauri::async_runtime::block_on(load_recent_replay(
+        let scene = tauri::async_runtime::block_on(load_replay(
             app.handle().clone(),
             app.state(),
             osr_path.display().to_string(),
@@ -1277,10 +1253,11 @@ mod tests {
     }
 
     #[test]
-    fn a_consented_override_persists_and_the_reopen_resolves_through_it() {
+    fn a_consented_override_persists_and_every_later_open_resolves_through_it() {
         // the whole path a user walks when the picked beatmap is not the one
-        // the replay was played on: consent once, and every reopen must land
-        // back on that same map. the three legs are covered apart (here,
+        // the replay was played on: consent once, and every later open must
+        // land back on that same map -- through any route, since there is only
+        // the one open command. the three legs are covered apart (here,
         // settings.rs, load.rs); this is the one that fails as "the app
         // silently loaded the wrong beatmap"
         use crate::error::Warning;
@@ -1338,7 +1315,7 @@ mod tests {
             settings.recents
         );
 
-        let reopened = tauri::async_runtime::block_on(load_recent_replay(
+        let reopened = tauri::async_runtime::block_on(load_replay(
             app.handle().clone(),
             app.state(),
             osr_path.display().to_string(),
@@ -1379,7 +1356,7 @@ mod tests {
     }
 
     #[test]
-    fn reopening_without_an_association_reports_the_missing_install() {
+    fn an_open_without_an_association_reports_the_missing_install() {
         // an entry written before the association existed, or a path that is
         // not in recents at all: nothing was consulted but the install, so
         // its own error stands rather than folding into beatmapNotFound.
@@ -1392,7 +1369,7 @@ mod tests {
         std::fs::create_dir_all(&no_install).unwrap();
         set_osu_stable_path(app.state(), Some(no_install.display().to_string())).unwrap();
 
-        let err = tauri::async_runtime::block_on(load_recent_replay(
+        let err = tauri::async_runtime::block_on(load_replay(
             app.handle().clone(),
             app.state(),
             osr_path.display().to_string(),
@@ -1401,7 +1378,46 @@ mod tests {
         assert!(matches!(err, IpcError::OsuDbNotFound { .. }), "got {err:?}");
         assert!(
             get_settings(app.state()).recents.is_empty(),
-            "a failed reopen records nothing"
+            "a failed open records nothing"
+        );
+    }
+
+    #[test]
+    fn a_first_open_still_resolves_through_the_stable_install() {
+        // the regression that matters most: consulting the association must
+        // leave the case where there is none -- every first open of every
+        // replay -- resolving exactly as it always did, through osu!.db
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let install = dir.path().join("install");
+        let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("stacking-v14.osu")).unwrap();
+        let md5 = crate::testutil::fake_install(&install, "1 fixture", "map.osu", &osu_bytes);
+        // the replay sits nowhere near the install, so only the osu!.db lookup
+        // can be what finds its beatmap
+        let osr_path = dir.path().join("replay.osr");
+        std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
+        set_osu_stable_path(app.state(), Some(install.display().to_string())).unwrap();
+
+        let scene = tauri::async_runtime::block_on(load_replay(
+            app.handle().clone(),
+            app.state(),
+            osr_path.display().to_string(),
+        ))
+        .unwrap();
+        assert_eq!(scene.beatmap.md5, md5);
+        // and the open it just performed is what leaves an association behind
+        let settings = get_settings(app.state());
+        assert_eq!(
+            settings.recents[0].beatmap_path.as_deref(),
+            Some(
+                install
+                    .join("Songs")
+                    .join("1 fixture")
+                    .join("map.osu")
+                    .display()
+                    .to_string()
+                    .as_str()
+            )
         );
     }
 

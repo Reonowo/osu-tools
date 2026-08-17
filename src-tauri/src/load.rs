@@ -418,30 +418,6 @@ fn load_with_osz(
     )
 }
 
-/// the primary flow: parse header -> md5 -> osu!.db lookup -> scene (spec,
-/// tauri layer). the caller supplies the settings override and the standard
-/// candidates so tests can inject a fake install
-pub fn load_replay_auto(
-    osr_path: &Path,
-    override_path: Option<&Path>,
-    candidates: &[PathBuf],
-    listing_cache: &ListingCache,
-) -> Result<LoadOutcome, IpcError> {
-    let osr = read_and_decode_osr(osr_path)?;
-    let md5 = match osr.header.beatmap_md5.as_deref() {
-        Some(m) if !m.is_empty() => m.to_lowercase(),
-        _ => {
-            return Err(IpcError::ReplayParse {
-                message: "replay header carries no beatmap hash".into(),
-            })
-        }
-    };
-    build_outcome(
-        osr,
-        stable_source(&md5, override_path, candidates, listing_cache)?,
-    )
-}
-
 /// the osu!.db lookup on its own: parse the listing, verify the file on disk
 /// still hashes to `md5`, decode it
 fn stable_source(
@@ -616,13 +592,23 @@ fn scan_dir_for_beatmap(
     }
 }
 
-/// reopening from the recents list: the remembered association is tried
-/// first, so a manually paired beatmap survives a restart and an installed
-/// one costs no osu!.db parse. the walk is the exact saved source, then the
-/// saved folder, then the normal stable lookup, and every miss falls through
-/// silently -- only the replay itself being unreadable, or a beatmap that
-/// matched by hash and then failed to load, stops it early
-pub fn load_recent_replay(
+/// the primary flow, whichever route asked for it: parse header -> resolve the
+/// beatmap -> scene (spec, tauri layer). the beatmap association this `.osr`
+/// carries is tried first, so a manually paired beatmap survives a restart and
+/// an installed one costs no osu!.db parse. the walk is the exact saved source,
+/// then the saved folder, then the normal stable lookup, and every miss falls
+/// through silently -- only the replay itself being unreadable, or a beatmap
+/// that matched by hash and then failed to load, stops it early.
+///
+/// an *empty* association is not a second code path: nothing before the stable
+/// lookup can answer, the header-md5 guard lands in the same place, and the
+/// `OsuDbNotFound` remap below is gated on an association having been tried. so
+/// a replay with no recents entry -- every first open of every replay -- resolves
+/// exactly as a plain header-md5 lookup does (docs/adr/0005).
+///
+/// the caller supplies the settings override and the standard candidates so
+/// tests can inject a fake install
+pub fn load_replay_auto(
     osr_path: &Path,
     saved: &SavedBeatmap,
     override_path: Option<&Path>,
@@ -648,8 +634,8 @@ pub fn load_recent_replay(
         }
     }
     if header_md5.is_empty() {
-        // nothing left to look the beatmap up by; same diagnosis
-        // load_replay_auto gives such a replay
+        // nothing left to look the beatmap up by, and the association -- if
+        // there was one -- already declined to answer
         return Err(IpcError::ReplayParse {
             message: "replay header carries no beatmap hash".into(),
         });
@@ -1149,6 +1135,25 @@ mod tests {
         }
     }
 
+    /// an open of a replay nothing has an association for -- every first open
+    /// of every replay, and the case the walk must leave behaving exactly as a
+    /// plain header-md5 lookup
+    fn auto_lookup(
+        osr_path: &std::path::Path,
+        override_path: Option<&std::path::Path>,
+        candidates: &[std::path::PathBuf],
+        cache_root: &std::path::Path,
+    ) -> Result<LoadOutcome, IpcError> {
+        load_replay_auto(
+            osr_path,
+            &SavedBeatmap::default(),
+            override_path,
+            candidates,
+            &ListingCache::default(),
+            cache_root,
+        )
+    }
+
     #[test]
     fn auto_lookup_loads_through_a_fake_stable_install() {
         let root = tempfile::tempdir().unwrap();
@@ -1157,8 +1162,7 @@ mod tests {
         let osr_path = root.path().join("replay.osr");
         std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
 
-        let cache = crate::stable::ListingCache::default();
-        let outcome = load_replay_auto(&osr_path, Some(root.path()), &[], &cache).unwrap();
+        let outcome = auto_lookup(&osr_path, Some(root.path()), &[], &root.path().join("cache")).unwrap();
         assert_eq!(outcome.scene.beatmap.md5, md5);
         assert!(matches!(
             outcome.scene.simulation,
@@ -1173,9 +1177,10 @@ mod tests {
         let osr_path = dir.path().join("replay.osr");
         std::fs::write(&osr_path, osr_bytes("00000000000000000000000000000000", 0, None)).unwrap();
         let empty = tempfile::tempdir().unwrap();
+        let candidates = [empty.path().to_path_buf()];
+        let cache_root = dir.path().join("cache");
 
-        let cache = crate::stable::ListingCache::default();
-        match load_replay_auto(&osr_path, None, &[empty.path().to_path_buf()], &cache) {
+        match auto_lookup(&osr_path, None, &candidates, &cache_root) {
             Err(IpcError::OsuDbNotFound { searched }) => assert_eq!(searched.len(), 1),
             other => panic!("expected OsuDbNotFound, got {other:?}"),
         }
@@ -1188,8 +1193,7 @@ mod tests {
         let osr_path = root.path().join("replay.osr");
         std::fs::write(&osr_path, osr_bytes("11111111111111111111111111111111", 0, None)).unwrap();
 
-        let cache = crate::stable::ListingCache::default();
-        match load_replay_auto(&osr_path, Some(root.path()), &[], &cache) {
+        match auto_lookup(&osr_path, Some(root.path()), &[], &root.path().join("cache")) {
             Err(IpcError::BeatmapNotFound { md5 }) => {
                 assert_eq!(md5, "11111111111111111111111111111111");
             }
@@ -1202,8 +1206,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let osr_path = root.path().join("replay.osr");
         std::fs::write(&osr_path, osr_bytes("", 0, None)).unwrap();
-        let cache = crate::stable::ListingCache::default();
-        match load_replay_auto(&osr_path, Some(root.path()), &[], &cache) {
+        match auto_lookup(&osr_path, Some(root.path()), &[], &root.path().join("cache")) {
             Err(IpcError::ReplayParse { message }) => assert!(message.contains("beatmap hash")),
             other => panic!("expected ReplayParse, got {other:?}"),
         }
@@ -1216,7 +1219,7 @@ mod tests {
         saved: &SavedBeatmap,
         cache_root: &std::path::Path,
     ) -> Result<LoadOutcome, IpcError> {
-        load_recent_replay(osr_path, saved, None, &[], &ListingCache::default(), cache_root)
+        load_replay_auto(osr_path, saved, None, &[], &ListingCache::default(), cache_root)
     }
 
     /// writes the slider-zoo fixture (a valid map that is not the one
@@ -1380,7 +1383,7 @@ mod tests {
             ..SavedBeatmap::default()
         };
 
-        let outcome = load_recent_replay(
+        let outcome = load_replay_auto(
             &osr_path,
             &saved,
             Some(root.path()),
@@ -1431,7 +1434,7 @@ mod tests {
         let cache_root = dir.path().join("cache");
         let candidates = vec![elsewhere.path().to_path_buf()];
         let reopen_without_install = |saved: &SavedBeatmap| {
-            load_recent_replay(
+            load_replay_auto(
                 &osr_path,
                 saved,
                 None,
