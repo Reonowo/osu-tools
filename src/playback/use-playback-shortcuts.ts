@@ -225,9 +225,10 @@ function registrationsFor(row: EffectiveKeybind, key: string): UseHotkeyDefiniti
 const CODE_MATCHED: readonly KeybindAction[] = ["viewportReset"];
 
 /** the global actions registered somewhere else. this hook mounts with
- * AppShell, which exists only once a scene is loaded; the help binding has to
- * work on the start screen too, so App registers it (use-help-shortcut.ts) */
-const APP_LEVEL: readonly KeybindAction[] = ["showHelp"];
+ * AppShell, which exists only once a scene is loaded; the help binding and the
+ * open accelerator both have to work on the start screen too, so App registers
+ * them (use-help-shortcut.ts, use-open-shortcut.ts) */
+const APP_LEVEL: readonly KeybindAction[] = ["showHelp", "openMenu"];
 
 /** the actions this hook registers through the library: every global one
  * matched on its printed character. the code-matched rows cannot be registered

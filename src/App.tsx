@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { AppShell } from "@/components/shell/AppShell";
+import { DiscardDialog } from "@/components/DiscardDialog";
 import { ExportDialog } from "@/components/ExportDialog";
 import { HelpOverlay } from "@/components/HelpOverlay";
 import { MismatchDialog } from "@/components/MismatchDialog";
@@ -14,6 +15,7 @@ import { describeIpcError } from "@/state/errors";
 import { installFocusModality } from "@/playback/focus-modality";
 import { warmBundledSamples } from "@/playback/hitsounds";
 import { useHelpShortcut } from "@/playback/use-help-shortcut";
+import { useOpenShortcut } from "@/playback/use-open-shortcut";
 import { asksPageZoomReset } from "@/playback/shortcut-guards";
 import { installPrefsPersistence } from "@/state/persist";
 import { useViewerStore, viewerStore } from "@/state/store";
@@ -30,9 +32,13 @@ export default function App() {
 	const lastError = useViewerStore((s) => s.lastError);
 
 	// registered here rather than with the other global bindings: those mount
-	// with AppShell, which exists only once a scene is loaded, and the keybind
-	// list has to be reachable from the start screen (use-help-shortcut.ts)
+	// with AppShell, which exists only once a scene is loaded, and both of these
+	// have to be reachable from the start screen -- the keybind list because it
+	// is most useful before you have started, the open accelerator because that
+	// is where a user would first press it (use-help-shortcut.ts,
+	// use-open-shortcut.ts)
 	useHelpShortcut();
+	useOpenShortcut();
 
 	function selectCategory(category: SettingsCategory) {
 		lastCategory.current = category;
@@ -133,6 +139,9 @@ export default function App() {
 				<AppShell onOpenSettings={openSettings} onOpenExport={() => setExportOpen(true)} />
 			)}
 			<MismatchDialog />
+			{/* app-rooted for the reason MismatchDialog is: it has to cover drop,
+			which belongs to no component */}
+			<DiscardDialog />
 			<HelpOverlay />
 			<SettingsDialog
 				category={settingsCategory}

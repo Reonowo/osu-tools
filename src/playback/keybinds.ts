@@ -59,6 +59,7 @@ export type KeybindAction =
 	| "toggleSnap"
 	| "cancel"
 	| "eraseSelection"
+	| "openMenu"
 	| "showHelp";
 
 /** where a keybind is registered: `global` is use-playback-shortcuts, through
@@ -297,6 +298,20 @@ export const KEYBINDS = {
 			{ hotkey: "Delete", codes: ["Delete"] },
 			{ hotkey: "Backspace", codes: ["Backspace"] }
 		]
+	},
+	// `Mod` rather than `Control`, unlike viewportReset above: this is the open
+	// accelerator every desktop app has, which means ctrl off the mac and cmd on
+	// it, and `Mod` is the token that resolves per platform. matched on the
+	// printed character like every other letter binding, so a rebind on a
+	// non-latin layout is what fixes it there (docs/adr/0002)
+	openMenu: {
+		action: "openMenu",
+		group: "general",
+		owner: "global",
+		by: "key",
+		label: "open a replay",
+		locked: null,
+		defaults: one("Mod+O", "KeyO")
 	},
 	// matched on the key rather than the code: a function key reports the same
 	// `key` on every layout, so the layout question the code-matched path
