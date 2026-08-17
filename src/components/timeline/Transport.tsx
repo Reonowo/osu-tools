@@ -13,8 +13,10 @@
 // frame-stepping live in AppShell's single usePlaybackShortcuts() call --
 // this file never adds a second one
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
+	ChevronLeft,
+	ChevronRight,
 	Pause,
 	Play,
 	SkipBack,
@@ -32,11 +34,14 @@ import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatTime } from "@/lib/format";
+import { NO_SEVERITY_TARGETS, SEVERITY_GRADES, type SeverityGrade } from "@/lib/judgement-nav";
+import { simulationReasonText } from "@/lib/simulation";
+import { cn } from "@/lib/utils";
 import { speakerState, type VolumeLevels } from "@/playback/audio-levels";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
-import { keybindSuffix } from "@/playback/keybinds";
-import { stepFrame } from "@/playback/use-playback-shortcuts";
+import { keybindSuffix, SEVERITY_JUMP_KEYBINDS, type EffectiveKeybind } from "@/playback/keybinds";
+import { severityJumpNow, severitySeek, stepFrame } from "@/playback/use-playback-shortcuts";
 import { useViewerStore } from "@/state/store";
 
 // restart and the two frame-step buttons share one flanking style; only
@@ -56,6 +61,148 @@ const RATES: { value: number; label: string }[] = [
 	{ value: 1.5, label: "1.5×" },
 	{ value: 2, label: "2×" }
 ];
+
+// ---------------------------------------------------------------------------
+// severity jump
+// ---------------------------------------------------------------------------
+
+/** the three chips, left to right, in the overview strip's own severity
+ * colours (OverviewStrip's TICK_CLASS) so the control and the readout it
+ * navigates read as one system. text labels rather than glyphs: a lucide `X`
+ * for miss reads as "close" everywhere else in this app, and three tiny
+ * coloured icons would need a legend this row has no space for.
+ *
+ * `100` and `50` are what the app calls the grades the wire spells `ok` and
+ * `meh` -- one pair of names for one thing (CONTEXT.md) */
+const SEVERITY_CHIP_STYLES: Record<SeverityGrade, { label: string; plural: string; className: string }> = {
+	ok: { label: "100", plural: "100s", className: "border-[#88b300]/40 bg-[#88b300]/10 text-[#88b300]" },
+	meh: { label: "50", plural: "50s", className: "border-[#ffcc22]/40 bg-[#ffcc22]/10 text-[#ffcc22]" },
+	miss: { label: "miss", plural: "misses", className: "border-[#ed1121]/45 bg-[#ed1121]/12 text-[#ed1121]" }
+};
+
+/** keyed by grade and rendered in the module's own order, the way the tool
+ * palette's tiles are: a fourth navigable grade cannot reach the number keys
+ * while this row silently grows no chip for it -- the record stops compiling */
+const SEVERITY_CHIPS = SEVERITY_GRADES.map((grade) => ({ grade, ...SEVERITY_CHIP_STYLES[grade] }));
+
+/** the six buttons in one fixed order: the ref array's, and the order the rAF
+ * loop walks. one ordering for both, so the loop cannot write one button's
+ * answer onto another's */
+const SEVERITY_SLOTS: { grade: SeverityGrade; direction: 1 | -1 }[] = SEVERITY_CHIPS.flatMap(({ grade }) => [
+	{ grade, direction: -1 as const },
+	{ grade, direction: 1 as const }
+]);
+
+const slotIndex = (grade: SeverityGrade, direction: 1 | -1) =>
+	SEVERITY_SLOTS.findIndex((slot) => slot.grade === grade && slot.direction === direction);
+
+const JUMP_BUTTON_CLASS =
+	"flex size-[22px] items-center justify-center rounded-md text-[#71717a] transition-colors " +
+	"hover:bg-muted hover:text-[#e4e4e7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 " +
+	"disabled:pointer-events-none disabled:opacity-35";
+
+/** what the tooltip says: what the button does, the key it currently answers
+ * to, and -- when it is inert -- which of the three independent reasons it is.
+ * the count is the part only a human ever reads, which is why it is passed in
+ * from the tooltip's own open rather than computed every frame */
+function jumpTooltip(
+	named: string,
+	direction: 1 | -1,
+	chip: (typeof SEVERITY_CHIPS)[number],
+	reason: string | null,
+	total: number,
+	remaining: number
+): string {
+	// the whole cluster's reason, in the status bar's own words for the same
+	// fact -- the two surfaces read the same helper so they cannot drift
+	if (reason !== null) return `${named} — ${reason}`;
+	if (total === 0) return `${named} — this replay has no ${chip.plural}`;
+	const where = direction === 1 ? "ahead" : "behind";
+	if (remaining === 0) return `${named} — no more ${chip.plural} ${where}`;
+	// "1 more 50" rather than "1 50": two numbers in a row read as one
+	return `${named} — ${remaining} more ${remaining === 1 ? chip.label : chip.plural} ${where}`;
+}
+
+/** one chevron. it clicks straight through to what its key does -- the same
+ * shared answer, never a second copy of the landing-time formula, the ordering
+ * or the never-wrap rule */
+function SeverityJumpButton({
+	chip,
+	direction,
+	keybinds,
+	reason,
+	total,
+	buttons
+}: {
+	chip: (typeof SEVERITY_CHIPS)[number];
+	direction: 1 | -1;
+	keybinds: readonly EffectiveKeybind[];
+	reason: string | null;
+	total: number;
+	buttons: RefObject<(HTMLButtonElement | null)[]>;
+}) {
+	const [remaining, setRemaining] = useState(0);
+	const entry = SEVERITY_JUMP_KEYBINDS[chip.grade][direction === 1 ? "next" : "previous"];
+	// the entry's own label is already the sentence this control needs ("jump
+	// to the next 100"), and the key comes off the effective table, so a rebind
+	// reaches this tooltip without the button knowing anything about it
+	const named = `${entry.label}${keybindSuffix(keybinds, entry.action)}`;
+	const index = slotIndex(chip.grade, direction);
+	const readRemaining = () => setRemaining(severityJumpNow(chip.grade, direction).remaining);
+	return (
+		<Tooltip
+			// a tooltip that is not showing must cost nothing, and only a human
+			// ever reads the number: the count is taken when it opens, and again
+			// on the one thing that changes it while it is open -- a click on the
+			// button it is describing. never per frame
+			onOpenChange={(open) => {
+				if (open) readRemaining();
+			}}
+		>
+			{/* a natively-disabled button fires no hover events, so the trigger is
+			the wrapping span -- the same reason the tool palette's tiles wrap
+			theirs, and what keeps a disabled control explained rather than mute */}
+			<TooltipTrigger render={<span />}>
+				<button
+					type="button"
+					// no `disabled` PROP, and that absence is load-bearing: react
+					// refuses to dispatch onClick on an interactive element whose
+					// props say disabled, whatever the dom property says
+					// (shouldPreventMouseEvent, react-dom). rendering it disabled and
+					// clearing the property from the loop therefore produced a button
+					// that looked live, styled live, took the click natively -- and
+					// never reached this handler. the dom property is the whole state
+					// instead: written here on mount so the control paints its real
+					// answer on the frame it appears, and by the rAF loop after. react
+					// never writes a prop it was not given, so the two cannot fight,
+					// and :disabled styling and the browser's own click suppression
+					// both follow the property this owns
+					ref={(element) => {
+						buttons.current[index] = element;
+						if (element !== null) {
+							element.disabled = severityJumpNow(chip.grade, direction).target === null;
+						}
+					}}
+					aria-label={entry.label}
+					onClick={() => {
+						severitySeek(chip.grade, direction);
+						// the pointer is still on the button, so the tooltip is still
+						// open and now describes a count its own click just spent
+						readRemaining();
+					}}
+					className={JUMP_BUTTON_CLASS}
+				>
+					{direction === 1 ? (
+						<ChevronRight aria-hidden className="size-3.5" />
+					) : (
+						<ChevronLeft aria-hidden className="size-3.5" />
+					)}
+				</button>
+			</TooltipTrigger>
+			<TooltipContent>{jumpTooltip(named, direction, chip, reason, total, remaining)}</TooltipContent>
+		</Tooltip>
+	);
+}
 
 /** the speaker glyph tracks the level, exactly as Controls.tsx did, and clicking
  * it mutes -- the convention every media player trains, which is why it stays
@@ -125,14 +272,20 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 	const setRate = useViewerStore((s) => s.setRate);
 	const setVolume = useViewerStore((s) => s.setVolume);
 	const toggleMute = useViewerStore((s) => s.toggleMute);
-	// all four of these buttons name a key, and all four keys are rebindable
-	// now: read the effective table so a hint cannot go on advertising one the
-	// user has moved or taken away
+	// every button here names a key, and every one of those keys is rebindable:
+	// read the effective table so a hint cannot go on advertising one the user
+	// has moved or taken away
 	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
+	// per-scene and discrete, so it comes through react rather than the loop
+	// below: how many of each grade the whole replay holds, which is what tells
+	// a permanently-dead button apart from one that has simply run out. the
+	// module constant keeps this selector referentially stable with no scene
+	const severityTargets = useViewerStore((s) => s.derived?.severityTargets ?? NO_SEVERITY_TARGETS);
 
 	const currentTimeRef = useRef<HTMLSpanElement>(null);
 	const totalTimeRef = useRef<HTMLSpanElement>(null);
 	const frameIndexRef = useRef<HTMLSpanElement>(null);
+	const jumpButtonsRef = useRef<(HTMLButtonElement | null)[]>([]);
 
 	// the transport's only continuous consumers -- current time, total time,
 	// and the frame index -- all read the same clock tick, so one loop drives
@@ -151,6 +304,22 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 			// frames/keys panels -- frameCursor resolves any exact row selection,
 			// falling back to the last frame at-or-before t
 			if (frameIndexRef.current !== null) frameIndexRef.current.textContent = String(frameCursor.currentIndex());
+			// "nothing lies ahead of the playhead" is continuous -- it changes as
+			// the replay plays -- so the six enabled flags join this loop rather
+			// than getting one of their own. each answer is a binary search over a
+			// list of at most a few hundred entries, and the dom write only happens
+			// when an answer actually changes.
+			//
+			// a scene with no authoritative simulation needs no branch here: it has
+			// no severity ticks at all, so every list is empty and all six come out
+			// disabled by this same test. that reason changes only what the
+			// tooltips say
+			for (const [index, slot] of SEVERITY_SLOTS.entries()) {
+				const button = jumpButtonsRef.current[index] ?? null;
+				if (button === null) continue;
+				const disabled = severityJumpNow(slot.grade, slot.direction).target === null;
+				if (button.disabled !== disabled) button.disabled = disabled;
+			}
 			raf = requestAnimationFrame(loop);
 		};
 		raf = requestAnimationFrame(loop);
@@ -158,6 +327,12 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 	}, [scene]);
 
 	if (scene === null) return null;
+	// the one reason that disables the whole cluster at once, and the only one
+	// that changes the tooltips' voice. the cluster stays mounted on such a
+	// scene: hiding it would make the feature look absent rather than
+	// inapplicable
+	const notSimulatedReason =
+		scene.simulation.status === "notSimulated" ? simulationReasonText(scene.simulation.reason) : null;
 	return (
 		<div className="flex items-center gap-[7px] px-2.5 py-1.5">
 			<IconAction
@@ -202,6 +377,65 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 			>
 				<StepForward />
 			</IconAction>
+
+			<Separator orientation="vertical" className="h-5" />
+
+			{/* severity jump: the only way to the judgements the overview strip
+			marks. six plain buttons rather than a grade filter plus one pair --
+			five controls instead of six, but a navigation control that silently
+			changes what it will do next is the failure this feature exists to
+			avoid, and stateless means the button under the cursor is the whole
+			promise.
+
+			no component test, deliberately: this repo renders components to
+			static markup through react-dom/server with no dom, no rAF and no
+			interaction, so a test here could assert only that six buttons exist
+			and nothing about the state that makes them correct. every decision
+			they carry is tested at lib/judgement-nav.test.ts, and what is left --
+			the rAF-driven disabled state and the seek under a running clock --
+			is the human pass with a real replay (AGENTS.md) */}
+			<div className="flex items-center gap-1">
+				{SEVERITY_CHIPS.map((chip) => (
+					<div key={chip.grade} className="flex items-center">
+						<SeverityJumpButton
+							chip={chip}
+							direction={-1}
+							keybinds={keybinds}
+							reason={notSimulatedReason}
+							total={severityTargets[chip.grade].length}
+							buttons={jumpButtonsRef}
+						/>
+						{/* the chip dims with its own pair, at the same strength the
+						disabled chevrons take: a grade the replay never produced, and a
+						cluster with no simulation behind it at all, are both wholly
+						inert, and a lit label over two dead arrows would read as half
+						available. it dims on the two per-scene reasons only -- running
+						out in one direction leaves the other live, so the label stays
+						lit and the chevrons carry that answer alone */}
+						<span
+							aria-hidden
+							className={cn(
+								"rounded-[5px] border px-1 py-px font-mono text-[10px] leading-[14px] font-semibold tabular-nums",
+								chip.className,
+								(notSimulatedReason !== null || severityTargets[chip.grade].length === 0) &&
+									"opacity-35"
+							)}
+						>
+							{chip.label}
+						</span>
+						<SeverityJumpButton
+							chip={chip}
+							direction={1}
+							keybinds={keybinds}
+							reason={notSimulatedReason}
+							total={severityTargets[chip.grade].length}
+							buttons={jumpButtonsRef}
+						/>
+					</div>
+				))}
+			</div>
+
+			<Separator orientation="vertical" className="h-5" />
 
 			<div className="flex items-baseline gap-0.5 font-mono">
 				<span ref={currentTimeRef} className="text-[13px] text-[#f4f4f5] tabular-nums" />
