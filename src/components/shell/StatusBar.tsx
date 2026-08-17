@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatMods } from "@/lib/format";
 import { formatLatticeStep } from "@/lib/lattice";
+import { simulationReasonText } from "@/lib/simulation";
 import { audioExtendedBounds } from "@/lib/timeline";
 import { clampSpan, zoomFactor } from "@/lib/timeline-view";
 import { selectWarnings, warningList } from "@/lib/warnings";
@@ -18,27 +19,6 @@ import { useViewerStore } from "@/state/store";
 // beatmap/player/duration) rather than the ui/separator.tsx rule
 function RunSeparator() {
 	return <span className="mx-2 text-[#27272a]">│</span>;
-}
-
-// lowercase prose for SimulationDto's notSimulated reason -- mirrors
-// warningText's shape (lib/warnings.ts) so the status bar never leaks a raw
-// discriminant like "unsupportedMods" into a row that is otherwise all
-// lowercase prose. local to StatusBar rather than lib/warnings.ts: this is a
-// simulation concern, not a warning, and StatusBar is its only reader. no
-// default case -- the parameter's own literal union makes an unhandled
-// reason a typecheck failure (missing return, same guarantee warningText
-// gets from its switch) rather than a silent raw-string fallback
-function simulationReasonText(reason: "unsupportedMods" | "beatmapMismatch"): string {
-	switch (reason) {
-		case "unsupportedMods":
-			// the replay uses mods the engine's simulator doesn't implement yet
-			// (mods.rs is NoMod-only so far), so nothing was simulated at all
-			return "mods not simulated";
-		case "beatmapMismatch":
-			// the loaded beatmap's md5 doesn't match the replay's -- same fact
-			// warningText's beatmapMismatch case reports, worded to fit inline
-			return "beatmap mismatch";
-	}
 }
 
 export function StatusBar() {
