@@ -30,6 +30,9 @@ export async function installDropHandler(): Promise<() => void> {
 		const paths = event.payload.paths;
 		const osr = paths.find((p) => extensionOf(p) === "osr");
 		if (osr !== undefined) {
+			// openReplay, which is where the unsaved-edits discard prompt lives:
+			// drop is the easiest of these gestures to perform by accident and so
+			// the one that most needs it (state/store.ts)
 			void viewerStore.getState().openReplay(osr);
 			return;
 		}
