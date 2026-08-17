@@ -75,6 +75,15 @@ function ownsNavKeys(element: GuardElement, role: string | null): boolean {
 	return slot !== null && NAV_OWNING_SLOTS.has(slot);
 }
 
+/** true when a keydown is an accelerator rather than a key a control natively
+ * answers to. no control's own keys carry ctrl, alt or meta -- a button
+ * activates on space and enter, a slider moves on the arrows -- so a chord can
+ * never be the focused control's to consume, however it acquired focus. shift
+ * is deliberately not one of these: shift+space still activates a button */
+function isAccelerator(e: { ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean }): boolean {
+	return e.ctrlKey === true || e.altKey === true || e.metaKey === true;
+}
+
 /** true when a keydown belongs to the control holding focus rather than to
  * the viewer's shortcuts. focus modality is the pivot: keyboard-acquired
  * focus (tabbing, composite arrow roving) keeps every native key so a
@@ -92,18 +101,35 @@ function ownsNavKeys(element: GuardElement, role: string | null): boolean {
  * single boolean covers the walk; it only ever decides for the target
  * itself, since ancestors of the focused element were not focused.
  *
+ * an accelerator is exempt from that arm whatever the modality: a focused
+ * button answers to space and enter, never to a ctrl/alt/meta chord, so
+ * handing it one would take an app-wide key away for as long as some button
+ * happened to hold focus. Ctrl+O is where that bites in practice -- closing
+ * the open menu returns focus to its own trigger, and without this the same
+ * chord that opened it could not reopen it.
+ *
  * two things modality never unlocks: text entry and dialogs (ownsEveryKey),
  * and the nav keys of a click-focused composite or slider (ownsNavKeys) --
  * the tab rail and the toggle groups act on arrows through their own
  * element-level roving handlers, upstream of this document-level guard, so
- * seeking on those same keydowns would switch tab and scrub on one keystroke */
-export function controlOwnsKeydown(e: { key: string; target: unknown }, keyboardFocus: boolean): boolean {
+ * seeking on those same keydowns would switch tab and scrub on one keystroke.
+ * both still hold for accelerators: a text field keeps its Ctrl+A, and a
+ * focused slider keeps Alt+Arrow */
+export function controlOwnsKeydown(
+	e: { key: string; target: unknown; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean },
+	keyboardFocus: boolean
+): boolean {
 	const navKey = NAV_KEYS.has(e.key);
+	const accelerator = isAccelerator(e);
 	for (let element = asGuardElement(e.target); element !== null; element = element.parentElement) {
 		if (element.getAttribute(SHORTCUT_PASSTHROUGH_ATTR) !== null) return false;
 		if (ownsEveryKey(element)) return true;
 		const role = element.getAttribute("role");
-		if (keyboardFocus && (element.tagName === "BUTTON" || element.tagName === "INPUT" || role === "slider")) {
+		if (
+			keyboardFocus &&
+			!accelerator &&
+			(element.tagName === "BUTTON" || element.tagName === "INPUT" || role === "slider")
+		) {
 			return true;
 		}
 		if (navKey && ownsNavKeys(element, role)) return true;

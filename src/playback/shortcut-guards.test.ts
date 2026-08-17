@@ -85,6 +85,38 @@ describe("controlOwnsKeydown", () => {
 		expect(keyboardFocused(button, ",")).toBe(true);
 	});
 
+	test("a keyboard-focused button does not swallow an accelerator", () => {
+		// the reported symptom: Ctrl+O opens the menu, Escape closes it and hands
+		// focus back to its own trigger, and the same chord could not reopen it.
+		// no control's native keys carry ctrl/alt/meta, so a chord is never the
+		// focused button's to consume -- while space and enter still are
+		const button = el("button");
+		const chord = (key: string, mods: Record<string, boolean>) =>
+			controlOwnsKeydown({ key, target: button, ...mods }, true);
+		expect(chord("o", { ctrlKey: true })).toBe(false);
+		expect(chord("o", { metaKey: true })).toBe(false);
+		expect(chord("ArrowUp", { altKey: true })).toBe(false);
+		// shift is not an accelerator: shift+space still activates a button
+		expect(chord(" ", { shiftKey: true })).toBe(true);
+		expect(keyboardFocused(button, " ")).toBe(true);
+	});
+
+	test("an accelerator still belongs to a text entry, a dialog, and a focused slider", () => {
+		// the exemption is only for the modality arm: Ctrl+A in a field is the
+		// field's selection, a modal keeps every key behind it, and a slider's
+		// arrows stay its own however they are modified
+		expect(controlOwnsKeydown({ key: "a", target: el("input"), ctrlKey: true }, true)).toBe(true);
+		expect(
+			controlOwnsKeydown(
+				{ key: "o", target: el("button", {}, el("div", { role: "dialog" })), ctrlKey: true },
+				true
+			)
+		).toBe(true);
+		expect(controlOwnsKeydown({ key: "ArrowUp", target: el("div", { role: "slider" }), altKey: true }, true)).toBe(
+			true
+		);
+	});
+
 	test("text entries own every key under either modality", () => {
 		for (const target of [el("input"), el("input", { type: "text" }), el("textarea"), el("select")]) {
 			expect(clickFocused(target, " ")).toBe(true);
