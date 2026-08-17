@@ -3,6 +3,7 @@
 
 import { Download, Redo2, Settings2, Undo2 } from "lucide-react";
 import type { SettingsCategory } from "@/components/settings/categories";
+import { OpenMenu } from "@/components/shell/OpenMenu";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -57,6 +58,14 @@ export function TopBar({
 	return (
 		<header className="flex min-w-0 items-center border-b border-border bg-surface-bar px-2 pl-2.5">
 			<Identity />
+
+			{/* between the identity tile and the separator. the beatmap/player
+			block below was considered as the trigger and rejected on a concrete
+			ground: it carries select-text because metadata is a deliberate copy
+			opt-in (index.css), and making it a button destroys drag-to-select */}
+			<div className="ml-2 shrink-0">
+				<OpenMenu />
+			</div>
 
 			<Separator orientation="vertical" className="mx-3 h-6" />
 
