@@ -334,10 +334,11 @@ export interface OverlaySettings {
 	playfieldGrid: number;
 }
 
-/** mirrors settings.rs RecentReplay. the beatmap association is what
- * load_recent_replay reopens through; it is rust's to read and refresh, so
- * openRecent sends only osrPath back across the boundary. every association
- * field is absent on entries written before it existed */
+/** mirrors settings.rs RecentReplay. the beatmap association is what every
+ * open resolves through; it belongs to the `.osr` and this entry is only where
+ * rust stores it (docs/adr/0005), so openReplay sends nothing but the path back
+ * across the boundary. every association field is absent on entries written
+ * before it existed */
 export interface RecentReplay {
 	osrPath: string;
 	title: string;

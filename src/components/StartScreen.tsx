@@ -8,46 +8,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Identity } from "@/components/shell/TopBar";
 import { PanelHeader } from "@/components/shell/SidePanel";
+import { RecentEntry } from "@/components/RecentEntry";
 import type { SettingsCategory } from "@/components/settings/categories";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatAccuracy, formatRelativeTime } from "@/lib/format";
 import { pickReplay } from "@/lib/openers";
-import type { RecentReplay } from "@/lib/scene-types";
 import { useViewerStore } from "@/state/store";
-
-function RecentEntry({
-	entry,
-	nowMs,
-	openRecent
-}: {
-	entry: RecentReplay;
-	nowMs: number;
-	openRecent: (entry: RecentReplay) => Promise<void>;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={() => void openRecent(entry)}
-			className="flex w-full flex-col gap-1 rounded-[9px] border border-transparent px-2.5 py-[9px] text-left hover:bg-[#16161a]"
-		>
-			<div className="truncate text-[12px] font-medium text-[#e4e4e7]">
-				{entry.title} <span className="text-[#71717a]">[{entry.version}]</span>
-			</div>
-			<div className="truncate font-mono text-[10px] text-[#71717a]">
-				{entry.playerName ?? "unknown"} · {formatAccuracy(entry.accuracy)} · {entry.maxCombo}x ·{" "}
-				{formatRelativeTime(entry.openedAtMs, nowMs)}
-			</div>
-		</button>
-	);
-}
 
 export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: SettingsCategory) => void }) {
 	const settings = useViewerStore((s) => s.settings);
 	const loading = useViewerStore((s) => s.loading);
-	// not openReplay: a recents card reopens through the beatmap association
-	// stored with its entry, which is what makes a manually paired .osu or
-	// .osz survive a restart
-	const openRecent = useViewerStore((s) => s.openRecent);
+	// the one open action, the same one the drop handler and the picker call:
+	// the beatmap association is resolved backend-side from the .osr path, so
+	// a card carries no privilege a browse does not have (docs/adr/0005)
+	const openReplay = useViewerStore((s) => s.openReplay);
 	const clearRecents = useViewerStore((s) => s.clearRecents);
 
 	const recents = settings?.recents ?? [];
@@ -127,8 +100,15 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 						{recents.length === 0 ? (
 							<p className="px-2.5 py-3 text-center text-[11px] text-[#71717a]">no replays opened yet</p>
 						) : (
+							// the whole list here, unlike the open menu's: nothing is
+							// loaded, so no row can mean "you are already here"
 							recents.map((entry) => (
-								<RecentEntry key={entry.osrPath} entry={entry} nowMs={nowMs} openRecent={openRecent} />
+								<RecentEntry
+									key={entry.osrPath}
+									entry={entry}
+									nowMs={nowMs}
+									onOpen={(osrPath) => void openReplay(osrPath)}
+								/>
 							))
 						)}
 

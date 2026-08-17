@@ -42,6 +42,9 @@ export function isIpcError(e: unknown): e is IpcError {
 	);
 }
 
+/** the one open. only the path travels: the beatmap association rust stores
+ * for this `.osr` is rust's copy to read and refresh, and sending it back would
+ * be a second copy to keep in sync (docs/adr/0005) */
 export function invokeLoadReplay(osrPath: string): Promise<LoadedScene> {
 	return invoke<LoadedScene>("load_replay", { osrPath });
 }
@@ -52,13 +55,6 @@ export function invokeLoadReplayWithBeatmap(
 	allowMismatch: boolean
 ): Promise<LoadedScene> {
 	return invoke<LoadedScene>("load_replay_with_beatmap", { osrPath, beatmapPath, allowMismatch });
-}
-
-/** reopens a recents entry through the beatmap association rust stored with
- * it. only the path travels: the association is rust's copy to read and
- * refresh, and sending it back would be a second copy to keep in sync */
-export function invokeLoadRecentReplay(osrPath: string): Promise<LoadedScene> {
-	return invoke<LoadedScene>("load_recent_replay", { osrPath });
 }
 
 export function invokeGetSettings(): Promise<Settings> {

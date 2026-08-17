@@ -48,7 +48,6 @@ describe("selectWarnings identity stability", () => {
 	const deps = {
 		loadReplay: async () => testScene(),
 		loadReplayWithBeatmap: async () => testScene(),
-		loadRecentReplay: async () => testScene(),
 		getSettings: async () => settings,
 		setOsuStablePath: async () => settings,
 		setViewerPrefs: async () => settings,

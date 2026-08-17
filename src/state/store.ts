@@ -11,7 +11,6 @@ import {
 	invokeClearRecents,
 	invokeExportReplay,
 	invokeGetSettings,
-	invokeLoadRecentReplay,
 	invokeLoadReplay,
 	invokeLoadReplayWithBeatmap,
 	invokeRedo,
@@ -37,7 +36,6 @@ import type {
 	KeybindOverrides,
 	LoadedScene,
 	OverlaySettings,
-	RecentReplay,
 	Settings,
 	TimelineSettings
 } from "../lib/scene-types";
@@ -86,7 +84,6 @@ export type ToolId = (typeof TOOL_IDS)[number];
 export interface IpcDeps {
 	loadReplay(osrPath: string): Promise<LoadedScene>;
 	loadReplayWithBeatmap(osrPath: string, beatmapPath: string, allowMismatch: boolean): Promise<LoadedScene>;
-	loadRecentReplay(osrPath: string): Promise<LoadedScene>;
 	getSettings(): Promise<Settings>;
 	setOsuStablePath(path: string | null): Promise<Settings>;
 	setViewerPrefs(
@@ -209,6 +206,14 @@ export interface ViewerState {
 	 * so it always reflects only the most recent attempt */
 	pendingRecovery: string | null;
 	pendingMismatch: { expectedMd5: string; actualMd5: string; osrPath: string; beatmapPath: string } | null;
+	/** the open the discard prompt is standing in front of, or null. set only
+	 * by openReplay, and only when the loaded document has unsaved edits.
+	 *
+	 * the request is held as DATA rather than as a closure, mirroring
+	 * pendingMismatch: a closure in the store is unreachable from `bun test
+	 * src`, and replaying the request through the same IpcDeps seam every other
+	 * load goes through is the whole reason that seam exists */
+	pendingOpen: { osrPath: string } | null;
 	/** ms; the attached audio's duration once its metadata loads (PlayerView
 	 * publishes it). the clock's playable range extends past the last object
 	 * when the audio outlives it, and the timeline must map against those same
@@ -250,6 +255,11 @@ export interface ViewerState {
 	 * deliberately not gated on a loaded scene -- the list is most useful to
 	 * someone who has not opened a replay yet */
 	helpOpen: boolean;
+	/** the top bar's open menu. in the store rather than in the component
+	 * because its keybind registers at the App root (the start screen has to
+	 * reach it too), which is above the popover's own lifetime. session-only
+	 * chrome, never persisted */
+	openMenuOpen: boolean;
 	tool: ToolId;
 	/** the armed key tile: filters the press table and names the key
 	 * add-press writes. session-only, never persisted; reset by every scene
@@ -275,15 +285,24 @@ export interface ViewerState {
 	 * frame-cursor remap; fullFrames means "no splice to remap through" */
 	lastSplice: FrameChanges | null;
 
+	/** the whole open surface: a picked file, a drop, a recents card in either
+	 * list. the backend resolves the beatmap through the association it holds
+	 * for that exact path, so nothing but the path is ever needed here.
+	 *
+	 * the ONLY guarded entry point: this is where a user asks for a different
+	 * replay, so this is where an edited document gets its one prompt. every
+	 * continuation of a request that already prompted -- openWithBeatmap and
+	 * confirmMismatch -- loads without asking again */
 	openReplay(osrPath: string): Promise<void>;
-	/** reopens a recents entry. the whole entry is the argument to keep this
-	 * action honest about what it is for -- the backend resolves the beatmap
-	 * from the association it holds for that exact path, so an arbitrary path
-	 * belongs in openReplay instead */
-	openRecent(entry: RecentReplay): Promise<void>;
 	openWithBeatmap(osrPath: string, beatmapPath: string): Promise<void>;
 	confirmMismatch(): Promise<void>;
 	dismissMismatch(): void;
+	/** runs the open the prompt is holding. the consent is spent here, not
+	 * re-asked for by whatever the load needs next */
+	confirmDiscard(): Promise<void>;
+	/** declines it, leaving the scene, the document and its undo stack exactly
+	 * as they were and attempting no load */
+	dismissDiscard(): void;
 	clearError(): void;
 	setAudioDuration(durationMs: number): void;
 	setOverlay<K extends keyof OverlaySettings>(key: K, value: OverlaySettings[K]): void;
@@ -309,6 +328,7 @@ export interface ViewerState {
 	togglePanel(): void;
 	setPanelTab(tab: PanelTab): void;
 	setHelpOpen(open: boolean): void;
+	setOpenMenuOpen(open: boolean): void;
 	setTool(tool: ToolId): void;
 	setFeatherMs(ms: number): void;
 	setSmoothStrength(value: number): void;
@@ -702,6 +722,14 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				},
 				editRevision: 0,
 				lastSplice: null,
+				// unconditional, unlike the request state below: a prompt asks
+				// whether to throw away THIS document, and every install replaces
+				// it -- a stale one installs a fresh, un-dirty editor slice just
+				// as a current one does. gating it on `current` would leave the
+				// dialog up over a document whose edits no longer exist
+				pendingOpen: null,
+				// the error/loading state belongs to the load that owns it, which
+				// a superseded one does not
 				...(current ? { loading: false, lastError: null, pendingRecovery: null, pendingMismatch: null } : {})
 			});
 			// the load command records the recent backend-side, so the
@@ -782,6 +810,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			lastError: null,
 			pendingRecovery: null,
 			pendingMismatch: null,
+			pendingOpen: null,
 			audioDurationMs: null,
 			settings: null,
 			overlays: DEFAULT_OVERLAYS,
@@ -799,6 +828,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			panelOpen: false,
 			panelTab: "replay",
 			helpOpen: false,
+			openMenuOpen: false,
 			tool: "select",
 			armedKey: null,
 			featherMs: DEFAULT_FEATHER_MS,
@@ -810,8 +840,45 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			editRevision: 0,
 			lastSplice: null,
 
-			openReplay: (osrPath) => run(osrPath, () => deps.loadReplay(osrPath)),
-			openRecent: (entry) => run(entry.osrPath, () => deps.loadRecentReplay(entry.osrPath)),
+			openReplay: async (osrPath) => {
+				// drained before the guard reads it, for the reason exportReplay
+				// drains: `dirty` mirrors the last LANDED delta, so a commit still
+				// queued or awaiting its response is not in it yet. the first edit
+				// of a session is the reachable case -- nothing has dirtied the
+				// document before it -- and the guard would pass, install() would
+				// cancel the queue and drop the in-flight response by epoch, and
+				// the edit would be gone without the question ever being asked.
+				// looping rather than awaiting once, as export does: a join can
+				// resolve early against a pump that was already settling.
+				// the wait claims no place in the load sequence, so a
+				// continuation installing during it leaves this older request
+				// to load over the newer one -- open-intent ordering is the
+				// fix for that and for install()'s unconditional clear below,
+				// deferred together in TODO. it is a recoverable wrong replay
+				// against a silent lost edit, which is why this landed first
+				while (!queueIsQuiet()) {
+					await pumpEdits();
+				}
+				// guard once, here, at the moment the user asks for a different
+				// replay. no same-path exemption: opening the replay already on
+				// screen discards the document just as thoroughly, and exempting
+				// it would silently destroy an edit exactly once
+				if (get().editor?.dirty === true) {
+					// a new request supersedes the last one's outstanding offer,
+					// which is what run() would have done had this not stopped
+					// short of it: a mismatch dialog left standing would render
+					// alongside the prompt, two modals deep, each asking about a
+					// different replay. declining the discard leaves the earlier
+					// beatmap to be picked again, which is the cheaper of the two
+					set({ pendingOpen: { osrPath }, pendingMismatch: null });
+					return;
+				}
+				await run(osrPath, () => deps.loadReplay(osrPath));
+			},
+			// unguarded on purpose: both of these continue a request that already
+			// prompted -- the error toast's "pick beatmap", the beatmap-recovery
+			// drop, and the mismatch override all follow an openReplay that
+			// guarded and then failed. one decision, one dialog
 			openWithBeatmap: (osrPath, beatmapPath) =>
 				run(osrPath, () => deps.loadReplayWithBeatmap(osrPath, beatmapPath, false), beatmapPath),
 			confirmMismatch: async () => {
@@ -824,6 +891,18 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				);
 			},
 			dismissMismatch: () => set({ pendingMismatch: null }),
+			confirmDiscard: async () => {
+				const pending = get().pendingOpen;
+				if (pending === null) return;
+				// straight to run(), never back through openReplay: this IS the
+				// guarded request, and re-entering the guard would re-raise the
+				// prompt the user just answered. nothing is discarded here either
+				// -- install() runs only on success, so a load that then fails
+				// leaves the edited document exactly where it was
+				set({ pendingOpen: null });
+				await run(pending.osrPath, () => deps.loadReplay(pending.osrPath));
+			},
+			dismissDiscard: () => set({ pendingOpen: null }),
 			clearError: () => set({ lastError: null }),
 			setAudioDuration: (durationMs) => set({ audioDurationMs: durationMs }),
 			setOverlay: (key, value) => {
@@ -922,6 +1001,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			// a rail click is also a request to see the panel
 			setPanelTab: (panelTab) => set({ panelTab, panelOpen: true }),
 			setHelpOpen: (helpOpen) => set({ helpOpen }),
+			setOpenMenuOpen: (openMenuOpen) => set({ openMenuOpen }),
 			setTool: (tool) => set({ tool }),
 			// a blank number field arrives as NaN and must leave the last good
 			// value alone, matching setOverlay's displayLength rule
@@ -1127,7 +1207,6 @@ export const viewerStore = createViewerStore(
 	{
 		loadReplay: invokeLoadReplay,
 		loadReplayWithBeatmap: invokeLoadReplayWithBeatmap,
-		loadRecentReplay: invokeLoadRecentReplay,
 		getSettings: invokeGetSettings,
 		setOsuStablePath: invokeSetOsuStablePath,
 		setViewerPrefs: invokeSetViewerPrefs,

@@ -157,7 +157,6 @@ async function openTestScene(): Promise<Store> {
 	const deps: IpcDeps = {
 		loadReplay: load,
 		loadReplayWithBeatmap: load,
-		loadRecentReplay: load,
 		getSettings: async () => settings,
 		setOsuStablePath: async () => settings,
 		setViewerPrefs: async () => settings,
@@ -302,6 +301,10 @@ test("a new scene install re-derives the mapping from the pristine document", as
 	await appendFrame(store, 12_000);
 	expect(store.getState().timelineBounds?.maxTime).toBe(12_000);
 
+	// through the discard prompt, since appendFrame left the document dirty --
+	// that guard is what stands between any open and an edited document now
+	// (state/store.ts), so this is the walk a user actually takes here
 	await store.getState().openReplay("C:\\other.osr");
+	await store.getState().confirmDiscard();
 	expect(store.getState().timelineBounds?.maxTime).toBe(10_200);
 });

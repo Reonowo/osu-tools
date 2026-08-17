@@ -48,7 +48,6 @@ function deps(): IpcDeps {
 	return {
 		loadReplay: async () => testScene(),
 		loadReplayWithBeatmap: async () => testScene(),
-		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
 		setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects) => ({

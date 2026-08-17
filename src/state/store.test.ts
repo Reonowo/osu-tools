@@ -63,7 +63,6 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 	return {
 		loadReplay: async () => testScene(),
 		loadReplayWithBeatmap: async () => testScene(),
-		loadRecentReplay: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
 		setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects, timeline, keybinds) => ({
@@ -151,28 +150,23 @@ describe("load flow", () => {
 		expect(store.getState().osrPath).toBe("C:/replays/a.osr");
 	});
 
-	test("openRecent goes through load_recent_replay and sends only the entry's path", async () => {
-		// the beatmap association lives in rust's settings file; sending it back
-		// across the boundary would be a second copy to keep in sync, so the
-		// entry's other fields must not reach the ipc call
+	test("opening a recents entry is the one open call, and sends only its path", async () => {
+		// there is no second command to reopen a recent with: the beatmap
+		// association lives in rust's settings file, keyed by the .osr path, and
+		// sending it back across the boundary would be a second copy to keep in
+		// sync -- so the entry's other fields must not reach the ipc call
 		const calls: string[] = [];
-		const openedRecent: string[] = [];
 		const store = createViewerStore(
 			deps({
 				loadReplay: async (osrPath) => {
 					calls.push(osrPath);
 					return testScene();
-				},
-				loadRecentReplay: async (osrPath) => {
-					openedRecent.push(osrPath);
-					return testScene();
 				}
 			})
 		);
 
-		await store.getState().openRecent(sampleRecent);
-		expect(openedRecent).toEqual([sampleRecent.osrPath]);
-		expect(calls).toEqual([]);
+		await store.getState().openReplay(sampleRecent.osrPath);
+		expect(calls).toEqual([sampleRecent.osrPath]);
 		expect(store.getState().scene).not.toBeNull();
 		expect(store.getState().osrPath).toBe(sampleRecent.osrPath);
 	});
@@ -180,8 +174,8 @@ describe("load flow", () => {
 	test("a recent whose beatmap is gone surfaces the same picker recovery as any other load", async () => {
 		// rust ends the resolution walk on beatmapNotFound precisely so this
 		// path reaches the manual picker, exactly as a fresh open would
-		const store = createViewerStore(deps({ loadRecentReplay: reject({ kind: "beatmapNotFound", md5: "abc" }) }));
-		await store.getState().openRecent(sampleRecent);
+		const store = createViewerStore(deps({ loadReplay: reject({ kind: "beatmapNotFound", md5: "abc" }) }));
+		await store.getState().openReplay(sampleRecent.osrPath);
 		const s = store.getState();
 		expect(s.lastError?.error.kind).toBe("beatmapNotFound");
 		expect(s.lastError?.osrPath).toBe(sampleRecent.osrPath);
@@ -1221,6 +1215,282 @@ describe("pendingRecovery (openers.ts routes a dropped beatmap through this, not
 	});
 });
 
+describe("the discard prompt", () => {
+	// the rule, in one sentence: guard once, at the moment the user asks for a
+	// different replay; every continuation of an already-guarded request loads
+	// without re-asking. these assert what a user ends up with -- a document
+	// that survived, or a replay that opened -- not which field moved
+
+	/** a store showing a replay whose document has one landed edit, which is
+	 * the only situation the prompt exists for */
+	async function withUnsavedEdits(overrides: Partial<IpcDeps> = {}) {
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => latticeScene(),
+				applyEdit: async () => moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move"),
+				...overrides
+			})
+		);
+		await store.getState().openReplay("C:\\loaded.osr");
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		expect(store.getState().editor!.dirty).toBe(true);
+		return store;
+	}
+
+	test("an edit still in flight is guarded, not raced past", async () => {
+		// `dirty` mirrors the last LANDED delta, so the first edit of a session
+		// -- the one with nothing dirty before it -- is invisible to the guard
+		// until its response arrives. reading it straight would let the open
+		// through, and install() cancels the queue and drops the in-flight
+		// response by epoch, so the edit would go without the question
+		let landEdit!: () => void;
+		const opened: string[] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async (osrPath) => {
+					opened.push(osrPath);
+					return latticeScene();
+				},
+				applyEdit: async () => {
+					await new Promise<void>((resolve) => {
+						landEdit = resolve;
+					});
+					return moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move");
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\loaded.osr");
+
+		const edit = store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		await Promise.resolve(); // let the commit actually reach ipc
+		expect(store.getState().editor!.dirty).toBe(false); // nothing has landed yet
+
+		const open = store.getState().openReplay("C:\\other.osr");
+		landEdit();
+		await edit;
+		await open;
+
+		expect(opened).toEqual(["C:\\loaded.osr"]); // the open never reached ipc
+		expect(store.getState().pendingOpen).toEqual({ osrPath: "C:\\other.osr" });
+		expect(store.getState().editor!.dirty).toBe(true);
+	});
+
+	test("a cancelled open costs the user nothing: same replay, same edits, no load attempted", async () => {
+		const opened: string[] = [];
+		const store = await withUnsavedEdits({
+			loadReplay: async (osrPath) => {
+				opened.push(osrPath);
+				return latticeScene();
+			}
+		});
+		const before = store.getState();
+
+		await store.getState().openReplay("C:\\other.osr");
+		expect(opened).toEqual(["C:\\loaded.osr"]); // the request never reached ipc
+		expect(store.getState().pendingOpen).toEqual({ osrPath: "C:\\other.osr" });
+
+		store.getState().dismissDiscard();
+		const after = store.getState();
+		expect(after.pendingOpen).toBeNull();
+		expect(opened).toEqual(["C:\\loaded.osr"]);
+		expect(after.osrPath).toBe("C:\\loaded.osr");
+		expect(after.scene).toBe(before.scene);
+		expect(after.editor).toBe(before.editor);
+		expect(after.editor!.dirty).toBe(true);
+		expect(after.editor!.canUndo).toBe(true);
+		expect(after.sceneId).toBe(before.sceneId);
+	});
+
+	test("confirming opens the replay that was asked for, and the edits are gone with it", async () => {
+		const opened: string[] = [];
+		const store = await withUnsavedEdits({
+			loadReplay: async (osrPath) => {
+				opened.push(osrPath);
+				return latticeScene();
+			}
+		});
+
+		await store.getState().openReplay("C:\\other.osr");
+		await store.getState().confirmDiscard();
+
+		expect(opened).toEqual(["C:\\loaded.osr", "C:\\other.osr"]);
+		expect(store.getState().osrPath).toBe("C:\\other.osr");
+		expect(store.getState().editor!.dirty).toBe(false);
+		expect(store.getState().editor!.canUndo).toBe(false);
+		expect(store.getState().pendingOpen).toBeNull();
+	});
+
+	test("a document with no edits opens straight through", async () => {
+		const opened: string[] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async (osrPath) => {
+					opened.push(osrPath);
+					return testScene();
+				}
+			})
+		);
+		await store.getState().openReplay("C:\\a.osr");
+		await store.getState().openReplay("C:\\b.osr");
+
+		expect(opened).toEqual(["C:\\a.osr", "C:\\b.osr"]);
+		expect(store.getState().pendingOpen).toBeNull();
+		expect(store.getState().osrPath).toBe("C:\\b.osr");
+	});
+
+	test("the start screen never prompts -- there is no document to discard", async () => {
+		const store = createViewerStore(deps());
+		expect(store.getState().editor).toBeNull();
+		await store.getState().openReplay("C:\\first.osr");
+		expect(store.getState().pendingOpen).toBeNull();
+		expect(store.getState().scene).not.toBeNull();
+	});
+
+	test("opening the replay already on screen prompts too", async () => {
+		// it is a discard either way. a same-path exemption is a special case
+		// that would silently destroy an edit exactly once
+		const store = await withUnsavedEdits();
+		await store.getState().openReplay("C:\\loaded.osr");
+		expect(store.getState().pendingOpen).toEqual({ osrPath: "C:\\loaded.osr" });
+		expect(store.getState().editor!.dirty).toBe(true);
+	});
+
+	test("a load that fails after a confirmed discard leaves the edited document intact", async () => {
+		// nothing is discarded by the consent itself: install() runs only on
+		// success, so the user keeps their document and gets the usual toast
+		let firstLoad = true;
+		const store = await withUnsavedEdits({
+			loadReplay: async () => {
+				if (firstLoad) {
+					firstLoad = false;
+					return latticeScene();
+				}
+				throw { kind: "beatmapNotFound", md5: "abc" } satisfies IpcError;
+			}
+		});
+		const before = store.getState();
+
+		await store.getState().openReplay("C:\\other.osr");
+		await store.getState().confirmDiscard();
+
+		expect(store.getState().lastError?.error.kind).toBe("beatmapNotFound");
+		expect(store.getState().scene).toBe(before.scene);
+		expect(store.getState().osrPath).toBe("C:\\loaded.osr");
+		expect(store.getState().editor).toBe(before.editor);
+		expect(store.getState().editor!.dirty).toBe(true);
+	});
+
+	test("one decision is one dialog: the picker and the mismatch override after a discard never re-ask", async () => {
+		// the whole walk a user takes when the replay they discarded for turns
+		// out to need a beatmap picked, and the picked one does not match. the
+		// document is still dirty for every step of it -- nothing was discarded,
+		// because nothing has loaded -- so an unguarded continuation is the only
+		// thing keeping this to a single prompt
+		let firstLoad = true;
+		const store = await withUnsavedEdits({
+			loadReplay: async () => {
+				if (firstLoad) {
+					firstLoad = false;
+					return latticeScene();
+				}
+				throw { kind: "beatmapNotFound", md5: "abc" } satisfies IpcError;
+			},
+			loadReplayWithBeatmap: async (_osr, _map, allow) => {
+				if (!allow) throw { kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" } satisfies IpcError;
+				return latticeScene();
+			}
+		});
+
+		await store.getState().openReplay("C:\\other.osr");
+		await store.getState().confirmDiscard();
+		expect(store.getState().pendingRecovery).toBe("C:\\other.osr");
+		expect(store.getState().editor!.dirty).toBe(true);
+
+		// the error toast's "pick beatmap" action, or a beatmap dropped onto the
+		// window: a continuation, so no second prompt
+		await store.getState().openWithBeatmap("C:\\other.osr", "C:\\m.osu");
+		expect(store.getState().pendingOpen).toBeNull();
+		expect(store.getState().pendingMismatch).not.toBeNull();
+		expect(store.getState().editor!.dirty).toBe(true);
+
+		// and neither does the override
+		await store.getState().confirmMismatch();
+		expect(store.getState().pendingOpen).toBeNull();
+		expect(store.getState().osrPath).toBe("C:\\other.osr");
+		expect(store.getState().editor!.dirty).toBe(false);
+	});
+
+	test("a scene install drops a prompt about the document it replaced", async () => {
+		// the prompt asks whether to throw away THIS document; once another load
+		// has replaced it the question no longer means anything
+		const store = await withUnsavedEdits();
+		await store.getState().openReplay("C:\\other.osr");
+		expect(store.getState().pendingOpen).not.toBeNull();
+
+		// an unguarded continuation lands a scene while the prompt is up
+		await store.getState().openWithBeatmap("C:\\third.osr", "C:\\m.osu");
+		expect(store.getState().pendingOpen).toBeNull();
+	});
+
+	test("a superseded load that still installs drops the prompt too", async () => {
+		// a stale success installs here because its command already installed
+		// backend-side, and it brings a fresh un-dirty document with it -- so a
+		// prompt left standing would be asking about edits that no longer exist.
+		// the newer load is held open, so only the stale install can be what
+		// cleared it
+		let resolveStale!: (scene: LoadedScene) => void;
+		let calls = 0;
+		const store = await withUnsavedEdits({
+			loadReplayWithBeatmap: () => {
+				calls += 1;
+				if (calls === 1) {
+					return new Promise<LoadedScene>((resolve) => {
+						resolveStale = resolve;
+					});
+				}
+				return new Promise<LoadedScene>(() => {});
+			}
+		});
+
+		const stale = store.getState().openWithBeatmap("C:\\b.osr", "C:\\m.osu");
+		await Promise.resolve(); // let the first ipc call actually start
+		await store.getState().openReplay("C:\\c.osr");
+		expect(store.getState().pendingOpen).not.toBeNull();
+
+		void store.getState().openWithBeatmap("C:\\b.osr", "C:\\m.osu"); // supersedes it, never settles
+		resolveStale(latticeScene());
+		await stale;
+
+		expect(store.getState().scene).not.toBeNull();
+		expect(store.getState().editor!.dirty).toBe(false);
+		expect(store.getState().pendingOpen).toBeNull();
+	});
+
+	test("a new request supersedes an outstanding mismatch offer instead of stacking on it", async () => {
+		// both are <Dialog open> at the app root, so a mismatch left standing
+		// would render alongside the prompt -- two modals, each asking about a
+		// different replay. native drops are not blocked by a webview modal, so
+		// this is reachable by dropping a .osr over the mismatch dialog
+		const store = await withUnsavedEdits({
+			loadReplayWithBeatmap: reject({ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" })
+		});
+		await store.getState().openWithBeatmap("C:\\b.osr", "C:\\m.osu");
+		expect(store.getState().pendingMismatch).not.toBeNull();
+
+		await store.getState().openReplay("C:\\c.osr");
+		expect(store.getState().pendingOpen).toEqual({ osrPath: "C:\\c.osr" });
+		expect(store.getState().pendingMismatch).toBeNull();
+		// and the document the prompt is about is still there to be discarded
+		expect(store.getState().editor!.dirty).toBe(true);
+	});
+});
+
 describe("recents", () => {
 	test("a successful load refreshes settings so the new recent is visible", async () => {
 		let settingsCalls = 0;
@@ -2097,12 +2367,14 @@ describe("editor slice and edit queue", () => {
 	test("a response tagged with a replaced epoch is dropped", async () => {
 		let resolveEdit!: (d: EditDelta) => void;
 		let epoch = 0;
+		const nextSession = async () => {
+			epoch += 1;
+			return { ...latticeScene(), epoch };
+		};
 		const store = createViewerStore(
 			deps({
-				loadReplay: async () => {
-					epoch += 1;
-					return { ...latticeScene(), epoch };
-				},
+				loadReplay: nextSession,
+				loadReplayWithBeatmap: nextSession,
 				applyEdit: async () =>
 					new Promise<EditDelta>((resolve) => {
 						resolveEdit = resolve;
@@ -2115,7 +2387,11 @@ describe("editor slice and edit queue", () => {
 			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
 		});
 		await Promise.resolve();
-		await store.getState().openReplay("C:\\r2.osr");
+		// the replacement arrives through a continuation, which is the route
+		// that installs over an in-flight edit: openReplay drains the queue
+		// before it decides anything, so it could not reach an install with
+		// this commit still outstanding
+		await store.getState().openWithBeatmap("C:\\r2.osr", "C:\\m.osu");
 		resolveEdit(moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "a"));
 		await commit;
 		// the second install's editor is untouched by the first session's delta
