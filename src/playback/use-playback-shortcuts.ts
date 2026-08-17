@@ -16,6 +16,7 @@ import { useEffect, useMemo } from "react";
 import { useHotkeys, type Hotkey, type UseHotkeyDefinition } from "@tanstack/react-hotkeys";
 import { frameEditGate } from "@/editor/gate";
 import { gestureLive } from "@/editor/gesture-live";
+import { NO_SEVERITY_TARGETS, severityJump, type SeverityGrade, type SeverityJump } from "@/lib/judgement-nav";
 import { captureArm } from "@/playback/capture-arm";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
@@ -29,6 +30,7 @@ import {
 	matchesCodeKeybind,
 	releasedMainKey,
 	resolveEditKeybind,
+	severityJumpFor,
 	type EditKeybindResolution,
 	type EffectiveKeybind,
 	type KeybindAction
@@ -51,6 +53,33 @@ function nudgeMasterVolume(delta: number) {
  * matching the `,` / `.` behaviour the wheel shares */
 export function stepFrame(direction: 1 | -1) {
 	frameCursor.step(direction);
+}
+
+/** the severity-jump answer for the loaded scene at the clock's current time:
+ * the store's per-scene target lists asked the one pure question
+ * (lib/judgement-nav.ts). the number keys, the transport's six enabled flags
+ * and its tooltip counts all read this, so nothing re-derives where a jump
+ * goes, whether one exists, or how many are left */
+export function severityJumpNow(grade: SeverityGrade, direction: 1 | -1): SeverityJump {
+	const targets = viewerStore.getState().derived?.severityTargets ?? NO_SEVERITY_TARGETS;
+	return severityJump(targets, grade, direction, playbackClock.currentTime());
+}
+
+/** move the playhead to the next or previous judgement of one grade.
+ *
+ * the playback clock and nothing else: it does not pause, does not move the
+ * frame cursor, and does not touch the press selection. this follows the one
+ * existing object-seek affordance -- the object double-click in the detail
+ * lanes, which is deliberately "through the playback clock rather than the
+ * frame cursor" -- rather than the frame steppers beside it.
+ *
+ * a jump with nothing in its direction does nothing at all, which is also what
+ * makes the transport's rAF-driven disabled state safe: a click that lands
+ * before the first frame has written an answer cannot go anywhere wrong */
+export function severitySeek(grade: SeverityGrade, direction: 1 | -1) {
+	const { target } = severityJumpNow(grade, direction);
+	if (target === null) return;
+	playbackClock.seekTo(target.landingTime);
 }
 
 /** the one gate for every binding, hotkey-registered and the manual
@@ -176,6 +205,21 @@ function registrationsFor(row: EffectiveKeybind, key: string): UseHotkeyDefiniti
 			return [{ hotkey, callback: (e) => guarded(e, () => stepFrame(1)) }];
 		case "restart":
 			return [{ hotkey, callback: (e) => guarded(e, () => playbackClock.seekTo(playbackClock.minTime)) }];
+		case "jumpNextOk":
+		case "jumpPreviousOk":
+		case "jumpNextMeh":
+		case "jumpPreviousMeh":
+		case "jumpNextMiss":
+		case "jumpPreviousMiss": {
+			const jump = severityJumpFor(row.action);
+			// the six cases above are exactly the map's keys, so this is
+			// unreachable; the guard is what keeps the type honest
+			if (jump === null) return [];
+			// key repeat is deliberately kept, as it is for the arrows: holding 3
+			// walks the misses, and the walk simply stops at the last one rather
+			// than wrapping
+			return [{ hotkey, callback: (e) => guarded(e, () => severitySeek(jump.grade, jump.direction)) }];
+		}
 		case "volumeUp":
 			return [{ hotkey, callback: (e) => guarded(e, () => nudgeMasterVolume(VOLUME_STEP)) }];
 		case "volumeDown":

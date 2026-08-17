@@ -1,10 +1,10 @@
 // the keybind table -- every action the app binds, declared once as data --
 // and the pure model over it: the fold of a sparse override map onto those
 // defaults, the capture a settings row arms, the steal that resolves a
-// conflict, and the resolver for the edit-mode keys. pure: the two store
-// imports are types, erased at build, and @tanstack/react-hotkeys is imported
-// for its parser/normaliser only (no dom, no react), so nothing here reaches
-// the store, the renderer or tauri and its test runs headlessly the way
+// conflict, and the resolver for the edit-mode keys. pure: every import from
+// the app itself is a type, erased at build, and @tanstack/react-hotkeys is
+// imported for its parser/normaliser only (no dom, no react), so nothing here
+// reaches the store, the renderer or tauri and its test runs headlessly the way
 // shortcut-guards' does.
 //
 // the table is the complete inventory, playback and editing alike. a partial
@@ -33,6 +33,7 @@ import {
 	parseHotkey,
 	parseKeyboardEvent
 } from "@tanstack/react-hotkeys";
+import type { SeverityGrade } from "../lib/judgement-nav";
 import type { KeybindBinding, KeybindOverrides } from "../lib/scene-types";
 import type { ToolId, ViewerMode } from "../state/store";
 
@@ -48,6 +49,12 @@ export type KeybindAction =
 	| "frameStepBack"
 	| "frameStepForward"
 	| "restart"
+	| "jumpNextOk"
+	| "jumpPreviousOk"
+	| "jumpNextMeh"
+	| "jumpPreviousMeh"
+	| "jumpNextMiss"
+	| "jumpPreviousMiss"
 	| "volumeUp"
 	| "volumeDown"
 	| "viewportReset"
@@ -178,6 +185,105 @@ export const KEYBINDS = {
 		label: "jump to the start",
 		locked: null,
 		defaults: one("Home", "Home")
+	},
+	// the six severity jumps: forward on the plain digit, backward under ctrl.
+	// they sit with the other seek actions because that is what they are --
+	// navigation to the judgements the overview strip marks and could never be
+	// aimed at (lib/judgement-nav.ts owns every decision behind them).
+	//
+	// `Shift+1` was never a candidate for the backward half: a shifted digit
+	// prints a different character on every layout (`!` on us, `+` on german,
+	// `&` on french), so a character-matched binding would answer to nothing.
+	// ctrl leaves the printed character alone, which is what makes it the safe
+	// modifier here. spelled `Control` rather than `Mod`, so it demands ctrlKey
+	// on every platform, the same way viewportReset spells its chord -- known
+	// cost, recorded in TODO.md: macOS binds Control+digit to Mission Control's
+	// desktop switching once a second desktop exists, so the three backward
+	// defaults never reach the webview there and rebinding is the fix.
+	//
+	// matched by printed character like every other digit and letter row, but
+	// the digits are the one place that is not the whole story: the library's
+	// matcher falls back to the event's `code` when the printed character is a
+	// single NON-letter that did not match, and reads a `Digit<n>` as that digit
+	// (matchesKeyboardEvent, @tanstack/hotkeys). NON-letter is the whole hinge:
+	// the same arm is blocked for anything unicode calls a letter, which is why
+	// the letter rows are unaffected by it (a cyrillic `в` on `KeyV` does not
+	// answer to `V`).
+	//
+	// so azerty, whose unshifted digit row prints `&`/`é`/`"`, splits: `&` and
+	// `"` are punctuation, so `1` and `3` fire through the fallback, and `é` is
+	// a letter, so `2` does not. four of these six defaults work there and the
+	// meh pair needs a rebind -- the ordinary docs/adr/0002 answer, reached for
+	// one key rather than all of them.
+	//
+	// the cost of the fallback, recorded in TODO.md: the keys it rescues are
+	// reachable from two hotkeys at once. a user on such a layout who rebinds
+	// some other action onto that same physical key captures the character it
+	// prints (`&`), which is a different identity from `1` -- so the fold and
+	// its uniqueness test both see a clean table -- and the press then matches
+	// both registrations, which the manager fires in turn. one key, two actions.
+	// the shipped table cannot hit this on its own, since nothing else is bound
+	// to those characters, and the blocked half cannot hit it at all: a rebind
+	// onto `é` is the arm that never re-matches `2`.
+	//
+	// the code-matched viewportReset is the only other digit binding and lives in
+	// a separate identity namespace, so nothing here can collide with it.
+	//
+	// `ok` and `meh` name the grades the labels call 100 and 50: the wire's
+	// vocabulary in the action, the user's in the label (CONTEXT.md pins the pair)
+	jumpNextOk: {
+		action: "jumpNextOk",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "jump to the next 100",
+		locked: null,
+		defaults: one("1", "Digit1")
+	},
+	jumpPreviousOk: {
+		action: "jumpPreviousOk",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "jump to the previous 100",
+		locked: null,
+		defaults: one("Control+1", "Digit1")
+	},
+	jumpNextMeh: {
+		action: "jumpNextMeh",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "jump to the next 50",
+		locked: null,
+		defaults: one("2", "Digit2")
+	},
+	jumpPreviousMeh: {
+		action: "jumpPreviousMeh",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "jump to the previous 50",
+		locked: null,
+		defaults: one("Control+2", "Digit2")
+	},
+	jumpNextMiss: {
+		action: "jumpNextMiss",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "jump to the next miss",
+		locked: null,
+		defaults: one("3", "Digit3")
+	},
+	jumpPreviousMiss: {
+		action: "jumpPreviousMiss",
+		group: "playback",
+		owner: "global",
+		by: "key",
+		label: "jump to the previous miss",
+		locked: null,
+		defaults: one("Control+3", "Digit3")
 	},
 	// alt+arrow, matching lazer's own IncreaseVolume/DecreaseVolume
 	// (GlobalAction.cs). the master only: three more pairs for the channels
@@ -354,6 +460,38 @@ export const TOOL_KEYBINDS = {
 const TOOL_BY_ACTION = new Map<KeybindAction, ToolId>(
 	(Object.entries(TOOL_KEYBINDS) as [ToolId, KeybindEntry][]).map(([tool, entry]) => [entry.action, tool])
 );
+
+/** the six severity-jump rows by the grade they navigate. exhaustive by type,
+ * so a fourth navigable grade cannot reach the transport without a pair of
+ * keys -- this stops compiling first */
+export const SEVERITY_JUMP_KEYBINDS = {
+	ok: { next: KEYBINDS.jumpNextOk, previous: KEYBINDS.jumpPreviousOk },
+	meh: { next: KEYBINDS.jumpNextMeh, previous: KEYBINDS.jumpPreviousMeh },
+	miss: { next: KEYBINDS.jumpNextMiss, previous: KEYBINDS.jumpPreviousMiss }
+} as const satisfies Record<SeverityGrade, { next: KeybindEntry; previous: KeybindEntry }>;
+
+/** what one severity-jump key asks for: which grade to walk, and which way */
+export interface SeverityJumpBinding {
+	grade: SeverityGrade;
+	direction: 1 | -1;
+}
+
+const SEVERITY_JUMP_BY_ACTION = new Map<KeybindAction, SeverityJumpBinding>(
+	Object.entries(SEVERITY_JUMP_KEYBINDS).flatMap(([key, pair]) => {
+		const grade = key as SeverityGrade;
+		return [
+			[pair.next.action, { grade, direction: 1 }],
+			[pair.previous.action, { grade, direction: -1 }]
+		];
+	})
+);
+
+/** the jump an action asks for, or null when the action is not one of the six.
+ * the whole dispatch behind the number keys, so the registration point looks
+ * up rather than spelling six near-identical callbacks */
+export function severityJumpFor(action: KeybindAction): SeverityJumpBinding | null {
+	return SEVERITY_JUMP_BY_ACTION.get(action) ?? null;
+}
 
 /** the actions use-playback-shortcuts applies through resolveEditKeybind:
  * the five tools and the snap toggle */
