@@ -1,10 +1,10 @@
-// the settings dialog's six categories: the ordered registry the nav column
+// the settings dialog's seven categories: the ordered registry the nav column
 // renders, the pref-key coverage map, and the open-target resolution every
 // caller of the dialog goes through. plain data and one pure function, the
 // same split TabRail makes with PANEL_TABS/railTabClick, so the seam is
 // covered headlessly while the panels around it stay untested jsx
 
-import { Activity, Gamepad2, Keyboard, PencilRuler, Settings2, Volume2, type LucideIcon } from "lucide-react";
+import { Activity, Gamepad2, Keyboard, Palette, PencilRuler, Settings2, Volume2, type LucideIcon } from "lucide-react";
 import type {
 	AudioSettings,
 	EditingSettings,
@@ -14,7 +14,7 @@ import type {
 	TimelineSettings
 } from "@/state/store";
 
-export type SettingsCategory = "general" | "gameplay" | "audio" | "analysis" | "editing" | "keybinds";
+export type SettingsCategory = "general" | "gameplay" | "skin" | "audio" | "analysis" | "editing" | "keybinds";
 
 /** the nav column's order, mirroring PANEL_TABS in TabRail.tsx. `general`
  * must stay first: resolveOpenCategory falls back to the first entry, and the
@@ -26,6 +26,7 @@ export type SettingsCategory = "general" | "gameplay" | "audio" | "analysis" | "
 export const SETTINGS_CATEGORIES: { id: SettingsCategory; label: string; Icon: LucideIcon }[] = [
 	{ id: "general", label: "general", Icon: Settings2 },
 	{ id: "gameplay", label: "gameplay", Icon: Gamepad2 },
+	{ id: "skin", label: "skin", Icon: Palette },
 	{ id: "audio", label: "audio", Icon: Volume2 },
 	{ id: "analysis", label: "analysis", Icon: Activity },
 	{ id: "editing", label: "editing", Icon: PencilRuler },
@@ -48,7 +49,8 @@ export type SettingsPrefKey =
  * exists so categories.test.ts can fail when a pref is wired into the store
  * and into settings.rs but never rendered, which is invisible otherwise.
  *
- * `general` covers no key on purpose: the install path is a bespoke control,
+ * `general` and `skin` cover no key on purpose: the install path and the skin
+ * selection are bespoke controls,
  * not a per-key setter. so are `Settings.osuStablePath` and `Settings.recents`
  * -- both outside this map by design, and a naive "every Settings key has a
  * category" assertion would fail on day one. `keybinds` covers none for the
@@ -99,6 +101,11 @@ export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]
 		"timeline.nestedMarks",
 		"timeline.severityTicks"
 	],
+	// `skin` covers no per-key pref for the same reason `general` does not:
+	// the selection is one discriminated locator behind a bespoke picker, not a
+	// set of per-key setters, and `Settings.skin` is deliberately outside this
+	// map on those terms
+	skin: [],
 	editing: ["editing.snapToLattice", "editing.warnOnOverwrite"],
 	keybinds: []
 };

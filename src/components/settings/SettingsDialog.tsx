@@ -1,4 +1,4 @@
-// the settings dialog: a nav column and six category panels inside the modal
+// the settings dialog: a nav column and seven category panels inside the modal
 // it has always been. still a modal because it is a modal-shaped task and has
 // to be reachable with nothing loaded (the start screen needs the install
 // path), so it can be neither a seventh panel tab nor a route -- there is no
@@ -18,6 +18,7 @@ import { EditingCategory } from "./EditingCategory";
 import { GameplayCategory } from "./GameplayCategory";
 import { GeneralCategory } from "./GeneralCategory";
 import { KeybindsCategory } from "./KeybindsCategory";
+import { SkinCategory } from "./SkinCategory";
 
 // the vertical orientation costs less here than it does on the rail: a
 // left-aligned full-width text row is what group-data-vertical/tabs already
@@ -52,6 +53,8 @@ export function SettingsDialog({
 	const audioOffset = useViewerStore((s) => s.audio.offsetMs);
 	const loadSettings = useViewerStore((s) => s.loadSettings);
 	const saveStablePath = useViewerStore((s) => s.saveStablePath);
+	const selectSkin = useViewerStore((s) => s.selectSkin);
+	const importSkin = useViewerStore((s) => s.importSkin);
 
 	// the install-path lock lives here for the same reason the draft below
 	// does: general unmounts on a category switch and on close, so a lock held
@@ -62,6 +65,21 @@ export function SettingsDialog({
 	// writes can land in either order. this dialog is mounted for the app's
 	// lifetime, which is the lifetime the lock had before the panels existed
 	const [saving, setSaving] = useState(false);
+
+	// both skin pickers live here rather than in SkinCategory: the panels
+	// unmount on a category switch, and a native dialog that outlived its panel
+	// would resolve into a component that is gone
+	async function pickSkinFolder() {
+		const dir = await open({ directory: true, multiple: false });
+		if (typeof dir !== "string") return;
+		await selectSkin({ kind: "folder", path: dir });
+	}
+
+	async function pickSkinArchive() {
+		const path = await open({ multiple: false, filters: [{ name: "osu! skin", extensions: ["osk"] }] });
+		if (typeof path !== "string") return;
+		await importSkin(path);
+	}
 
 	async function pickInstall() {
 		const dir = await open({ directory: true, multiple: false });
@@ -156,6 +174,12 @@ export function SettingsDialog({
 						</TabsContent>
 						<TabsContent value="gameplay">
 							<GameplayCategory />
+						</TabsContent>
+						<TabsContent value="skin">
+							<SkinCategory
+								onBrowseFolder={() => void pickSkinFolder()}
+								onImportArchive={() => void pickSkinArchive()}
+							/>
 						</TabsContent>
 						<TabsContent value="audio">
 							<AudioCategory

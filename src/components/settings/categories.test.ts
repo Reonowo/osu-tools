@@ -112,6 +112,9 @@ describe("category registry", () => {
 		// ToggleRow-shaped category is
 		expect(CATEGORY_PREFS.general).toEqual([]);
 		expect(CATEGORY_PREFS.keybinds).toEqual([]);
+		// the skin selection is one discriminated locator behind a bespoke
+		// picker, on the same terms as the install path and the keybind map
+		expect(CATEGORY_PREFS.skin).toEqual([]);
 	});
 
 	test("every registry entry is a category the dialog can render", () => {
@@ -120,6 +123,7 @@ describe("category registry", () => {
 		expect(SETTINGS_CATEGORIES.map((category) => category.id)).toEqual([
 			"general",
 			"gameplay",
+			"skin",
 			"audio",
 			"analysis",
 			"editing",
