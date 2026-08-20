@@ -5,6 +5,7 @@ import {
 	bucketedKey,
 	bucketOfKey,
 	currentDensityBucket,
+	dropAccentBakes,
 	evictStaleBuckets,
 	setDensityBucket
 } from "./textures";
@@ -136,5 +137,29 @@ describe("setDensityBucket", () => {
 			expect(currentDensityBucket()).toBe(other);
 			expect(setDensityBucket(other)).toBe(false);
 		});
+	});
+});
+
+describe("dropAccentBakes", () => {
+	test("drops every accent-derived bake and nothing else", () => {
+		// the accent is baked INTO the key and the accent is a skin decision, so
+		// a skin swap kills these whatever bucket they sit at -- which is exactly
+		// what bucket eviction cannot express
+		const entries = new Map<string, number>([
+			["grad:outer:ff8800ff:116:b4", 1],
+			["grad:inner:ff8800ff:64:b4", 2],
+			["grad:ball:0052f1ff:116:b8", 3],
+			["circle:128:b4", 4],
+			["ring:128:6:b4", 5],
+			["glow:128:0.5:b8", 6]
+		]);
+		dropAccentBakes(entries);
+		expect([...entries.keys()].sort()).toEqual(["circle:128:b4", "glow:128:0.5:b8", "ring:128:6:b4"]);
+	});
+
+	test("is a no-op when nothing accent-derived is cached", () => {
+		const entries = new Map<string, number>([["circle:128:b4", 1]]);
+		dropAccentBakes(entries);
+		expect(entries.size).toBe(1);
 	});
 });

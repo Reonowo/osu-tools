@@ -11,10 +11,12 @@
 import "pixi.js/unsafe-eval";
 import { Application, Container, Graphics, RenderLayer, type Renderer } from "pixi.js";
 import { fromBytes, type Rgba } from "../engine/color";
-import { HIT_FADE_OUT_TIME } from "../engine/argon";
+import { objectAccents } from "../skin/combo-colours";
+import { sameSelection } from "../skin/picker";
+import { HIT_FADE_OUT_TIME } from "../engine/game-constants";
 import type { BrushRing, ChromeShape, PreviewSnapshot } from "../editor/preview";
 import type { DerivedScene } from "../lib/derive";
-import type { LoadedScene } from "../lib/scene-types";
+import type { LoadedScene, SkinManifest } from "../lib/scene-types";
 import type { EffectSettings, OverlaySettings } from "../state/store";
 import { installGradSafeBatchShader } from "./batch-shader";
 import {
@@ -237,6 +239,9 @@ export class GameplayRenderer {
 	private zoom = DEFAULT_VIEWPORT_ZOOM;
 	private pan: ViewportPan = NO_VIEWPORT_PAN;
 	private overlays: OverlaySettings | null = null;
+	/** the active skin; null until the startup hydrate resolves, which reads as
+	 * the bundled default rather than as "no skin" -- there is no such state */
+	private skin: SkinManifest | null = null;
 	/** master already folded in; null until the first setEffects */
 	private effects: EffectSettings | null = null;
 	/** null in watch mode; set by PlayerView on mode changes */
@@ -373,11 +378,14 @@ export class GameplayRenderer {
 		this.tracker = null;
 		if (scene === null || derived === null) return;
 
-		const palette = scene.renderPlan.comboColours;
 		this.ctx = {
 			scene,
 			derived,
-			accents: scene.renderPlan.objects.map((o) => fromBytes(palette[o.comboColourIndex % palette.length])),
+			// the palette is resolved HERE rather than read straight off the plan,
+			// because the engine stopped substituting one: it emits the beatmap's
+			// declared colours or null, and the layer that knows the active skin
+			// decides what a null means (skin/combo-colours.ts)
+			accents: objectAccents(scene.renderPlan, this.skin).map(fromBytes),
 			textures,
 			renderer: this.app.renderer,
 			getOverlays: () => this.overlays ?? DEFAULT_OVERLAYS,
@@ -431,6 +439,36 @@ export class GameplayRenderer {
 	 * through them on the next update() */
 	setEditChromeSources(sources: EditChromeSources | null): void {
 		this.editChromeSources = sources;
+	}
+
+	/**
+	 * the active skin.
+	 *
+	 * the swap is atomic by construction: the whole manifest is resolved before
+	 * it reaches here, and installing it rebuilds every drawable in one step. a
+	 * per-element progressive swap is rejected -- it would momentarily produce
+	 * exactly the mixed-era playfield the classic floor exists to prevent.
+	 *
+	 * the rebuild goes through setScene, which is the same path a density move
+	 * and a hit-animation toggle already take, so the playhead is untouched:
+	 * nothing here consults or moves the clock
+	 */
+	setSkin(skin: SkinManifest | null): void {
+		// compared by SELECTION, not by object identity: the manifest arrives
+		// fresh off ipc every time, so an identity check would never fire and
+		// re-picking the row that is already active would tear down and rebuild
+		// every drawable -- each live slider's render texture, lut, geometry and
+		// two shaders -- for a no-op
+		if (sameSelection(this.skin, skin)) return;
+		this.skin = skin;
+		// the combo accent is baked into the procedural cache's keys and the
+		// accent is a skin decision, so the previous palette's bakes are dead
+		// the moment the skin changes. bucket eviction cannot reach them
+		textures.clearAccentTextures();
+		if (this.ctx !== null) {
+			const { scene, derived } = this.ctx;
+			this.setScene(scene, derived);
+		}
 	}
 
 	/** the four live effects reach their drawables through ctx.getEffects() on

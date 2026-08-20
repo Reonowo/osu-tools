@@ -52,6 +52,31 @@ export function setDensityBucket(next: DensityBucket): boolean {
 	return true;
 }
 
+/** drops every accent-derived bake, whatever bucket it sits at.
+ *
+ * the combo accent is baked INTO the key (`grad:outer:<rgba>:...`), and the
+ * accent is now a skin decision -- a colourless beatmap takes its palette from
+ * whichever skin is active. bucket eviction cannot reach these: it keeps
+ * everything at the current bucket regardless of which palette produced it, so
+ * comparing a few skins over one replay would strand a full set of large
+ * gradient canvases per palette for the process lifetime.
+ *
+ * released rather than destroyed, exactly as `evictStaleBuckets` releases: a
+ * drawable baked moments ago may still be on screen for a frame, and pixi's
+ * destroy() would null the source out from under it
+ */
+export function clearAccentTextures(): void {
+	dropAccentBakes(cache);
+}
+
+/** the policy behind `clearAccentTextures`, over whatever map it is given --
+ * the same split `evictStaleBuckets` makes, so it is testable without a gpu */
+export function dropAccentBakes<T>(entries: Map<string, T>): void {
+	for (const key of entries.keys()) {
+		if (key.startsWith("grad:")) entries.delete(key);
+	}
+}
+
 /** cache keys are density-scoped: the same shape at two buckets is two
  * textures, and eviction reads the bucket back off the key */
 export function bucketedKey(key: string, atBucket: number): string {
