@@ -2,25 +2,35 @@ import { describe, expect, test } from "bun:test";
 import { fromHex } from "../../engine/color";
 import { trackValueAt } from "../../engine/transforms";
 import { testScene } from "../../test/scene";
-import {
-	argonProJudgementPiece,
-	GRADE_COLOURS,
-	judgementSpecs,
-	resultTracks,
-	ringExplosion,
-	tickMissTracks
-} from "./judgement-tracks";
+import { ALL_PIECES_ENABLED, resolvePieces } from "@/skin/pieces";
+import { BUNDLED_SKIN } from "@/skin/texture-sources";
+import { ARGON_COMBO_COLOURS } from "@/skin/combo-colours";
+import { fromBytes } from "../../engine/color";
+import { GRADE_COLOURS, judgementSpecs, resultTracks, ringExplosion, tickMissTracks } from "./judgement-tracks";
+
+/** the bundled default's pieces: argon, all procedural. every assertion in this
+ * file predates skinning and is about argon's own answers, so this is what they
+ * were always implicitly against */
+const ARGON_PIECES = resolvePieces({ skin: BUNDLED_SKIN, sources: [], prefs: ALL_PIECES_ENABLED });
+/** one accent per object index; the tests here never assert on the colour */
+const ACCENTS = ARGON_COMBO_COLOURS.map(fromBytes);
 
 describe("judgement specs", () => {
 	test("authoritative circle events pop at the object position", () => {
-		const specs = judgementSpecs(testScene());
+		const specs = judgementSpecs(testScene(), ARGON_PIECES, ACCENTS);
 		expect(specs).toHaveLength(1);
-		expect(specs[0]).toMatchObject({ x: 100, y: 100, grade: "ok", time: 980, style: "text" });
+		expect(specs[0]).toMatchObject({
+			x: 100,
+			y: 100,
+			grade: "ok",
+			time: 980,
+			piece: { kind: "procedural", style: "text" }
+		});
 	});
 
 	test("not-simulated scenes produce nothing", () => {
 		const scene = testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } });
-		expect(judgementSpecs(scene)).toHaveLength(0);
+		expect(judgementSpecs(scene, ARGON_PIECES, ACCENTS)).toHaveLength(0);
 	});
 
 	test("slider aggregates pop at the tail; tick misses at the tick; tick hits nothing", () => {
@@ -115,11 +125,11 @@ describe("judgement specs", () => {
 				totals: { count300: 0, count100: 1, count50: 0, countMiss: 0, maxCombo: 1 }
 			}
 		});
-		const specs = judgementSpecs(scene);
+		const specs = judgementSpecs(scene, ARGON_PIECES, ACCENTS);
 		expect(specs).toHaveLength(2);
-		const tickMiss = specs.find((s) => s.style === "tickMiss")!;
+		const tickMiss = specs.find((s) => s.piece.kind === "procedural" && s.piece.style === "tickMiss")!;
 		expect([tickMiss.x, tickMiss.y]).toEqual([150, 100]);
-		const aggregate = specs.find((s) => s.style === "text")!;
+		const aggregate = specs.find((s) => s.piece.kind === "procedural" && s.piece.style === "text")!;
 		expect([aggregate.x, aggregate.y]).toEqual([200, 100]);
 		expect(aggregate.grade).toBe("ok");
 	});
@@ -175,7 +185,7 @@ describe("judgement specs", () => {
 				totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 1 }
 			}
 		});
-		expect(judgementSpecs(scene)).toHaveLength(0);
+		expect(judgementSpecs(scene, ARGON_PIECES, ACCENTS)).toHaveLength(0);
 	});
 
 	test("spinner finals pop at the playfield centre", () => {
@@ -194,9 +204,9 @@ describe("judgement specs", () => {
 				totals: { count300: 0, count100: 0, count50: 1, countMiss: 0, maxCombo: 1 }
 			}
 		});
-		const specs = judgementSpecs(scene);
+		const specs = judgementSpecs(scene, ARGON_PIECES, ACCENTS);
 		expect(specs).toHaveLength(1);
-		expect(specs[0]).toMatchObject({ x: 256, y: 192, grade: "meh", style: "text" });
+		expect(specs[0]).toMatchObject({ x: 256, y: 192, grade: "meh", piece: { kind: "procedural", style: "text" } });
 	});
 
 	// the point of these two is the MECHANISM, not the outcome: nothing here
@@ -218,22 +228,31 @@ describe("judgement specs", () => {
 						],
 						totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 1 }
 					}
-				})
+				}),
+				ARGON_PIECES,
+				ACCENTS
 			);
 		expect(gradeSpecs("great")).toHaveLength(0);
 		for (const grade of ["ok", "meh", "miss"] as const) {
-			expect(gradeSpecs(grade)).toEqual([expect.objectContaining({ grade, style: "text", time: 980 })]);
+			expect(gradeSpecs(grade)).toEqual([
+				expect.objectContaining({ grade, piece: { kind: "procedural", style: "text" }, time: 980 })
+			]);
 		}
 	});
 
 	test("the skin's three-valued answer keeps empty and no-answer distinct", () => {
 		// an empty answer is a decision the skin made; a `none` is a decline
 		// that a later source in the chain would answer instead. a chain that
-		// collapsed them would resurrect the very piece the skin removed
-		expect(argonProJudgementPiece("great")).toEqual({ answer: "empty" });
-		expect(argonProJudgementPiece("largeTickHit")).toEqual({ answer: "none" });
-		expect(argonProJudgementPiece("largeTickMiss")).toEqual({ answer: "piece", style: "tickMiss" });
-		expect(argonProJudgementPiece("miss")).toEqual({ answer: "piece", style: "text" });
+		// collapsed them would resurrect the very piece the skin removed.
+		//
+		// the answers themselves now come from `skin/pieces.ts`, which is where
+		// the generalised resolver lives; what this asserts is that the SPEC list
+		// still honours them -- a great draws nothing, a large tick hit draws
+		// nothing, and a large tick miss draws argon's dot
+		expect(ARGON_PIECES.judgements.great).toEqual({ kind: "hidden" });
+		expect(ARGON_PIECES.judgements.largeTickHit).toEqual({ kind: "hidden" });
+		expect(ARGON_PIECES.judgements.largeTickMiss).toEqual({ kind: "procedural", style: "tickMiss" });
+		expect(ARGON_PIECES.judgements.miss).toEqual({ kind: "procedural", style: "text" });
 	});
 
 	test("seed is the event's index into simulation.events, not the object index", () => {
@@ -253,7 +272,7 @@ describe("judgement specs", () => {
 				totals: { count300: 0, count100: 0, count50: 1, countMiss: 0, maxCombo: 1 }
 			}
 		});
-		const specs = judgementSpecs(scene);
+		const specs = judgementSpecs(scene, ARGON_PIECES, ACCENTS);
 		expect(specs).toHaveLength(1);
 		expect(specs[0].seed).toBe(1);
 	});

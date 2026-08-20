@@ -1,16 +1,37 @@
-// pixi applier for argon judgement popups: builds Sprite/Text pieces from
-// judgement-tracks.ts's pure specs/tracks and copies track values every
-// frame. no timing logic lives here (decision 4) -- see judgement-tracks.ts
-// for the animation math and its citations
+// pixi applier for judgement popups: builds the pieces judgement-tracks.ts's
+// pure specs name and copies track values every frame. no timing logic lives
+// here (decision 4) -- see judgement-tracks.ts for the animation math and its
+// citations.
+//
+// three popups, one drawable: argon's grade text, argon's tick-miss dot, and a
+// legacy skin's own grade texture. which of them a result gets is decided by
+// `skin/pieces.ts` and read off the spec; nothing here re-decides it.
+//
+// hit lighting rides along with the popup rather than being its own drawable,
+// which is lazer's own arrangement (drawableosujudgement.cs:29-36 adds it as a
+// child of the judgement). it is behind the hit-effects preference like every
+// other popup here, and independent of the show-300s one: a great lights its
+// object whether or not it pops a "300"
 
 import { Container, Sprite, Text } from "pixi.js";
+import {
+	HIT_LIGHTING_END_SCALE,
+	HIT_LIGHTING_FADE_IN,
+	HIT_LIGHTING_FADE_OUT,
+	HIT_LIGHTING_HOLD,
+	HIT_LIGHTING_SCALE_DURATION,
+	HIT_LIGHTING_START_SCALE
+} from "@/skin/legacy/constants";
 import { toNumber } from "../../engine/color";
-import { trackValueAt } from "../../engine/transforms";
+import { out } from "../../engine/easing";
+import { trackValueAt, tween, type Track } from "../../engine/transforms";
 import { ActiveSetTracker, reconcileActiveDrawables } from "../playfield";
+import { SkinSprite } from "../skin-sprite";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
 import {
 	GRADE_COLOURS,
 	judgementSpecs,
+	legacyJudgementTracks,
 	resultTracks,
 	ringExplosion,
 	tickMissTracks,
@@ -29,6 +50,14 @@ interface Popup {
 	update(t: number): void;
 }
 
+/** a spec that draws no popup of its own -- the lighting alone. the container
+ * still exists so the lighting has a parent to hang from */
+function emptyPopup(spec: JudgementSpec): Popup {
+	const root = new Container();
+	root.position.set(spec.x, spec.y);
+	return { view: root, update: () => {} };
+}
+
 export class JudgementsDrawable implements ObjectDrawable {
 	readonly view = new Container();
 	private readonly specs: JudgementSpec[];
@@ -37,7 +66,7 @@ export class JudgementsDrawable implements ObjectDrawable {
 	private readonly scale: number;
 
 	constructor(private readonly ctx: RenderContext) {
-		this.specs = judgementSpecs(ctx.scene);
+		this.specs = judgementSpecs(ctx.scene, ctx.pieces, ctx.accents);
 		this.scale = ctx.scene.renderPlan.scale;
 		this.tracker = new ActiveSetTracker(
 			this.specs.map((s) => ({
@@ -130,6 +159,95 @@ export class JudgementsDrawable implements ObjectDrawable {
 		};
 	}
 
+	/** the popup the ACTIVE SKIN answered with, plus the lighting that rides
+	 * behind it. the two are assembled together because lazer assembles them
+	 * together, and because a spec can carry one without the other */
+	private buildPopup(spec: JudgementSpec): Popup {
+		const popup =
+			spec.piece.kind === "textured"
+				? this.buildLegacy(spec)
+				: spec.piece.kind === "procedural" && spec.piece.style === "tickMiss"
+					? this.buildTickMiss(spec)
+					: spec.piece.kind === "procedural"
+						? this.buildResult(spec)
+						: emptyPopup(spec);
+		if (!spec.lighting) return popup;
+		const lighting = this.buildLighting(spec);
+		// a SIBLING, not a child: both roots are positioned in playfield space
+		// and the popup's own root also carries the object's scale, so nesting
+		// the light inside it would offset and scale it twice over. depth
+		// float.MaxValue in source, which is this order -- the light first, so
+		// it sits behind the popup
+		const root = new Container();
+		root.addChild(lighting.view, popup.view);
+		return {
+			view: root,
+			update: (t) => {
+				popup.update(t);
+				lighting.update(t);
+			}
+		};
+	}
+
+	/**
+	 * drawableosujudgement.cs:73-87 -- the skin's `lighting` sprite, scaled
+	 * 0.8 -> 1.2 over 600 and faded in over 200, held 200, then out over 1000.
+	 *
+	 * tinted with the OBJECT's accent (skinnablelighting.cs:46), which is why
+	 * the spec carries one: the light is the colour of the thing that was hit,
+	 * not of the grade it earned
+	 */
+	private buildLighting(spec: JudgementSpec): Popup {
+		const sprite = new SkinSprite(this.ctx.skinTexture, this.ctx.pieces.hitLighting);
+		sprite.drawable.tint = toNumber(spec.accent);
+		sprite.drawable.blendMode = "add";
+		const root = new Container();
+		root.position.set(spec.x, spec.y);
+		root.scale.set(this.scale);
+		root.addChild(sprite.view);
+		const alpha: Track[] = [
+			tween(spec.time, HIT_LIGHTING_FADE_IN, 0, 1),
+			tween(spec.time + HIT_LIGHTING_FADE_IN + HIT_LIGHTING_HOLD, HIT_LIGHTING_FADE_OUT, 1, 0)
+		];
+		const scale: Track[] = [
+			tween(spec.time, HIT_LIGHTING_SCALE_DURATION, HIT_LIGHTING_START_SCALE, HIT_LIGHTING_END_SCALE, out)
+		];
+		return {
+			view: root,
+			update: (t) => {
+				root.alpha = trackValueAt(alpha, t, 0);
+				sprite.view.scale.set(trackValueAt(scale, t, HIT_LIGHTING_START_SCALE));
+			}
+		};
+	}
+
+	/** legacyjudgementpieceold.cs -- the skin's own grade texture, under one
+	 * fade envelope and (unless the skin animated it itself) the era's own pop */
+	private buildLegacy(spec: JudgementSpec): Popup {
+		const sprite = new SkinSprite(this.ctx.skinTexture, spec.piece);
+		const root = new Container();
+		root.position.set(spec.x, spec.y);
+		const tracks = legacyJudgementTracks(spec, {
+			animated: sprite.animated,
+			// a large tick's miss is the one "missed tick" this ruleset draws
+			missedTick: spec.grade === "miss" && spec.piece.kind === "textured" && spec.piece.texture.name !== "hit0",
+			skinVersion: this.ctx.skin.config.version
+		});
+		root.addChild(sprite.view);
+		return {
+			view: root,
+			update: (t) => {
+				root.alpha = trackValueAt(tracks.alpha, t, 0);
+				// the popup is drawn at the object's own cs scale, exactly as
+				// drawableosujudgement.cs:59 sets `Scale = HitObject.Scale`
+				root.scale.set(this.scale * trackValueAt(tracks.scale, t, 1));
+				root.y = spec.y + trackValueAt(tracks.moveY, t, 0) * this.scale;
+				root.angle = trackValueAt(tracks.rotate, t, 0);
+				sprite.setElapsed(t - spec.time);
+			}
+		};
+	}
+
 	update(t: number): void {
 		// the hitEffects toggle covers everything this drawable builds -- the
 		// judgement text, the ring explosion and the tick-miss piece. a pure
@@ -147,7 +265,7 @@ export class JudgementsDrawable implements ObjectDrawable {
 			this.tracker.update(t),
 			(index) => {
 				const spec = this.specs[index];
-				const popup = spec.style === "tickMiss" ? this.buildTickMiss(spec) : this.buildResult(spec);
+				const popup = this.buildPopup(spec);
 				this.view.addChild(popup.view);
 				return popup;
 			},

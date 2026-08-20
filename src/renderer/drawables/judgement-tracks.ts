@@ -9,6 +9,12 @@
 import { fromHex, type Rgba } from "../../engine/color";
 import { easeIn, inQuint, out, outQuint } from "../../engine/easing";
 import { jump, tween, type Track } from "../../engine/transforms";
+import {
+	LEGACY_JUDGEMENT_FADE_IN,
+	LEGACY_JUDGEMENT_FADE_OUT_DELAY,
+	LEGACY_JUDGEMENT_FADE_OUT_LENGTH
+} from "@/skin/legacy/constants";
+import type { JudgementPieceSpec, JudgedResult, SkinPieces } from "@/skin/pieces";
 import type { Grade, LoadedScene, RenderNested } from "../../lib/scene-types";
 
 /** osucolour.cs:325,331,337,464 -- Blue/Yellow/Green/Red, read via ForHitResult
@@ -25,7 +31,23 @@ export interface JudgementSpec {
 	x: number;
 	y: number;
 	grade: Grade;
-	style: "text" | "tickMiss";
+	/** what the ACTIVE SKIN draws for this result -- argon's text popup, its
+	 * tick-miss dot, a legacy skin's own grade texture, or nothing. resolved
+	 * once by `skin/pieces.ts` and read here; this module decides no part of it */
+	piece: JudgementPieceSpec;
+	/**
+	 * whether hit lighting plays behind this popup.
+	 *
+	 * drawableosujudgement.cs:73-87 -- lighting is applied on the HIT animation
+	 * path only, and skinnablelighting.cs:46 colours it transparent for a miss
+	 * or a tick, which is the same statement as not drawing it. deliberately
+	 * independent of whether a popup is drawn at all: a great lights the object
+	 * even with the show-300s preference off, because the lighting is what the
+	 * hit-effects toggle owns and the popup is what the show-300s one does
+	 */
+	lighting: boolean;
+	/** the object's own combo colour, which is what the lighting is tinted with */
+	accent: Rgba;
 	seed: number;
 }
 
@@ -33,49 +55,11 @@ function nestedAt(nested: RenderNested[], time: number, kind: RenderNested["kind
 	return nested.find((n) => n.kind === kind && Math.abs(n.time - time) <= 1) ?? null;
 }
 
-/** the lazer `HitResult`s this viewer's judgement events map onto. the skin is
- * asked about a result, never about our own event kinds, exactly as
- * `SkinComponentLookup<HitResult>` is (hitresult.cs) */
-export type JudgedResult = Grade | "largeTickHit" | "largeTickMiss";
-
-/** what a skin answers when asked for a judgement piece. lazer's
- * `GetDrawableComponent` is three-valued and every value is load-bearing: a
- * drawable to show, `Drawable.Empty()` -- answered, with nothing -- and
- * `null`, declining so the next source answers instead. an empty answer is
- * NOT a decline: collapsing the two would resurrect exactly what a skin was
- * chosen to remove */
-export type PieceAnswer = { answer: "piece"; style: "text" | "tickMiss" } | { answer: "empty" } | { answer: "none" };
-
-/** osuargonskintransformer.cs:23-42, on the `isPro` branch -- argonpro is this
- * app's default skin throughout.
- *
- * :26-28 answers `Drawable.Empty()` for Great (and Perfect, which osu!std
- * never judges), which is why a 300 draws no popup here. the popup is missing
- * because THE SKIN ANSWERED EMPTY, not because the app decided a 300 is noisy:
- * when real skin loading lands, a legacy skin's 1x1 transparent `hit300.png`
- * must reach this same outcome through this same call, and a skin that draws
- * greats must get them back without this module changing. the app never
- * substitutes its own judgement for the skin's */
-export function argonProJudgementPiece(result: JudgedResult): PieceAnswer {
-	if (result === "great") return { answer: "empty" };
-	switch (result) {
-		// :32-34 -- large tick hits and slider tail hits get no piece at all
-		case "largeTickHit":
-			return { answer: "none" };
-		// :36-38
-		case "largeTickMiss":
-			return { answer: "piece", style: "tickMiss" };
-		// :40-41
-		default:
-			return { answer: "piece", style: "text" };
-	}
-}
-
 /** drawableosujudgement.cs:39-71 -- popup position (slider tail for the
  * aggregate, playfield centre for spinners, the object itself otherwise). what
  * each result draws is not decided here: every candidate is put to the skin
  * (argonProJudgementPiece) and only a `piece` answer becomes a spec */
-export function judgementSpecs(scene: LoadedScene): JudgementSpec[] {
+export function judgementSpecs(scene: LoadedScene, pieces: SkinPieces, accents: readonly Rgba[]): JudgementSpec[] {
 	if (scene.simulation.status !== "authoritative") return [];
 	const specs: JudgementSpec[] = [];
 	scene.simulation.events.forEach((event, seed) => {
@@ -112,16 +96,27 @@ export function judgementSpecs(scene: LoadedScene): JudgementSpec[] {
 			default:
 				return;
 		}
-		const piece = argonProJudgementPiece(result);
-		if (piece.answer !== "piece") return;
+		const piece = pieces.judgements[result];
+		// lighting is the object's own, not the popup's: a hit that is not a tick
+		// lights whatever the skin answered about the popup
+		const grade = result === "largeTickMiss" ? "miss" : result === "largeTickHit" ? "great" : (result as Grade);
+		const lighting =
+			pieces.hitLighting.kind !== "hidden" &&
+			grade !== "miss" &&
+			result !== "largeTickHit" &&
+			result !== "largeTickMiss";
+		// a spec with neither a popup nor a light is nothing to draw at all
+		if (piece.kind === "hidden" && !lighting) return;
 		specs.push({
 			time: event.time,
 			x,
 			y,
 			// the tick-miss piece is drawn in miss colours whichever result
 			// produced it (argonjudgementpiecesslidertickmiss.cs)
-			grade: result === "largeTickMiss" ? "miss" : (result as Grade),
-			style: piece.style,
+			grade,
+			piece,
+			lighting,
+			accent: accents[event.objectIndex] ?? GRADE_COLOURS.great,
 			seed
 		});
 	});
@@ -223,4 +218,84 @@ export function resultTracks(spec: { time: number; grade: Grade }): ResultTracks
 		ringMove: [tween(spec.time, 600, 0.3, 1, outQuint)],
 		ringAlpha: [tween(spec.time, 1000, 1, 0, outQuint)]
 	};
+}
+
+export interface LegacyJudgementTracks {
+	/** the whole popup's fade, which every legacy judgement shares */
+	alpha: Track[];
+	scale: Track[];
+	/** the miss drop, in osu!px */
+	moveY: Track[];
+	/** the miss tumble, in degrees */
+	rotate: Track[];
+}
+
+/**
+ * legacyjudgementpieceold.cs:38-97 -- one envelope for every grade, and three
+ * different bodies inside it.
+ *
+ * `animated` is load-bearing and easy to miss: **a legacy judgement that is an
+ * animation plays no transforms at all** (:52). a skin that ships `hit100-0`,
+ * `hit100-1`, ... has already authored the motion it wants, and lazer refuses
+ * to add its own on top -- so the popup only fades.
+ *
+ * the miss rotation is `RNG.NextSingle(-8.6, 8.6)`, which is per-popup and
+ * random; it is drawn from the same deterministic per-event seed the argon
+ * ring explosion uses, so re-seeking never reshuffles a popup
+ */
+export function legacyJudgementTracks(
+	spec: { time: number; grade: Grade; seed: number },
+	options: { animated: boolean; missedTick: boolean; skinVersion: number }
+): LegacyJudgementTracks {
+	const t = spec.time;
+	const tracks: LegacyJudgementTracks = {
+		// :48-49 -- FadeInFromZero(120), then Delay(500).FadeOut(600)
+		alpha: [
+			tween(t, LEGACY_JUDGEMENT_FADE_IN, 0, 1),
+			tween(t + LEGACY_JUDGEMENT_FADE_OUT_DELAY, LEGACY_JUDGEMENT_FADE_OUT_LENGTH, 1, 0)
+		],
+		scale: [jump(t, 1)],
+		moveY: [jump(t, 0)],
+		rotate: [jump(t, 0)]
+	};
+	if (options.animated) return tracks;
+
+	if (spec.grade === "miss") {
+		if (options.missedTick) {
+			// :62-65 -- a missed tick pops smaller and fades from halfway
+			tracks.scale = [jump(t, 1.2), tween(t, 100, 1.2, 1, easeIn)];
+			tracks.alpha = [
+				tween(t, LEGACY_JUDGEMENT_FADE_IN, 0, 1),
+				tween(t + LEGACY_JUDGEMENT_FADE_OUT_DELAY / 2, LEGACY_JUDGEMENT_FADE_OUT_LENGTH, 1, 0)
+			];
+			return tracks;
+		}
+		// :69-70
+		tracks.scale = [jump(t, 1.6), tween(t, 100, 1.6, 1, easeIn)];
+		const total = LEGACY_JUDGEMENT_FADE_OUT_DELAY + LEGACY_JUDGEMENT_FADE_OUT_LENGTH;
+		if (options.skinVersion > 1) {
+			// :74-75 -- a version 2 skin's miss starts 5px high and falls 80
+			tracks.moveY = [jump(t, -5), tween(t, total, -5, 75, easeIn)];
+		}
+		// :78-82 -- rotate to r over the fade-in, then on to 2r over the rest
+		const rotation = -8.6 + mulberry32(spec.seed)() * 17.2;
+		tracks.rotate = [
+			tween(t, LEGACY_JUDGEMENT_FADE_IN, 0, rotation),
+			tween(t + LEGACY_JUDGEMENT_FADE_IN, total - LEGACY_JUDGEMENT_FADE_IN, rotation, rotation * 2, easeIn)
+		];
+		return tracks;
+	}
+
+	// :87-95 -- the hit pop, written as stable's own four-step sequence. the
+	// comment there explains the 0.95 hard-set: stable dictates 0.9 -> 1 over
+	// t=1.0..1.4 but the sequence is already at t=1.2, so the value is forced
+	// to the halfway point and the second half of the transform completes
+	const step = LEGACY_JUDGEMENT_FADE_IN * 0.2;
+	tracks.scale = [
+		jump(t, 0.6),
+		tween(t, LEGACY_JUDGEMENT_FADE_IN * 0.8, 0.6, 1.1),
+		tween(t + LEGACY_JUDGEMENT_FADE_IN, step, 1.1, 0.9),
+		tween(t + LEGACY_JUDGEMENT_FADE_IN + step, step, 0.95, 1)
+	];
+	return tracks;
 }

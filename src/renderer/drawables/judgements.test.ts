@@ -13,6 +13,7 @@ import { fromBytes } from "../../engine/color";
 import { deriveScene } from "../../lib/derive";
 import { DEFAULT_EFFECTS } from "../../state/defaults";
 import { testScene } from "../../test/scene";
+import { testSkinContext } from "@/test/skin";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
 import * as textures from "../textures";
 import { JudgementsDrawable } from "./judgements";
@@ -26,6 +27,7 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
 		// beatmap's declared colours or null, and a null skin is the bundled
 		// default, so these tests see argon's own six
 		accents: objectAccents(scene.renderPlan, null).map(fromBytes),
+		...testSkinContext(),
 		textures,
 		// never touched by JudgementsDrawable; no headless renderer is available to construct here
 		renderer: {} as unknown as Renderer,
