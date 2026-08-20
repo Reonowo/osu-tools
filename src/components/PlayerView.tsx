@@ -6,8 +6,16 @@ import { audioExtendedBounds } from "@/lib/timeline";
 import { audioGraph } from "@/playback/audio-graph";
 import { htmlAudioAdapter } from "@/playback/clock";
 import { buildHitsoundPlan } from "@/playback/hitsound-plan";
-import { bundledSampleUrlSet, hitsoundScheduler, sampleStore, setBeatmapSampleSource } from "@/playback/hitsounds";
-import { beatmapSampleSource, resolveSample, sampleSources } from "@/playback/sample-sources";
+import {
+	bundledSampleUrlSet,
+	hitsoundScheduler,
+	sampleStore,
+	setBeatmapSampleSource,
+	setSkinSampleSource
+} from "@/playback/hitsounds";
+import { beatmapSampleSource, resolveSample, sampleSources, skinSampleSource } from "@/playback/sample-sources";
+import { SAMPLE_EXTENSIONS } from "@/skin/sample-extensions";
+import { sameSelection } from "@/skin/picker";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import type { LoadedScene } from "@/lib/scene-types";
@@ -61,11 +69,31 @@ function installHitsounds(scene: LoadedScene): void {
 	});
 	setBeatmapSampleSource(beatmap);
 
+	// the selected skin's own files, between the beatmap and the bundled
+	// default -- the chain's middle slot, which was deliberately empty until
+	// skinning landed. rebuilt here rather than held for the same reason the
+	// beatmap source is: what it answers depends on live state
+	// gated on the ERA rather than on whether the skin ships any sample files:
+	// a legacy skin that switched layered hit sounds off has something to say
+	// even with no samples of its own, and that answer is EMPTY, which a
+	// file-count gate would drop on the floor
+	const manifest = state.skin;
+	const skin =
+		manifest === null || manifest.era !== "legacy"
+			? null
+			: skinSampleSource({
+					files: manifest.files,
+					toUrl: convertFileSrc,
+					extensions: SAMPLE_EXTENSIONS,
+					layeredHitSounds: manifest.config.layeredHitSounds
+				});
+	setSkinSampleSource(skin);
+
 	// resolve every distinct request the plan can make, and decode what the
 	// chain answered. resolution is cheap and the store dedupes by url, so the
 	// map's whole sample set is warmed with one pass rather than one fetch per
 	// judgement
-	const sources = sampleSources(beatmap);
+	const sources = sampleSources(beatmap, skin);
 	const urls = new Set<string>();
 	for (const sample of plan) {
 		const answer = resolveSample(sources, sample.request);
@@ -102,6 +130,10 @@ export function PlayerView() {
 			// timelines, so setting it first means the very first build already
 			// uses the persisted value instead of rebuilding to reach it
 			renderer.setEffects(state.effects);
+			// and the skin before the scene, for the same reason: the palette is
+			// resolved at build time, so setting it first means the first build
+			// already draws the right colours instead of rebuilding to reach them
+			renderer.setSkin(state.skin);
 			renderer.setScene(state.scene, state.derived);
 			renderer.setOverlays(effectiveOverlays(state.overlays, state.mode));
 			renderer.setViewport(state.viewportZoom, state.viewportPan);
@@ -267,16 +299,36 @@ export function PlayerView() {
 				hitsoundScheduler.setEnabled(hitsoundsAudible(state));
 			}
 			// the positional level and the combo-break rule are baked into the
-			// plan, and the ignore-beatmap-hitsounds toggle changes which source
-			// answers, so either rebuilds
+			// plan; the ignore-beatmap-hitsounds toggle and the SKIN both change
+			// which source answers. a skin change therefore re-plans without
+			// reloading the replay and without touching the playhead -- the clock
+			// is not consulted here at all
+			// compared by SELECTION, not identity: ipc hands back a fresh manifest
+			// per call, and the startup null -> bundled flip is not a skin change
+			// at all -- both draw Argon. treating either as one would re-plan and
+			// re-decode for nothing, and at startup could land mid-playback
+			const skinMoved = !sameSelection(state.skin, prev.skin);
 			if (
 				(state.gameplay !== prev.gameplay ||
-					state.audio.ignoreBeatmapHitsounds !== prev.audio.ignoreBeatmapHitsounds) &&
+					state.audio.ignoreBeatmapHitsounds !== prev.audio.ignoreBeatmapHitsounds ||
+					skinMoved) &&
 				state.scene !== null
 			) {
+				// a SKIN change is the one re-plan that changes which files exist,
+				// not just when they play -- which is the premise the scene-swap
+				// clear was written on. without dropping the previous skin's
+				// buffers, comparing skins over one replay accumulates them against
+				// a budget that refuses PERMANENTLY once crossed, so the samples
+				// would go silent with no way back but loading another replay. the
+				// beatmap's own files are re-warmed by the pass below
+				if (skinMoved) sampleStore.clear(bundledSampleUrlSet());
 				installHitsounds(state.scene);
 			}
 			if (state.audio.offsetMs !== prev.audio.offsetMs) playbackClock.setOffset(state.audio.offsetMs);
+			// the skin swaps atomically: the whole manifest resolved before it
+			// reached the store, and installing it rebuilds every drawable in one
+			// step without touching the clock, so the playhead is kept
+			if (skinMoved) rendererRef.current?.setSkin(state.skin);
 		});
 	}, []);
 
