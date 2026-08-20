@@ -51,3 +51,28 @@ export function resolveThroughChain<Request, T>(
 	}
 	return { answer: "none" };
 }
+
+/**
+ * the first source that ANSWERS, returned rather than its answer.
+ *
+ * lazer's `ISkinSource.FindProvider` (skinprovidingcontainer.cs:186-199), which
+ * exists for exactly one reason: a rule that has to ask a FOLLOW-UP question of
+ * whichever source answered the first one. two such rules are ported here --
+ * the hit circle's prefix precondition (legacymaincirclepiece.cs:78-82) and the
+ * cursor trail's disjoint test (legacycursortrail.cs:44-45) -- and both would be
+ * wrong if they re-walked the whole chain instead.
+ *
+ * "answers" is the same three-valued test `resolveThroughChain` uses, and it
+ * has to be: lazer's predicate is `GetTexture(name) != null`, and a skin's
+ * deliberately blank 1x1 png IS a texture there. a source that answered `empty`
+ * has provided the element, so it is the provider
+ */
+export function findProvider<Request, T>(
+	sources: readonly LookupSource<Request, T>[],
+	request: Request
+): LookupSource<Request, T> | null {
+	for (const source of sources) {
+		if (source.lookup(request).answer !== "none") return source;
+	}
+	return null;
+}
