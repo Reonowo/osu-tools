@@ -355,6 +355,18 @@ pub struct EffectPrefs {
     pub cursor_glow: bool,
     pub cursor_trail: bool,
     pub follow_points: bool,
+    /// lazer's `BeatmapSkin`, inverted so the stored default is `false`: a
+    /// mapset designed around its own look presents as its author intended
+    /// unless the user says otherwise. drops the beatmap's own IMAGE files from
+    /// the texture lookup chain and nothing else -- deliberately independent of
+    /// `AudioPrefs::ignore_beatmap_hitsounds`, which lazer splits the same way
+    pub ignore_beatmap_skin: bool,
+    /// whether a great draws a judgement popup at all. the one effect that
+    /// ships OFF: greats drew none before a skin could be loaded, and a legacy
+    /// skin ships a `hit300` that answers found -- so without this the choice
+    /// would be an artifact of which skin happened to be selected, and a popup
+    /// on every 300 buries the 100s and 50s a replay is opened to find
+    pub show300_judgements: bool,
     /// percent 0-100, 100 fully black. it rides on this group for where it
     /// belongs in the settings dialog, not because `enabled` gates it -- the
     /// background dim is not an effect and applies whatever the master says
@@ -370,6 +382,8 @@ impl Default for EffectPrefs {
             cursor_glow: true,
             cursor_trail: true,
             follow_points: true,
+            ignore_beatmap_skin: false,
+            show300_judgements: false,
             background_dim: BACKGROUND_DIM_DEFAULT,
         }
     }
@@ -517,6 +531,8 @@ mod tests {
                 cursor_glow: false,
                 cursor_trail: true,
                 follow_points: false,
+                ignore_beatmap_skin: true,
+                show300_judgements: true,
                 background_dim: 35,
             },
             timeline: TimelinePrefs {
@@ -594,9 +610,13 @@ mod tests {
                 cursor_glow: true,
                 cursor_trail: true,
                 follow_points: true,
+                ignore_beatmap_skin: false,
+                // the one that ships off: a popup on every great buries the
+                // 100s and 50s a replay is opened to find
+                show300_judgements: false,
                 background_dim: BACKGROUND_DIM_DEFAULT,
             },
-            "every effect ships enabled, master included"
+            "every effect ships enabled but the 300 popups, master included"
         );
         assert_eq!(
             settings.timeline,
@@ -652,6 +672,8 @@ mod tests {
                     "cursorGlow": false,
                     "cursorTrail": true,
                     "followPoints": false,
+                    "ignoreBeatmapSkin": true,
+                    "show300Judgements": true,
                     "backgroundDim": 35,
                 },
                 "timeline": {
@@ -699,6 +721,8 @@ mod tests {
                     "cursorGlow": true,
                     "cursorTrail": true,
                     "followPoints": true,
+                    "ignoreBeatmapSkin": false,
+                    "show300Judgements": false,
                     "backgroundDim": 70,
                 },
                 "timeline": {
