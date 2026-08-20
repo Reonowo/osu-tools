@@ -39,7 +39,7 @@ export function partitionPoint(frames: readonly FrameDto[], time: number): numbe
 	return lo;
 }
 
-export function cursorStateAt(frames: FrameDto[], time: number): CursorSample | null {
+export function cursorStateAt(frames: readonly FrameDto[], time: number): CursorSample | null {
 	if (frames.length === 0) return null;
 	const idx = partitionPoint(frames, time);
 	if (idx === 0) {

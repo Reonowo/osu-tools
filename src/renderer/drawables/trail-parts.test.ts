@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import type { FrameDto } from "../../lib/scene-types";
-import { buildTrailPath, trailAlpha, trailPartsAt, type TrailShape } from "./trail-parts";
+import { buildTrailPath, legacyTrailShape, trailAlpha, trailPartsAt, type TrailShape } from "./trail-parts";
 
 const frame = (time: number, x: number, y = 100): FrameDto => ({ time, x, y, buttons: 0 });
 
 /** round numbers instead of the argon constants: 2.5 osu!px per ms along a
  * straight line, a part every 10 osu!px, a 100ms fade */
-const SHAPE: TrailShape = { interval: 10, fadeDuration: 100, maxParts: 64 };
+/** the argon exponent and base, so the alpha assertions below keep pinning the
+ * numbers they always did; the two eras disagree on both */
+function shape(spawn: TrailShape["spawn"], fadeDuration: number, maxParts: number): TrailShape {
+	return { spawn, fadeDuration, fadeExponent: 4, baseAlpha: 0.8, maxParts };
+}
+
+const SHAPE: TrailShape = shape({ by: "distance", interval: 10 }, 100, 64);
 const straight = Array.from({ length: 21 }, (_, i) => frame(i * 16, i * 40));
 
 describe("trail parts, the path", () => {
@@ -25,7 +31,7 @@ describe("trail parts, the path", () => {
 		// 100 osu!px per frame with a 10 osu!px interval puts nine parts inside
 		// every segment, none of them on a frame
 		const path = buildTrailPath([frame(0, 0), frame(50, 100), frame(100, 200)]);
-		const parts = trailPartsAt(path, 100, { interval: 10, fadeDuration: 1000, maxParts: 64 });
+		const parts = trailPartsAt(path, 100, shape({ by: "distance", interval: 10 }, 1000, 64));
 		expect(parts.map((p) => p.x)).toEqual(Array.from({ length: 19 }, (_, i) => 10 + i * 10));
 		// 2 osu!px per ms across both segments
 		for (const part of parts) expect(part.bornAt).toBeCloseTo(part.x / 2, 9);
@@ -35,7 +41,7 @@ describe("trail parts, the path", () => {
 		// out along x, back along y: a part at arc length 150 is 50 osu!px up the
 		// second leg, not 150 osu!px along the straight line between the ends
 		const path = buildTrailPath([frame(0, 0, 0), frame(100, 100, 0), frame(200, 100, 100)]);
-		const parts = trailPartsAt(path, 200, { interval: 50, fadeDuration: 1000, maxParts: 64 });
+		const parts = trailPartsAt(path, 200, shape({ by: "distance", interval: 50 }, 1000, 64));
 		expect(parts).toHaveLength(3);
 		expect(parts.map((p) => [p.x, p.y])).toEqual([
 			[50, 0],
@@ -64,7 +70,7 @@ describe("trail parts, the path", () => {
 describe("trail parts, the fade window", () => {
 	test("each part carries the alpha its age has earned", () => {
 		const parts = trailPartsAt(buildTrailPath(straight), 160, SHAPE);
-		for (const part of parts) expect(part.alpha).toBeCloseTo(trailAlpha((160 - part.bornAt) / 100), 12);
+		for (const part of parts) expect(part.alpha).toBeCloseTo(trailAlpha((160 - part.bornAt) / 100, SHAPE), 12);
 		// the newest part is the brightest and the oldest the dimmest, both
 		// strictly inside the window
 		expect(parts[parts.length - 1].alpha).toBeGreaterThan(parts[0].alpha);
@@ -81,9 +87,9 @@ describe("trail parts, the fade window", () => {
 
 	test("a stationary cursor sheds its trail and then has none", () => {
 		const path = buildTrailPath([frame(0, 0), frame(100, 250), frame(1000, 250)]);
-		const shape = { interval: 10, fadeDuration: 100, maxParts: 64 };
-		expect(trailPartsAt(path, 150, shape).length).toBeGreaterThan(0);
-		expect(trailPartsAt(path, 250, shape)).toEqual([]);
+		const stationary = shape({ by: "distance", interval: 10 }, 100, 64);
+		expect(trailPartsAt(path, 150, stationary).length).toBeGreaterThan(0);
+		expect(trailPartsAt(path, 250, stationary)).toEqual([]);
 	});
 
 	test("the cap keeps the newest parts, not the oldest", () => {
@@ -160,7 +166,7 @@ describe("trail parts, degenerate frame streams", () => {
 		// the shape interpolation.ts already treats as real input: two frames
 		// sharing one timestamp
 		const path = buildTrailPath([frame(0, 0), frame(50, 100), frame(50, 140), frame(100, 240)]);
-		const parts = trailPartsAt(path, 100, { interval: 20, fadeDuration: 1000, maxParts: 64 });
+		const parts = trailPartsAt(path, 100, shape({ by: "distance", interval: 20 }, 1000, 64));
 		expect(parts.map((p) => p.x)).toEqual([20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220]);
 		for (const part of parts) expect(Number.isFinite(part.bornAt)).toBe(true);
 	});
@@ -168,16 +174,67 @@ describe("trail parts, degenerate frame streams", () => {
 
 describe("trail fade alpha (argoncursortrail.cs:16,26 -- 0.8 * clamp(1-age,0,1)^4)", () => {
 	test("a fresh part renders at the base alpha", () => {
-		expect(trailAlpha(0)).toBe(0.8);
+		expect(trailAlpha(0, SHAPE)).toBe(0.8);
 	});
 
 	test("a part halfway through its fade is dimmed by the fourth power, not linearly", () => {
-		expect(trailAlpha(0.5)).toBeCloseTo(0.8 * 0.5 ** 4, 10);
-		expect(trailAlpha(0.5)).not.toBeCloseTo(0.8 * 0.5, 3);
+		expect(trailAlpha(0.5, SHAPE)).toBeCloseTo(0.8 * 0.5 ** 4, 10);
+		expect(trailAlpha(0.5, SHAPE)).not.toBeCloseTo(0.8 * 0.5, 3);
 	});
 
 	test("a fully aged part is invisible, and age past 1 clamps rather than going negative", () => {
-		expect(trailAlpha(1)).toBe(0);
-		expect(trailAlpha(1.5)).toBe(0);
+		expect(trailAlpha(1, SHAPE)).toBe(0);
+		expect(trailAlpha(1.5, SHAPE)).toBe(0);
+	});
+});
+
+describe("a disjoint trail spawns by time, not by distance", () => {
+	const disjoint = shape({ by: "time", separation: 20 }, 100, 64);
+
+	test("a part sits at every tick inside the fade window", () => {
+		const path = buildTrailPath(straight);
+		const parts = trailPartsAt(path, 200, disjoint);
+		// ticks strictly inside (100, 200]: 120, 140, 160, 180 -- and the open
+		// interval keeps 200 itself off, since nothing spawns on the cursor
+		expect(parts.map((p) => p.bornAt)).toEqual([120, 140, 160, 180]);
+	});
+
+	test("a stationary cursor keeps its trail rather than shedding it", () => {
+		// the whole difference from the distance trail, and the reason lazer
+		// picks between them: a cursor that stops still stacks parts on the spot
+		const path = buildTrailPath([frame(0, 250), frame(1000, 250)]);
+		const parts = trailPartsAt(path, 500, disjoint);
+		// ticks strictly inside (400, 500]: 420, 440, 460, 480
+		expect(parts.length).toBe(4);
+		for (const part of parts) expect(part.x).toBe(250);
+	});
+
+	test("the cap keeps the newest ticks", () => {
+		const path = buildTrailPath(straight);
+		const capped = shape({ by: "time", separation: 1 }, 1000, 8);
+		const parts = trailPartsAt(path, 300, capped);
+		expect(parts).toHaveLength(8);
+		expect(parts[parts.length - 1].bornAt).toBe(299);
+	});
+
+	test("the fade is linear at exponent 1 rather than argon's fourth power", () => {
+		const legacy = { fadeExponent: 1, baseAlpha: 1 };
+		expect(trailAlpha(0.5, legacy)).toBeCloseTo(0.5, 9);
+		expect(trailAlpha(0.5, SHAPE)).toBeCloseTo(0.8 * 0.5 ** 4, 9);
+	});
+});
+
+describe("the legacy trail shape", () => {
+	test("a connected trail spaces parts by the texture's own width", () => {
+		// cursortrail.cs:201 -- interval = DisplayWidth / 2.5 at cursor scale 1
+		expect(legacyTrailShape(10, false)).toMatchObject({ spawn: { by: "distance", interval: 4 } });
+	});
+
+	test("disjointness picks both the spawn rule and the fade length", () => {
+		expect(legacyTrailShape(10, true)).toMatchObject({
+			spawn: { by: "time", separation: 1000 / 60 },
+			fadeDuration: 150
+		});
+		expect(legacyTrailShape(10, false).fadeDuration).toBe(500);
 	});
 });

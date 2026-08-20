@@ -4,8 +4,11 @@ import { trackValueAt } from "../../engine/transforms";
 import type { EffectSettings } from "../../lib/scene-types";
 import { DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "../../state/defaults";
 import { testScene } from "../../test/scene";
+import { NO_SKIN_CONFIG, skinFiles, testSkin, testSkinContext, testToUrl } from "@/test/skin";
+import { ALL_PIECES_ENABLED, resolvePieces } from "@/skin/pieces";
+import { textureSources } from "@/skin/texture-sources";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
-import { CursorDrawable, expandTracks, holdIntervals } from "./cursor";
+import { CursorDrawable, cursorSpinAngle, expandTracks, holdIntervals, legacyExpandTracks } from "./cursor";
 
 const frame = (time: number, buttons: number) => ({ time, x: 0, y: 0, buttons });
 
@@ -102,43 +105,48 @@ describe("expand tracks (skinnablecursor.cs:9-30)", () => {
 	});
 });
 
+// a straight left-to-right sweep, far enough per step to spawn trail parts
+// (TRAIL_INTERVAL is ~10.24 osu!px)
+const frames = Array.from({ length: 12 }, (_, i) => ({ time: i * 16, x: i * 40, y: 100, buttons: 0 }));
+
+// a getter, not a value: the renderer reads the effects live, and the
+// disable path below has to flip them between two update() calls
+function stubContext(
+	getEffects: () => EffectSettings,
+	sceneFrames = frames,
+	skin: Pick<RenderContext, "skin" | "pieces" | "skinTexture"> = testSkinContext()
+): RenderContext {
+	const noCanvas: TextureBaker = {
+		canvasTexture: () => Texture.WHITE,
+		glowTexture: () => Texture.WHITE,
+		circleTexture: () => Texture.WHITE,
+		ringTexture: () => Texture.WHITE,
+		gradientCircleTexture: () => Texture.WHITE,
+		approachCircleTexture: () => Texture.WHITE
+	};
+	return {
+		scene: { ...testScene(), frames: sceneFrames },
+		derived: {} as RenderContext["derived"],
+		accents: [],
+		...skin,
+		textures: noCanvas,
+		renderer: {} as unknown as Renderer,
+		getOverlays: () => DEFAULT_OVERLAYS,
+		getEffects,
+		getEditChrome: () => null,
+		layers: {
+			followPoints: new Container(),
+			objects: new Container(),
+			approach: new RenderLayer(),
+			judgements: new Container(),
+			analysis: new Container(),
+			cursor: new Container(),
+			editChrome: new Container()
+		}
+	};
+}
+
 describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
-	// a straight left-to-right sweep, far enough per step to spawn trail parts
-	// (TRAIL_INTERVAL is ~10.24 osu!px)
-	const frames = Array.from({ length: 12 }, (_, i) => ({ time: i * 16, x: i * 40, y: 100, buttons: 0 }));
-
-	// a getter, not a value: the renderer reads the effects live, and the
-	// disable path below has to flip them between two update() calls
-	function stubContext(getEffects: () => EffectSettings, sceneFrames = frames): RenderContext {
-		const noCanvas: TextureBaker = {
-			canvasTexture: () => Texture.WHITE,
-			glowTexture: () => Texture.WHITE,
-			circleTexture: () => Texture.WHITE,
-			ringTexture: () => Texture.WHITE,
-			gradientCircleTexture: () => Texture.WHITE,
-			approachCircleTexture: () => Texture.WHITE
-		};
-		return {
-			scene: { ...testScene(), frames: sceneFrames },
-			derived: {} as RenderContext["derived"],
-			accents: [],
-			textures: noCanvas,
-			renderer: {} as unknown as Renderer,
-			getOverlays: () => DEFAULT_OVERLAYS,
-			getEffects,
-			getEditChrome: () => null,
-			layers: {
-				followPoints: new Container(),
-				objects: new Container(),
-				approach: new RenderLayer(),
-				judgements: new Container(),
-				analysis: new Container(),
-				cursor: new Container(),
-				editChrome: new Container()
-			}
-		};
-	}
-
 	/** the trail parts live under the drawable's second child (the ring/dot
 	 * container is the first); a part counts as live while it is visible */
 	function liveTrailParts(drawable: CursorDrawable): number {
@@ -146,10 +154,12 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 		return trailLayer.children.filter((c) => c.visible).length;
 	}
 
-	/** the ring/dot container is the drawable's second child; inside it the
-	 * order is expandTarget (ring), glow, dot */
+	/** the positioned container is the drawable's second child; the PIECE sits
+	 * inside it (one drawable, two eras), and argon's own order within the piece
+	 * is expandTarget (ring), glow, dot */
 	function cursorPieces(drawable: CursorDrawable) {
-		const [expandTarget, glow, dot] = (drawable.view.children[1] as Container).children;
+		const piece = (drawable.view.children[1] as Container).children[0] as Container;
+		const [expandTarget, glow, dot] = piece.children;
 		return { expandTarget, glow, dot };
 	}
 
@@ -221,5 +231,141 @@ describe("CursorDrawable, the cursorGlow and cursorTrail effects", () => {
 		drawable.update(frames[frames.length - 1].time + 16);
 		expect((drawable.view.children[0] as Container).visible).toBe(false);
 		expect(liveTrailParts(drawable)).toBe(0);
+	});
+});
+
+describe("the legacy cursor's own press expansion", () => {
+	const intervals = [{ start: 100, end: 400 }];
+
+	test("it runs 1 -> 1.3 over 100ms, not argon's elastic to 1.2", () => {
+		const tracks = legacyExpandTracks(intervals);
+		expect(trackValueAt(tracks, 100, 1)).toBeCloseTo(1, 9);
+		expect(trackValueAt(tracks, 200, 1)).toBeCloseTo(1.3, 9);
+		// argon is still climbing at 200 and lands somewhere else entirely
+		expect(trackValueAt(expandTracks(intervals), 200, 1)).not.toBeCloseTo(1.3, 2);
+	});
+
+	test("a release eases back from wherever the press actually got to", () => {
+		// released 40ms in, before the 100ms press completes
+		const tracks = legacyExpandTracks([{ start: 100, end: 140 }]);
+		const atRelease = trackValueAt(tracks, 140, 1);
+		expect(atRelease).toBeGreaterThan(1);
+		expect(atRelease).toBeLessThan(1.3);
+		expect(trackValueAt(tracks, 240, 1)).toBeCloseTo(1, 9);
+	});
+
+	test("a same-instant press and release moves nothing", () => {
+		const tracks = legacyExpandTracks([{ start: 100, end: 100 }]);
+		expect(trackValueAt(tracks, 100, 1)).toBe(1);
+		expect(trackValueAt(tracks, 150, 1)).toBe(1);
+	});
+
+	test("a hold that never ends stays expanded", () => {
+		const tracks = legacyExpandTracks([{ start: 0, end: Number.POSITIVE_INFINITY }]);
+		expect(trackValueAt(tracks, 5000, 1)).toBeCloseTo(1.3, 9);
+	});
+});
+
+describe("the legacy cursor's revolution", () => {
+	test("one full turn every ten seconds, clockwise", () => {
+		expect(cursorSpinAngle(0)).toBe(0);
+		expect(cursorSpinAngle(5000)).toBeCloseTo(Math.PI, 9);
+		expect(cursorSpinAngle(10000)).toBeCloseTo(0, 9);
+	});
+
+	test("it is a pure function of the time asked for, so a seek matches playback", () => {
+		// the whole reason it is anchored at replay time zero rather than at the
+		// drawable's own creation, which is what lazer's Spin() uses
+		expect(cursorSpinAngle(12345)).toBe(cursorSpinAngle(12345));
+		expect(cursorSpinAngle(12345)).not.toBe(cursorSpinAngle(12346));
+	});
+});
+
+describe("the legacy cursor piece draws the skin's own sprites", () => {
+	/** a legacy skin with a cursor, a middle and a trail, each resolving to a
+	 * texture the store "loaded". Texture.WHITE needs no canvas, which is what
+	 * lets the whole legacy path be exercised headlessly */
+	function legacyContext(files: string[], getEffects = () => DEFAULT_EFFECTS): RenderContext {
+		const manifest = testSkin(skinFiles(...files));
+		const sources = textureSources({ beatmap: null, skin: manifest, toUrl: testToUrl });
+		return stubContext(getEffects, frames, {
+			skin: manifest,
+			pieces: resolvePieces({ skin: manifest, sources, prefs: ALL_PIECES_ENABLED }),
+			skinTexture: () => Texture.WHITE
+		});
+	}
+
+	test("the piece is the skin's sprites, not argon's ring and dot", () => {
+		const drawable = new CursorDrawable(legacyContext(["cursor.png", "cursormiddle.png", "cursortrail.png"]));
+		drawable.update(64);
+		const piece = (drawable.view.children[1] as Container).children[0] as Container;
+		// expandTarget (holding `cursor`) then `cursormiddle`: two children, where
+		// argon's piece has three
+		expect(piece.children).toHaveLength(2);
+	});
+
+	test("the trail draws from the skin's own trail texture", () => {
+		const drawable = new CursorDrawable(legacyContext(["cursor.png", "cursormiddle.png", "cursortrail.png"]));
+		for (const frame of frames) drawable.update(frame.time);
+		const trailLayer = drawable.view.children[0] as Container;
+		expect(trailLayer.children.filter((child) => child.visible).length).toBeGreaterThan(0);
+	});
+
+	test("a skin whose trail is missing draws none rather than argon's", () => {
+		// the floor DOES ship a cursortrail, so this asks for a source list with
+		// nothing below the skin
+		const manifest = testSkin(skinFiles("cursor.png"));
+		const ctx = stubContext(() => DEFAULT_EFFECTS, frames, {
+			skin: manifest,
+			pieces: resolvePieces({ skin: manifest, sources: [], prefs: ALL_PIECES_ENABLED }),
+			skinTexture: () => Texture.WHITE
+		});
+		const drawable = new CursorDrawable(ctx);
+		for (const frame of frames) drawable.update(frame.time);
+		expect((drawable.view.children[0] as Container).children).toHaveLength(0);
+	});
+
+	test("the cursor middle never takes the press expansion or the revolution", () => {
+		const held = frames.map((frame, i) => ({ ...frame, buttons: i >= 4 ? 1 : 0 }));
+		const manifest = testSkin(skinFiles("cursor.png", "cursormiddle.png"));
+		const ctx = stubContext(() => DEFAULT_EFFECTS, held, {
+			skin: manifest,
+			pieces: resolvePieces({
+				skin: manifest,
+				sources: textureSources({ beatmap: null, skin: manifest, toUrl: testToUrl }),
+				prefs: ALL_PIECES_ENABLED
+			}),
+			skinTexture: () => Texture.WHITE
+		});
+		const drawable = new CursorDrawable(ctx);
+		drawable.update(200);
+		const piece = (drawable.view.children[1] as Container).children[0] as Container;
+		const [expandTarget, middle] = piece.children as Container[];
+		expect(expandTarget.scale.x).toBeGreaterThan(1);
+		expect(expandTarget.rotation).not.toBe(0);
+		expect(middle.scale.x).toBe(1);
+		expect(middle.rotation).toBe(0);
+	});
+
+	test("CursorExpand and CursorRotate off suppress both", () => {
+		const manifest = testSkin(skinFiles("cursor.png", "cursormiddle.png"), {
+			config: { ...NO_SKIN_CONFIG, cursorExpand: false, cursorRotate: false }
+		});
+		const held = frames.map((frame, i) => ({ ...frame, buttons: i >= 4 ? 1 : 0 }));
+		const ctx = stubContext(() => DEFAULT_EFFECTS, held, {
+			skin: manifest,
+			pieces: resolvePieces({
+				skin: manifest,
+				sources: textureSources({ beatmap: null, skin: manifest, toUrl: testToUrl }),
+				prefs: ALL_PIECES_ENABLED
+			}),
+			skinTexture: () => Texture.WHITE
+		});
+		const drawable = new CursorDrawable(ctx);
+		drawable.update(200);
+		const piece = (drawable.view.children[1] as Container).children[0] as Container;
+		const expandTarget = piece.children[0] as Container;
+		expect(expandTarget.scale.x).toBe(1);
+		expect(expandTarget.rotation).toBe(0);
 	});
 });
