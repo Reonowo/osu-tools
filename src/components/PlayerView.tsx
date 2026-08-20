@@ -16,6 +16,10 @@ import {
 import { beatmapSampleSource, resolveSample, sampleSources, skinSampleSource } from "@/playback/sample-sources";
 import { SAMPLE_EXTENSIONS } from "@/skin/sample-extensions";
 import { sameSelection } from "@/skin/picker";
+import { pieceTextureUrls, resolvePieces, type PiecePreferences } from "@/skin/pieces";
+import { beatmapTextureSource, BUNDLED_SKIN, textureSources } from "@/skin/texture-sources";
+import { createSkinTextureStore, skinCacheKey } from "@/renderer/skin-textures";
+import { effectiveEffects } from "@/state/defaults";
 import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import type { LoadedScene } from "@/lib/scene-types";
@@ -102,6 +106,113 @@ function installHitsounds(scene: LoadedScene): void {
 	void sampleStore.loadAll(urls);
 }
 
+/** the skin's own texture cache, for the app's lifetime. a module const rather
+ * than a ref because the renderer is rebuilt on nothing this owns: the cache is
+ * keyed on the SKIN and evicted when the skin changes, never when the zoom or
+ * the scene does */
+const skinTextures = createSkinTextureStore();
+
+/** which of the effect toggles decide whether an element is looked up at all.
+ * read off the FOLDED effects, so the master switch reaches piece selection the
+ * same way it reaches every other consumer */
+function piecePreferences(state: ViewerState): PiecePreferences {
+	const effects = effectiveEffects(state.effects);
+	return {
+		followPoints: effects.followPoints,
+		cursorTrail: effects.cursorTrail,
+		hitEffects: effects.hitEffects,
+		show300Judgements: effects.show300Judgements
+	};
+}
+
+/** what an install depends on beyond the skin itself: the preferences that
+ * gate a lookup, and the SCENE, whose own art is the chain's first source */
+function samePiecePreferences(a: PiecePreferences, b: PiecePreferences): boolean {
+	return (
+		a.followPoints === b.followPoints &&
+		a.cursorTrail === b.cursorTrail &&
+		a.hitEffects === b.hitEffects &&
+		a.show300Judgements === b.show300Judgements
+	);
+}
+
+/** the newest install wins. resolving a skin touches the disk through the asset
+ * protocol, so a user comparing two skins quickly can have two installs in
+ * flight; without this the slower one lands last and draws the skin the user
+ * already moved off */
+let skinInstallSeq = 0;
+/** what the last published bundle was resolved FROM. an install that would
+ * resolve to the same thing is skipped rather than published, because
+ * publishing rebuilds every drawable -- each live slider's render texture, lut,
+ * geometry and two shaders -- and a scene swap on a map with no art of its own
+ * would otherwise cost that for nothing.
+ *
+ * deliberately NOT a reason to skip a re-SELECT of the same skin: a skin is
+ * referenced in place and its files can be edited under the app, so re-picking
+ * it is exactly how a user asks for that to be picked up. `force` keeps the
+ * re-select from being skipped here; making the texture cache actually re-read
+ * the edited files is a deferred piece of its own (TODO.md, skin re-select) */
+let lastInstalled: string | null = null;
+
+/**
+ * resolve the active skin's pieces, load every texture they name, and publish
+ * the three together.
+ *
+ * this is where the atomic swap actually happens, and the await is the whole
+ * reason it needs to: skin textures load asynchronously, unlike anything else
+ * in the renderer's rebuild path. the manifest resolves, the files land, and
+ * only then does one `setSkin` rebuild every drawable -- so no frame can show a
+ * playfield half in one skin and half in another.
+ *
+ * the playhead is not touched anywhere on this path: the clock is not consulted
+ * here or in `setSkin`, so comparing two skins keeps the moment being watched
+ */
+async function installSkin(renderer: GameplayRenderer, force = false): Promise<void> {
+	const seq = ++skinInstallSeq;
+	const state = viewerStore.getState();
+	const manifest = state.skin;
+	const skin = manifest ?? BUNDLED_SKIN;
+	// the map's own art, ahead of the selected skin -- exactly where its samples
+	// already sit. rebuilt here rather than held for the same reason the sample
+	// source is: what it answers depends on live state, and the toggle makes it
+	// DECLINE rather than answer empty, so the user's skin answers instead
+	const beatmap =
+		state.scene === null
+			? null
+			: beatmapTextureSource({
+					files: state.scene.textureFiles,
+					toUrl: convertFileSrc,
+					ignoreBeatmapSkin: state.effects.ignoreBeatmapSkin
+				});
+	const sources = textureSources({ beatmap, skin, toUrl: convertFileSrc });
+	const prefs = piecePreferences(state);
+	// the whole file map, not just its keys: two consecutively opened beatmaps
+	// can name the same files under different folders, and a keys-only
+	// signature would keep the previous map's art on the new scene
+	const signature = JSON.stringify([
+		skinCacheKey(skin.locator),
+		prefs,
+		state.effects.ignoreBeatmapSkin,
+		state.scene?.textureFiles ?? {}
+	]);
+	const pieces = resolvePieces({ skin, sources, prefs });
+	// installed BEFORE the skip-signature is consulted, deliberately: this call
+	// is what advances the store's own generation, which is the only thing that
+	// makes an older in-flight install abandon instead of committing. skipping
+	// it here would suppress that install's PUBLICATION (the seq below) while
+	// letting its cache commit land -- pruning textures the still-published
+	// bundle is rendering. when the signature matches, every url is already
+	// held and this resolves in a microtask
+	await skinTextures.install(skinCacheKey(skin.locator), pieceTextureUrls(pieces));
+	if (seq !== skinInstallSeq) return;
+	// the skip saves the PUBLICATION, which is the expensive half: a setSkin
+	// rebuilds every drawable -- each live slider's render texture, lut,
+	// geometry and two shaders
+	if (!force && signature === lastInstalled) return;
+	lastInstalled = signature;
+	renderer.setSkin({ manifest, pieces, texture: skinTextures.lookup });
+}
+
 export function PlayerView() {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const rendererRef = useRef<GameplayRenderer | null>(null);
@@ -130,10 +241,16 @@ export function PlayerView() {
 			// timelines, so setting it first means the very first build already
 			// uses the persisted value instead of rebuilding to reach it
 			renderer.setEffects(state.effects);
-			// and the skin before the scene, for the same reason: the palette is
-			// resolved at build time, so setting it first means the first build
-			// already draws the right colours instead of rebuilding to reach them
-			renderer.setSkin(state.skin);
+			// the skin cannot be installed before the scene the way the effects
+			// can: its textures load asynchronously, so the first build draws the
+			// bundled default's procedural art and the install below rebuilds
+			// against it when the files land. that is a whole-skin swap, not a
+			// half-swapped one -- the thing the atomic rule forbids.
+			//
+			// forced, because the skip-signature describes what the PREVIOUS
+			// renderer was given: a fresh one holds no bundle at all, so a
+			// matching signature would leave it drawing nothing skinned
+			void installSkin(renderer, true);
 			renderer.setScene(state.scene, state.derived);
 			renderer.setOverlays(effectiveOverlays(state.overlays, state.mode));
 			renderer.setViewport(state.viewportZoom, state.viewportPan);
@@ -185,6 +302,11 @@ export function PlayerView() {
 		// edit changes when a sound plays, never which files exist
 		sampleStore.clear(bundledSampleUrlSet());
 		installHitsounds(scene);
+		// the new map's own art is the texture chain's first source, so the skin
+		// is re-installed against it. the load is asynchronous and the swap is
+		// atomic, so the first frames draw the previous resolution and the new
+		// one lands whole -- never half of each
+		if (rendererRef.current !== null) void installSkin(rendererRef.current);
 		if (scene.audioPath === null) return;
 
 		const audio = new Audio();
@@ -325,10 +447,27 @@ export function PlayerView() {
 				installHitsounds(state.scene);
 			}
 			if (state.audio.offsetMs !== prev.audio.offsetMs) playbackClock.setOffset(state.audio.offsetMs);
-			// the skin swaps atomically: the whole manifest resolved before it
-			// reached the store, and installing it rebuilds every drawable in one
-			// step without touching the clock, so the playhead is kept
-			if (skinMoved) rendererRef.current?.setSkin(state.skin);
+			// the skin swaps atomically: the manifest resolves, every texture it
+			// names loads, and only then does one rebuild land -- without touching
+			// the clock, so the playhead is kept.
+			//
+			// a PREFERENCE change re-installs too, and has to: a toggle set to off
+			// means the element is never looked up, so turning it back on is the
+			// only thing that can resolve it again
+			const renderer = rendererRef.current;
+			if (
+				renderer !== null &&
+				(skinMoved ||
+					state.effects.ignoreBeatmapSkin !== prev.effects.ignoreBeatmapSkin ||
+					!samePiecePreferences(piecePreferences(state), piecePreferences(prev)))
+			) {
+				// forced on a skin move: a re-select of the same locator resolves to
+				// the same signature and would otherwise be skipped. what the force
+				// does NOT reach is the texture cache -- files edited in place
+				// still answer from their cached decode; see TODO.md's skin
+				// re-select entry for why the drop cannot simply happen here
+				void installSkin(renderer, skinMoved);
+			}
 		});
 	}, []);
 
