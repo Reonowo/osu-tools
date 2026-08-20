@@ -35,5 +35,33 @@ surfaces this application does not have (`failsound*`, `rank-*`, `fountain-*`,
 `nightcore-*`, `restart`, `resume-countdown`, `pause-loop`, `sectionfail`,
 `sectionpass`) are not included.
 
+Classic default skin assets
+---------------------------
+
+`public/skins/legacy/` contains image files taken verbatim from the same
+repository, specifically its `osu.Game.Resources/Skins/Legacy/` tree at
+
+    tag 2026.710.0  --  commit d8d01c29ce0f298159aea3644b947d8b4a1882a2
+
+which is the exact `ppy.osu.Game.Resources` version the pinned osu!lazer
+checkout references, so this art is what that lazer would itself draw.
+
+They ship under the same CC BY-NC 4.0 grant and for the same reason: osu!lazer
+never renders a legacy skin against lazer art, so a legacy skin missing an
+element needs somewhere of its OWN era to fall through to. Almost every real
+skin is incomplete -- most ship no follow point, no spinner background, no
+slider score point -- so without this set the normal case would be a playfield
+half legacy and half Argon, a look that has never existed in any osu! client.
+
+The osu!std gameplay subset is vendored: the cursor set, the hit circle and
+its overlay, the approach circle, the combo number glyphs, the slider ball
+frames, the follow circle, the slider score point, the reverse arrow, the
+follow point, the four judgement grades, hit lighting, and the spinner. Files
+belonging to the other rulesets (`taiko-*`, `mania-*`, `fruit-*`,
+`pippidon*`), to game surfaces this application does not have (menu, ranking,
+results, scorebar, the score and combo fonts, the input overlay), to the
+editor (`hitcircleselect`), and to judgements this ruleset does not draw per
+object (`hit300g`, `hit100k`, `hit300k`) are not included.
+
 Everything else in this repository is the project's own work; osu!lazer is
 referenced for behavioural parity only, and no lazer source code is included.
