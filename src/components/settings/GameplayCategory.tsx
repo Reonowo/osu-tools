@@ -1,12 +1,12 @@
 // gameplay: what the replay LOOKS like -- the background dim, the effects
-// master and the five rows it gates. nothing here makes a sound.
+// master and the rows it gates. nothing here makes a sound.
 //
 // the two hit-sample behaviours that used to sit here (the positional level
 // and always-play-first-combo-break) now live in the audio category, which
 // owns everything audible; AudioCategory.tsx's header carries the reasoning,
 // and the short version is that lazer's own split is device-vs-behaviour
 // rather than audio-vs-not, and does not survive a viewer with no gameplay to
-// configure. skinning lands here when it does (TODO.md)
+// configure. the skin itself has its own category (SkinCategory.tsx)
 
 import { SectionLabel } from "@/components/panels/SectionLabel";
 import { ToggleRow } from "@/components/settings/ToggleRow";
@@ -15,7 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { BACKGROUND_DIM_MAX, BACKGROUND_DIM_MIN } from "@/state/defaults";
 import { useViewerStore, type EffectSettings } from "@/state/store";
 
-// the master first, then the five it gates -- mirrors settings.rs EffectPrefs.
+// the master first, then the six it gates -- mirrors settings.rs EffectPrefs.
 // backgroundDim rides on the same group but is not one of these: it has its
 // own row above, outside this registry, so the master never disables it
 export const EFFECT_TOGGLES: { key: keyof EffectSettings; label: string; description: string }[] = [
@@ -23,7 +23,7 @@ export const EFFECT_TOGGLES: { key: keyof EffectSettings; label: string; descrip
 		key: "enabled",
 		label: "gameplay effects",
 		description:
-			"the master switch for the five effects below it -- the background dim above is not an effect and keeps applying. turning it off hides them all at once and keeps each one's own setting, so they come back exactly as you left them"
+			"the master switch for the effects below it -- the background dim above is not an effect and keeps applying. turning it off hides them all at once and keeps each one's own setting, so they come back exactly as you left them"
 	},
 	{
 		key: "hitAnimations",
@@ -41,6 +41,18 @@ export const EFFECT_TOGGLES: { key: keyof EffectSettings; label: string; descrip
 		key: "followPoints",
 		label: "follow points",
 		description: "the chevrons connecting consecutive objects in a combo"
+	},
+	{
+		key: "ignoreBeatmapSkin",
+		label: "ignore beatmap skin",
+		description:
+			"refuses the art a mapset ships with its own folder, so your skin draws instead. independent of the beatmap-hitsounds setting in the audio category: either can be off without the other"
+	},
+	{
+		key: "show300Judgements",
+		label: "show 300 judgements",
+		description:
+			"whether a great pops a judgement of its own. off by default: a popup on every 300 buries the 100s and 50s you opened the replay to find, and leaving it to the skin would make it an accident of which skin you picked"
 	}
 ];
 
@@ -92,8 +104,11 @@ export function GameplayCategory() {
 				<SectionLabel>effects</SectionLabel>
 				{EFFECT_TOGGLES.map(({ key, label, description }) => {
 					// the granular rows go disabled under a switched-off master,
-					// but their stored values stay exactly as the user left them
-					const gated = key !== "enabled" && !effects.enabled;
+					// but their stored values stay exactly as the user left them.
+					// ignoreBeatmapSkin is exempt: effectiveEffects passes it
+					// through untouched (a source decision, not an effect), so a
+					// gated row would freeze a preference that keeps applying
+					const gated = key !== "enabled" && key !== "ignoreBeatmapSkin" && !effects.enabled;
 					return (
 						<ToggleRow
 							key={key}

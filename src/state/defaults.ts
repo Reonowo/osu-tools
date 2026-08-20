@@ -57,6 +57,11 @@ export const DEFAULT_EFFECTS: EffectSettings = {
 	cursorGlow: true,
 	cursorTrail: true,
 	followPoints: true,
+	// off: a mapset that ships its own art presents as its author intended
+	ignoreBeatmapSkin: false,
+	// the one effect that does NOT default on: a 300 popup on every great
+	// buries the 100s and 50s a replay is opened to find
+	show300Judgements: false,
 	backgroundDim: DEFAULT_BACKGROUND_DIM
 };
 
@@ -82,6 +87,12 @@ export function effectiveEffects(effects: EffectSettings): EffectSettings {
 		cursorGlow: false,
 		cursorTrail: false,
 		followPoints: false,
+		// NOT folded: refusing a beatmap's art is a source decision, not an
+		// effect, and switching gameplay effects off must not silently start
+		// drawing art the user turned down. it passes through untouched, the
+		// same way the background dim does
+		ignoreBeatmapSkin: effects.ignoreBeatmapSkin,
+		show300Judgements: false,
 		// the background dim is not an effect -- it rides on this group for
 		// where it belongs in the settings dialog, and switching gameplay
 		// effects off must not change the background. it passes through

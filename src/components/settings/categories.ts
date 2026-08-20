@@ -85,7 +85,9 @@ export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]
 		"effects.hitEffects",
 		"effects.cursorGlow",
 		"effects.cursorTrail",
-		"effects.followPoints"
+		"effects.followPoints",
+		"effects.ignoreBeatmapSkin",
+		"effects.show300Judgements"
 	],
 	analysis: [
 		"overlays.clickMarkers",
