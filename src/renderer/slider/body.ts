@@ -4,8 +4,11 @@
 
 import { Container, Geometry, Mesh, RenderTexture, Shader, Sprite, Texture, type Renderer } from "pixi.js";
 import { SLIDER_BODY_ALPHA, SLIDER_BORDER_PORTION, SLIDER_PATH_RADIUS } from "@/skin/argon/constants";
-import { withAlpha, type Rgba } from "../../engine/color";
-import { bakeSliderLut } from "../../engine/slider-lut";
+import { LEGACY_CIRCLE_RADIUS, LEGACY_SLIDER_TRACK_ALPHA } from "@/skin/legacy/constants";
+import { legacySliderSampler } from "@/skin/legacy/slider-body";
+import type { SliderBodySpec } from "@/skin/pieces";
+import { fromBytes, withAlpha, type Rgba } from "../../engine/color";
+import { bakeSliderLut, colourAt, type SliderColourSampler } from "../../engine/slider-lut";
 import { pathToProgress } from "../../engine/slider-path";
 import type { RenderSlider } from "../../lib/scene-types";
 import { currentDensityBucket } from "../textures";
@@ -155,6 +158,29 @@ export const COMPOSITE_FRAGMENT = `
   }
 `;
 
+/**
+ * the ramp one slider's body bakes, chosen by era.
+ *
+ * two skin colours reach the body and they are the most visually distinctive
+ * thing most skins have: a declared border replaces white, and a declared
+ * SliderTrackOverride REPLACES the combo accent for the track -- and only for
+ * the track, so ticks, the ball and the circles keep the combo colour
+ * (legacysliderbody.cs:18-23)
+ */
+export function sliderColourSampler(accent: Rgba, body: SliderBodySpec): SliderColourSampler {
+	if (body.era !== "legacy") {
+		// argon declares neither, so its border is the accent and its track is
+		// the accent at the pro alpha -- unchanged from before a skin existed
+		const tinted = withAlpha(accent, SLIDER_BODY_ALPHA);
+		return (position) => colourAt(position, tinted, accent, SLIDER_BORDER_PORTION);
+	}
+	// legacysliderbody.cs:19 -- an undeclared border is WHITE, which is the
+	// classic default rather than argon's accent-coloured one
+	const border = body.border === null ? { r: 1, g: 1, b: 1, a: 1 } : fromBytes(body.border);
+	const track = body.trackOverride === null ? accent : fromBytes(body.trackOverride);
+	return legacySliderSampler(withAlpha(track, LEGACY_SLIDER_TRACK_ALPHA), border);
+}
+
 export class SliderBodyRenderer {
 	readonly view: Sprite;
 	private readonly renderer: Renderer;
@@ -180,10 +206,15 @@ export class SliderBodyRenderer {
 		return this.snaked;
 	}
 
-	constructor(renderer: Renderer, slider: RenderSlider, accent: Rgba, csScale: number) {
+	constructor(renderer: Renderer, slider: RenderSlider, accent: Rgba, csScale: number, body: SliderBodySpec) {
 		this.renderer = renderer;
 		this.slider = slider;
-		this.radius = SLIDER_PATH_RADIUS * csScale;
+		// the ribbon's half-width is the era's: argon declares its own
+		// (argonsliderbody.cs:18) while a legacy body is exactly the drawn circle
+		// (osulegacyskintransformer.cs:302-304 answers SliderPathRadius with
+		// LEGACY_CIRCLE_RADIUS), which is narrower than the hittable 64 because
+		// stable's circle art carries 5px of shadow padding the body does not
+		this.radius = (body.era === "legacy" ? LEGACY_CIRCLE_RADIUS : SLIDER_PATH_RADIUS) * csScale;
 		// pinned to the full path once, so the texture never resizes while
 		// snaking (snakingsliderbody.cs:150-155)
 		this.bounds = pathBounds(slider.vertices, this.radius);
@@ -192,13 +223,7 @@ export class SliderBodyRenderer {
 		// keeps the texture it was built with until the drawable is recreated
 		this.target = RenderTexture.create(distanceTextureOptions(currentDensityBucket(), this.bounds));
 
-		// the era's border portion is the caller's to supply -- argon's here
-		const { width, rgba } = bakeSliderLut(
-			withAlpha(accent, SLIDER_BODY_ALPHA),
-			accent,
-			this.radius,
-			SLIDER_BORDER_PORTION
-		);
+		const { width, rgba } = bakeSliderLut(sliderColourSampler(accent, body), this.radius);
 		// explicit format: bufferimagesource.mjs defaults a raw Uint8Array to
 		// bgra8unorm (harmless under webgl, where bgra8unorm and rgba8unorm both
 		// map to gl.RGBA with no byte swizzle -- but wgpu does distinguish them,

@@ -6,6 +6,12 @@
 import { FOLLOW_AREA, OBJECT_RADIUS, SLIDER_FADE_OUT_TIME } from "../../engine/game-constants";
 import { isLeft, isRight } from "../../engine/buttons";
 import { cursorStateAt } from "../../engine/interpolation";
+import {
+	LEGACY_REVERSE_HIT_MAX_DURATION,
+	LEGACY_REVERSE_HIT_SCALE,
+	LEGACY_REVERSE_PULSE_DURATION,
+	LEGACY_REVERSE_PULSE_ROTATION
+} from "@/skin/legacy/constants";
 import { outQuad, outQuint, outElasticHalf, out } from "../../engine/easing";
 import { trackValueAt, tween, jump, type Track } from "../../engine/transforms";
 import { curvePositionAt, positionAt, progressAt, spanAt, type SliderGeometry } from "../../engine/slider-path";
@@ -65,11 +71,77 @@ export function ballTracks(obj: { startTime: number }, endTime: number): { alpha
 	};
 }
 
-/** argonfollowcircle.cs:62-95 (tick pulse omitted -- documented) */
+/**
+ * how one era's follow circle answers each of the four tracking events.
+ *
+ * every value here differs between argon (argonfollowcircle.cs:62-95) and
+ * legacy (legacyfollowcircle.cs:23-58), and the shape is a parameter rather
+ * than a fork so that the sequencing below -- which samples the value each
+ * tween actually reached, exactly as `ScaleTo` does -- is written once
+ */
+export interface FollowCircleShape {
+	/** where tracking takes it, and how long the scale and the fade each run */
+	pressScale: number;
+	pressDuration: number;
+	pressFadeDuration: number;
+	/** where losing tracking takes it before it vanishes */
+	releaseScale: number;
+	releaseDuration: number;
+	/** where the slider ending while still tracked leaves it */
+	endScale: number;
+	endDuration: number;
+	endFadeDuration: number;
+}
+
+/** argonfollowcircle.cs:62-95 -- the tracking area is the ruleset's own
+ * FOLLOW_AREA, and the release overshoots it by a fifth */
+export const ARGON_FOLLOW_CIRCLE: FollowCircleShape = {
+	pressScale: FOLLOW_AREA,
+	pressDuration: 300,
+	pressFadeDuration: 300,
+	releaseScale: FOLLOW_AREA * 1.2,
+	releaseDuration: 150,
+	endScale: 1,
+	endDuration: 300,
+	endFadeDuration: 150
+};
+
+/**
+ * legacyfollowcircle.cs:23-58.
+ *
+ * note the 2 rather than FOLLOW_AREA: legacy's sprite is deliberately smaller
+ * than the area gameplay actually tracks over (:29-30 says so), and skins are
+ * drawn expecting that.
+ *
+ * one documented divergence. lazer's legacy `OnSliderRelease` does NOTHING --
+ * the circle only vanishes when a nested object is actually MISSED
+ * (`OnSliderBreak`, followcircle.cs:100-112). this drawable's input is the
+ * tracking timeline rather than the nested judgements, so a tracking stop plays
+ * the break here. the two agree on every slider whose drop costs a nested
+ * object, which is every slider a player would notice; they differ only in the
+ * gap between letting go and the next tick, where lazer leaves the circle
+ * hanging and this hides it early
+ */
+export const LEGACY_FOLLOW_CIRCLE: FollowCircleShape = {
+	pressScale: 2,
+	// :31-32 -- both are capped at the time the slider has left to run, which
+	// this does not model; the caps only bite on a slider shorter than 180ms
+	pressDuration: 180,
+	pressFadeDuration: 60,
+	// :56-57 -- OnSliderBreak
+	releaseScale: 4,
+	releaseDuration: 100,
+	// :41-42 -- OnSliderEnd
+	endScale: 1.6,
+	endDuration: 200,
+	endFadeDuration: 200
+};
+
 export function followCircleTracks(
 	changes: { time: number; tracking: boolean }[],
 	endTime: number,
-	endedWhileTracking: boolean
+	endedWhileTracking: boolean,
+	shape: FollowCircleShape = ARGON_FOLLOW_CIRCLE
 ): { scale: Track[]; alpha: Track[] } {
 	const scale: Track[] = [];
 	const alpha: Track[] = [];
@@ -81,16 +153,18 @@ export function followCircleTracks(
 		const scaleNow = trackValueAt(scale, change.time, 1);
 		const alphaNow = trackValueAt(alpha, change.time, 0);
 		if (change.tracking) {
-			scale.push(tween(change.time, 300, alphaNow === 0 ? 1 : scaleNow, FOLLOW_AREA, outQuint));
-			alpha.push(tween(change.time, 300, alphaNow, 1, outQuint));
+			scale.push(
+				tween(change.time, shape.pressDuration, alphaNow === 0 ? 1 : scaleNow, shape.pressScale, outQuint)
+			);
+			alpha.push(tween(change.time, shape.pressFadeDuration, alphaNow, 1, outQuint));
 		} else {
-			scale.push(tween(change.time, 150, scaleNow, FOLLOW_AREA * 1.2, outQuint));
-			alpha.push(tween(change.time, 150, alphaNow, 0, outQuint));
+			scale.push(tween(change.time, shape.releaseDuration, scaleNow, shape.releaseScale, outQuint));
+			alpha.push(tween(change.time, shape.releaseDuration, alphaNow, 0, outQuint));
 		}
 	}
 	if (endedWhileTracking) {
-		scale.push(tween(endTime, 300, trackValueAt(scale, endTime, 1), 1, outQuint));
-		alpha.push(tween(endTime, 150, trackValueAt(alpha, endTime, 0), 0, outQuint));
+		scale.push(tween(endTime, shape.endDuration, trackValueAt(scale, endTime, 1), shape.endScale, outQuint));
+		alpha.push(tween(endTime, shape.endFadeDuration, trackValueAt(alpha, endTime, 0), 0, outQuint));
 	}
 	return { scale, alpha };
 }
@@ -251,4 +325,46 @@ export function trackingStateChanges(
 		}
 	}
 	return changes;
+}
+
+/**
+ * legacyreversearrow.cs:94-108 -- the idle pulse, which is a plain loop rather
+ * than argon's two-stage one: the arrow shrinks 1.3 -> 1 over 300ms and starts
+ * again.
+ *
+ * `rotates` is the version fork (:56): a version 1 skin also swings the arrow
+ * +-5.625 degrees across the same loop and runs the scale LINEARLY, while a
+ * later skin eases the scale out and does not swing at all
+ */
+export function legacyRepeatPulse(
+	t: number,
+	animationStart: number,
+	rotates: boolean
+): { scale: number; rotation: number } {
+	const duration = LEGACY_REVERSE_PULSE_DURATION;
+	const loop = (((t - animationStart) % duration) + duration) % duration;
+	const k = loop / duration;
+	if (!rotates) return { scale: 1.3 - 0.3 * out(k), rotation: 0 };
+	return {
+		scale: 1.3 - 0.3 * k,
+		rotation: LEGACY_REVERSE_PULSE_ROTATION - 2 * LEGACY_REVERSE_PULSE_ROTATION * k
+	};
+}
+
+/** legacyreversearrow.cs:87-91 -- once hit, the idle loop stops and the arrow
+ * grows 1 -> 1.4 over min(300, spanDuration) with Out easing. the same shape
+ * argon's `repeatHitScale` has and a different destination, which is why the
+ * two are separate functions rather than one with a magic number */
+export function legacyRepeatHitScale(
+	t: number,
+	nested: { time: number },
+	spanDuration: number,
+	result: "hit" | "miss" | null,
+	hitAnimations: boolean
+): number | null {
+	if ((result ?? "hit") !== "hit" || t < nested.time) return null;
+	if (!hitAnimations) return 1;
+	const duration = Math.min(LEGACY_REVERSE_HIT_MAX_DURATION, spanDuration);
+	if (duration <= 0) return LEGACY_REVERSE_HIT_SCALE;
+	return 1 + (LEGACY_REVERSE_HIT_SCALE - 1) * out((t - nested.time) / duration);
 }

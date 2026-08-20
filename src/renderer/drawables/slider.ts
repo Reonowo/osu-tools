@@ -3,17 +3,33 @@
 // (drawableslidertail.cs -- circlepiece has no default drawable), so the
 // tail is just the body's round cap
 
-import { Container, Sprite } from "pixi.js";
-import { toNumber } from "../../engine/color";
+import { Container } from "pixi.js";
+import { toNumber, type Rgba } from "../../engine/color";
 import { curvePositionAt } from "../../engine/slider-path";
 import { trackValueAt, type Track } from "../../engine/transforms";
-import type { JudgementEventDto, RenderNested, RenderSlider } from "../../lib/scene-types";
+import type { Grade, JudgementEventDto, RenderNested, RenderObject, RenderSlider } from "../../lib/scene-types";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
 import { SliderBodyRenderer } from "../slider/body";
-import { APPROACH_CIRCLE_SIZE } from "../textures";
-import { ArgonCirclePiece } from "./circle";
+import {
+	createApproachCircle,
+	createCirclePiece,
+	texturedPiece,
+	type ApproachCirclePiece,
+	type CirclePiece
+} from "./circle";
 import { circleTracks, resolveCircleResult, type CircleTracks } from "./circle-tracks";
-import { ArgonFollowCircle, ArgonReverseArrow, ArgonSliderBall, ArgonTick } from "./slider-parts";
+import {
+	ArgonFollowCircle,
+	ArgonReverseArrow,
+	ArgonSliderBall,
+	createSliderTick,
+	LegacyReverseArrow,
+	LegacySliderBall,
+	LegacySliderFollowCircle,
+	type FollowCirclePiece,
+	type ReverseArrowPiece,
+	type SliderBallPiece
+} from "./slider-parts";
 import * as st from "./slider-tracks";
 
 const NESTED_EVENT_KIND = {
@@ -38,7 +54,7 @@ interface NestedPiece {
 	view: Container;
 	alpha: Track[];
 	scale: Track[] | null;
-	arrow: ArgonReverseArrow | null;
+	arrow: ReverseArrowPiece | null;
 	appear: number;
 	/** only consulted for repeats (arrow !== null): gates repeatHitScale */
 	result: "hit" | "miss" | null;
@@ -62,17 +78,23 @@ export class SliderDrawable implements ObjectDrawable {
 	 * the object drawables when this flips */
 	private readonly hitAnimations: boolean;
 	private readonly body: SliderBodyRenderer;
-	private readonly head: ArgonCirclePiece;
+	private readonly head: CirclePiece;
 	private readonly headTracks: CircleTracks;
 	private readonly headHit: { time: number; miss: boolean };
-	private readonly approach: Sprite;
-	private readonly baseApproachScale: number;
+	private readonly approach: ApproachCirclePiece;
 	private readonly fades: { bodyAlpha: Track[]; containerAlpha: Track[] };
-	private readonly ball: ArgonSliderBall;
+	private readonly ball: SliderBallPiece;
 	private readonly ballT: ReturnType<typeof st.ballTracks>;
-	private readonly follow: ArgonFollowCircle;
+	private readonly follow: FollowCirclePiece;
+	/** the legacy tail circle, or null in the lazer era -- argon draws no tail
+	 * piece (drawableslidertail.cs supplies none), so the body's round cap is
+	 * the whole of its end */
+	private readonly tail: CirclePiece | null;
+	private readonly legacy: boolean;
 	private readonly followT: ReturnType<typeof st.followCircleTracks>;
 	private readonly pieces: NestedPiece[] = [];
+	/** legacyreversearrow.cs:56 -- a version 1 skin swings its arrows */
+	private readonly reverseRotates: boolean;
 
 	constructor(ctx: RenderContext, objectIndex: number) {
 		const obj = ctx.scene.renderPlan.objects[objectIndex];
@@ -82,6 +104,15 @@ export class SliderDrawable implements ObjectDrawable {
 		this.planScale = ctx.scene.renderPlan.scale;
 		this.simulated = ctx.scene.simulation.status === "authoritative";
 		this.hitAnimations = ctx.getEffects().hitAnimations;
+		// the head's fork, taken off its own spec rather than off the skin's
+		// era: a beatmap can answer a texture lookup over an argon skin, and
+		// what draws a texture is the composited piece either way. it also
+		// decides the REVERSE ARROWS, which is lazer's own gate -- the arrow is
+		// keyed on `hasHitCircle` (osulegacyskintransformer.cs:197-201), not on
+		// its own asset, so circles from a beatmap bring a legacy arrow with
+		// them even when nothing in the chain has arrow art to draw
+		this.legacy = texturedPiece(ctx.pieces.slider.head.circle);
+		this.reverseRotates = ctx.pieces.slider.reverseRotates;
 		const accent = ctx.accents[objectIndex];
 		const events = ctx.derived.judgementsByObject[objectIndex];
 
@@ -89,7 +120,7 @@ export class SliderDrawable implements ObjectDrawable {
 		ctx.layers.objects.addChild(this.view);
 
 		// body (head-relative coordinates; radius carries the cs scale)
-		this.body = new SliderBodyRenderer(ctx.renderer, slider, accent, this.planScale);
+		this.body = new SliderBodyRenderer(ctx.renderer, slider, accent, this.planScale, ctx.pieces.body);
 		this.view.addChild(this.body.view);
 
 		// nested piece layers, in lazer's own child order (drawableslider.cs:
@@ -110,7 +141,30 @@ export class SliderDrawable implements ObjectDrawable {
 		const headResult = resolveCircleResult(events, obj.startTime);
 		this.headHit = { time: headResult.time, miss: headResult.grade === "miss" };
 		this.headTracks = circleTracks(obj, headResult, true, this.hitAnimations);
-		this.head = new ArgonCirclePiece(ctx, accent, obj.indexInCombo, false);
+
+		// the tail circle, which exists only where a skin supplies one: argon
+		// draws none at all (drawableslidertail.cs:67 falls back to Empty()), so
+		// its slider ends at the body's round cap exactly as it did before.
+		//
+		// built after the head's tracks because it shares the object's own dim
+		// with them, and inserted directly ABOVE the body, under the tick and
+		// repeat layers already added: lazer proxies the tail exactly there
+		// ("so that the tail is drawn under repeats/ticks - legacy skins rely
+		// on this", drawableslider.cs:110-111), so an opaque tail circle must
+		// never cover a tick, a repeat arrow or the head
+		this.tail = this.tailPiece(ctx, accent, obj, slider, events);
+		if (this.tail !== null) this.view.addChildAt(this.tail.view, 1);
+
+		this.head = createCirclePiece(ctx, {
+			family: ctx.pieces.slider.head,
+			accent,
+			indexInCombo: obj.indexInCombo,
+			withOuterFill: false,
+			obj,
+			result: headResult,
+			hitAnimations: this.hitAnimations,
+			shared: this.headTracks
+		});
 		this.head.view.scale.set(this.planScale);
 		this.view.addChild(this.head.view);
 
@@ -118,14 +172,9 @@ export class SliderDrawable implements ObjectDrawable {
 		// view.destroy()'s cascade); merely attached to the approach RenderLayer
 		// so it draws above every object regardless of draw order -- addChild()
 		// throws on a RenderLayer (task 13's circle.ts established this pattern)
-		this.approach = new Sprite(ctx.textures.approachCircleTexture());
-		this.approach.anchor.set(0.5);
-		this.approach.tint = toNumber(accent);
-		this.view.addChild(this.approach);
-		ctx.layers.approach.attach(this.approach);
-		// against the texture's *logical* size, not its canvas size: the bake
-		// grows with the density bucket while the sprite must not
-		this.baseApproachScale = this.planScale * (128 / APPROACH_CIRCLE_SIZE) * (128 / 118);
+		this.approach = createApproachCircle(ctx, accent);
+		this.view.addChild(this.approach.view);
+		ctx.layers.approach.attach(this.approach.view);
 
 		// container + body fades; the aggregate event carries the end result
 		const aggregate = events.find((e) => e.kind.type === "sliderAggregate");
@@ -145,7 +194,7 @@ export class SliderDrawable implements ObjectDrawable {
 			view.scale.set(this.planScale);
 			(nested.kind === "tick" ? tickLayer : repeatLayer).addChild(view);
 			if (nested.kind === "tick") {
-				const tick = new ArgonTick(accent);
+				const tick = createSliderTick(ctx, accent);
 				view.addChild(tick.view);
 				const tracks = st.tickTracks(nested, result, this.hitAnimations);
 				this.pieces.push({
@@ -159,7 +208,7 @@ export class SliderDrawable implements ObjectDrawable {
 					aimed: false
 				});
 			} else {
-				const arrow = new ArgonReverseArrow(ctx, accent);
+				const arrow = this.legacy ? new LegacyReverseArrow(ctx, accent) : new ArgonReverseArrow(ctx, accent);
 				view.addChild(arrow.view);
 				const tracks = st.repeatTracks(nested, slider.spanDuration, slider.snakeInDuration, result);
 				this.pieces.push({
@@ -175,10 +224,20 @@ export class SliderDrawable implements ObjectDrawable {
 			}
 		}
 
-		// ball + follow circle ride the folded progress
-		this.ball = new ArgonSliderBall(ctx, accent);
+		// ball + follow circle ride the folded progress. each follows its OWN
+		// spec rather than the head's flag: lazer gates these two on their own
+		// assets (osulegacyskintransformer.cs:166-177), unlike the arrow and the
+		// tail, so a beatmap shipping only circles over argon keeps argon's ball
+		// -- and one shipping only a `sliderb` draws it over argon circles
+		const legacyBall = texturedPiece(ctx.pieces.slider.ball);
+		this.ball = legacyBall
+			? // legacysliderball.cs:118-120 -- the frame delay is the SLIDER's,
+				// derived from its velocity in osu!px per ms
+				new LegacySliderBall(ctx, accent, slider.distance / Math.max(1e-9, slider.spanDuration))
+			: new ArgonSliderBall(ctx, accent);
 		this.ball.view.scale.set(this.planScale);
-		this.follow = new ArgonFollowCircle(ctx, accent);
+		const legacyFollow = texturedPiece(ctx.pieces.slider.followCircle);
+		this.follow = legacyFollow ? new LegacySliderFollowCircle(ctx) : new ArgonFollowCircle(ctx, accent);
 		this.view.addChild(this.follow.view, this.ball.view);
 		this.ballT = st.ballTracks(obj, obj.endTime);
 
@@ -196,11 +255,64 @@ export class SliderDrawable implements ObjectDrawable {
 			slider.spanCount
 		);
 		const endedTracking = changes.length > 0 && changes[changes.length - 1].tracking;
-		this.followT = st.followCircleTracks(changes, obj.endTime, endedTracking);
+		this.followT = st.followCircleTracks(
+			changes,
+			obj.endTime,
+			endedTracking,
+			legacyFollow ? st.LEGACY_FOLLOW_CIRCLE : st.ARGON_FOLLOW_CIRCLE
+		);
+	}
+
+	/**
+	 * the tail circle, or null where the era draws none.
+	 *
+	 * osulegacyskintransformer.cs:185-189 -- `LegacyMainCirclePiece
+	 * ("sliderendcircle", false)`: the dedicated end assets when the skin ships
+	 * them, its own hit circle when it does not, and NO combo number either way.
+	 *
+	 * the fade-in is delayed by a third of the preempt
+	 * (drawableosuhitobject.cs:163-172's `ApplyRepeatFadeIn`, on the snaking-in
+	 * branch this renderer is always on), which is expressed here by handing the
+	 * piece a shortened preempt rather than a separate track: the piece's own
+	 * appear time IS `startTime - preempt`
+	 */
+	private tailPiece(
+		ctx: RenderContext,
+		accent: Rgba,
+		obj: RenderObject,
+		slider: RenderSlider,
+		events: JudgementEventDto[]
+	): CirclePiece | null {
+		if (!texturedPiece(ctx.pieces.slider.tail.circle)) return null;
+		const tail = slider.nested.find((nested) => nested.kind === "tail");
+		if (tail === undefined) return null;
+		const hit = events.find((event) => event.kind.type === "sliderTail");
+		const kind = hit?.kind;
+		const result = {
+			time: hit?.time ?? tail.time,
+			grade: (kind?.type === "sliderTail" && !kind.hit ? "miss" : "great") as Grade
+		};
+		const piece = createCirclePiece(ctx, {
+			family: ctx.pieces.slider.tail,
+			accent,
+			indexInCombo: obj.indexInCombo,
+			withOuterFill: false,
+			// the tail's own appear window: `- preempt/3` on the fade-in delay
+			obj: { startTime: obj.startTime, preempt: (obj.preempt * 2) / 3, fadeIn: tail.fadeIn },
+			result,
+			hitAnimations: this.hitAnimations,
+			shared: this.headTracks
+		});
+		// head-relative, and unrotated: the end circle sits flat on the curve's
+		// last point whichever way the path arrived there
+		piece.view.position.set(slider.endPosition[0] - obj.position[0], slider.endPosition[1] - obj.position[1]);
+		piece.view.scale.set(this.planScale);
+		return piece;
 	}
 
 	update(t: number): void {
 		this.view.alpha = trackValueAt(this.fades.containerAlpha, t, 0);
+		this.tail?.apply(t);
 
 		const completion = st.completionProgress(this.obj, this.slider.duration, t);
 		const headHit = this.simulated ? !this.headHit.miss && t >= this.headHit.time : t >= this.obj.startTime;
@@ -210,9 +322,13 @@ export class SliderDrawable implements ObjectDrawable {
 		const dim = trackValueAt(this.headTracks.dim, t, 1);
 		this.body.view.tint = toNumber({ r: dim, g: dim, b: dim, a: 1 });
 
-		this.head.apply(this.headTracks, t);
-		this.approach.alpha = trackValueAt(this.headTracks.approachAlpha, t, 0);
-		this.approach.scale.set(this.baseApproachScale * trackValueAt(this.headTracks.approachScale, t, 4));
+		this.head.apply(t);
+		// this drawable's own view carries no scale (only a position), so the cs
+		// scale is folded in here rather than inherited
+		this.approach.apply(
+			trackValueAt(this.headTracks.approachAlpha, t, 0),
+			this.planScale * trackValueAt(this.headTracks.approachScale, t, 4)
+		);
 
 		// ball: folded position + travel direction (drawablesliderball.cs:64-77)
 		const [bx, by] = curvePositionAt(this.slider, this.slider.spanCount, completion);
@@ -228,8 +344,12 @@ export class SliderDrawable implements ObjectDrawable {
 		}
 		this.ball.view.alpha = trackValueAt(this.ballT.alpha, t, 0);
 		this.ball.setIconScale(trackValueAt(this.ballT.iconScale, t, 0));
+		// an animated ball's frame is a pure function of how far into the slider
+		// the moment is, so a seek shows the frame that moment genuinely had
+		this.ball.setElapsed(t - this.obj.startTime);
 		this.follow.view.alpha = trackValueAt(this.followT.alpha, t, 0);
 		this.follow.view.scale.set(this.planScale * trackValueAt(this.followT.scale, t, 1));
+		this.follow.setElapsed(t - this.obj.startTime);
 
 		// nested pieces
 		const curve = this.body.currentCurve;
@@ -237,7 +357,7 @@ export class SliderDrawable implements ObjectDrawable {
 			piece.view.alpha = trackValueAt(piece.alpha, t, 0);
 			if (piece.scale !== null) piece.view.scale.set(this.planScale * trackValueAt(piece.scale, t, 0.5));
 			if (piece.arrow !== null) {
-				const hitScale = st.repeatHitScale(
+				const hitScale = (this.legacy ? st.legacyRepeatHitScale : st.repeatHitScale)(
 					t,
 					piece.nested,
 					this.slider.spanDuration,
@@ -269,6 +389,24 @@ export class SliderDrawable implements ObjectDrawable {
 				// whatever the last hitScale happened to be
 				if (hitScale !== null) {
 					piece.arrow.view.scale.set(hitScale);
+					// legacyreversearrow.cs:87-91 -- the hit branch stops touching the
+					// idle pulse, freezing the arrow wherever it had swung to. computed
+					// at the HIT TIME rather than latched from the last frame drawn,
+					// so a drawable rebuilt mid-fade (which a density move does) lands
+					// on the same angle one that had run all along would show
+					piece.arrow.main.rotation = this.legacy
+						? (st.legacyRepeatPulse(piece.nested.time, piece.appear, this.reverseRotates).rotation *
+								Math.PI) /
+							180
+						: 0;
+				} else if (this.legacy) {
+					// legacyreversearrow.cs:100-108 -- the whole arrow pulses (and,
+					// on a version 1 skin, swings); there is no separate `main` piece
+					// to pulse independently the way argon has
+					const pulse = st.legacyRepeatPulse(t, piece.appear, this.reverseRotates);
+					piece.arrow.view.scale.set(1);
+					piece.arrow.main.scale.set(pulse.scale);
+					piece.arrow.main.rotation = (pulse.rotation * Math.PI) / 180;
 				} else {
 					piece.arrow.view.scale.set(1);
 					const pulse = st.repeatPulse(t, piece.appear);
