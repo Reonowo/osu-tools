@@ -18,6 +18,8 @@ function skin(over: Partial<SkinManifest> = {}, comboColours: [number, number, n
 			comboColours,
 			sliderBorder: null,
 			sliderTrackOverride: null,
+			sliderBall: null,
+			spinnerBackground: null,
 			animationFramerate: null,
 			layeredHitSounds: null,
 			allowSliderBallTint: null,

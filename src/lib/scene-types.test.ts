@@ -145,6 +145,8 @@ describe("scene contract mirror", () => {
 			cursorGlow: false,
 			cursorTrail: true,
 			followPoints: false,
+			ignoreBeatmapSkin: true,
+			show300Judgements: false,
 			backgroundDim: 35
 		};
 		expect(effects.backgroundDim).toBe(35);

@@ -18,6 +18,12 @@ export interface LoadedScene {
 	/// the bundled default set answers those. values are absolute paths for
 	/// tauri's convertFileSrc
 	sampleFiles: Record<string, string>;
+	/** mirrors scene.rs `texture_files`: the beatmap's OWN image files, keyed by
+	 * lowercased file NAME (extension included) rather than by lookup name --
+	 * which of `hitcircle@2x.png` and `hitcircle.png` answers a `hitcircle`
+	 * lookup is an era rule, and era rules live in `playback/lookup-chain.ts`.
+	 * the same shape `SkinManifest.files` has, for the same reason */
+	textureFiles: Record<string, string>;
 	warnings: LoadedSceneWarning[];
 	/// shipped only for pre-lazer authoritative scenes; always describes the
 	/// loaded file, never in-session edits
@@ -382,6 +388,30 @@ export interface EffectSettings {
 	cursorGlow: boolean;
 	cursorTrail: boolean;
 	followPoints: boolean;
+	/**
+	 * lazer's `BeatmapSkin` (beatmapskinprovidingcontainer.cs:25), inverted so
+	 * the stored default is `false` -- a mapset designed around its own look
+	 * presents as its author intended unless the user says otherwise.
+	 *
+	 * drops the beatmap's own IMAGE files from the texture lookup chain, and
+	 * nothing else. deliberately independent of `ignoreBeatmapHitsounds` beside
+	 * it in the audio settings: lazer splits the two for the same reason, so a
+	 * map's hitsounding can be kept while its art is refused.
+	 *
+	 * it lives with the effects rather than with the audio group because it is a
+	 * visual decision, and it is shown in the gameplay category beside the other
+	 * things that decide what the playfield looks like
+	 */
+	ignoreBeatmapSkin: boolean;
+	/** whether a great draws a judgement popup at all, DEFAULT OFF.
+	 *
+	 * greats drew none before any skin could be loaded, and a legacy skin ships
+	 * a `hit300` that will answer found -- so without an explicit preference,
+	 * picking any legacy skin would reintroduce a popup on every 300, which is
+	 * the thing that hides the 100s and 50s a replay is opened to find. the
+	 * choice is the user's rather than a side effect of which skin is loaded;
+	 * the skin still owns what a 300 looks like when it is shown */
+	show300Judgements: boolean;
 	/** percent 0-100, 100 fully black; matches osu!'s own dim control. rides
 	 * on this group for where it belongs in the settings dialog, NOT because
 	 * the master gates it -- it is not an effect and effectiveEffects passes
@@ -481,6 +511,12 @@ export interface SkinConfigDto {
 	comboColours: [number, number, number, number][];
 	sliderBorder: [number, number, number, number] | null;
 	sliderTrackOverride: [number, number, number, number] | null;
+	/** `[Colours] SliderBall` -- the ball's BASE colour (legacysliderball.cs:47),
+	 * which the combo accent replaces only when the tint permission is on */
+	sliderBall: [number, number, number, number] | null;
+	/** `[Colours] SpinnerBackground` -- the old-style background's tint
+	 * (legacyoldstylespinner.cs:44), else the drawable's flat grey */
+	spinnerBackground: [number, number, number, number] | null;
 	animationFramerate: number | null;
 	layeredHitSounds: boolean | null;
 	allowSliderBallTint: boolean | null;

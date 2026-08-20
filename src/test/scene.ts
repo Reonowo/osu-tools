@@ -79,6 +79,7 @@ export function testScene(overrides: Partial<LoadedScene> = {}): LoadedScene {
 		audioPath: null,
 		backgroundPath: null,
 		sampleFiles: {},
+		textureFiles: {},
 		warnings: [],
 		integrity: null,
 		incompleteness: null,

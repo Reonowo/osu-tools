@@ -42,6 +42,8 @@ function bundledManifest(): SkinManifest {
 			comboColours: [],
 			sliderBorder: null,
 			sliderTrackOverride: null,
+			sliderBall: null,
+			spinnerBackground: null,
 			animationFramerate: null,
 			layeredHitSounds: null,
 			allowSliderBallTint: null,
