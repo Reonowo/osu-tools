@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { outElasticHalf } from "../../engine/easing";
 import { trackValueAt } from "../../engine/transforms";
-import { circleTracks, resolveCircleResult } from "./circle-tracks";
+import { circleTracks, legacyCircleTracks, resolveCircleResult } from "./circle-tracks";
 
 const obj = { startTime: 1000, preempt: 600, fadeIn: 400 };
 
@@ -157,5 +157,46 @@ describe("circle tracks (argonmaincirclepiece.cs / drawablehitcircle.cs)", () =>
 		expect(trackValueAt(tracks.approachAlpha, obj.startTime, 0)).toBe(0);
 		expect(trackValueAt(tracks.approachAlpha, obj.startTime + 40, 0)).toBe(0);
 		expect(trackValueAt(tracks.pieceAlpha, obj.startTime + 800, 1)).toBe(0);
+	});
+});
+
+describe("legacyCircleTracks", () => {
+	const hit = { time: 1000, grade: "great" as const };
+
+	test("the circle and its overlay fade over 240ms and grow to 1.4", () => {
+		const tracks = legacyCircleTracks(obj, hit, true, 2.7);
+		expect(trackValueAt(tracks.pieceAlpha, 1000, 0)).toBeCloseTo(1, 9);
+		expect(trackValueAt(tracks.pieceAlpha, 1240, 0)).toBeCloseTo(0, 9);
+		expect(trackValueAt(tracks.pieceScale, 1240, 1)).toBeCloseTo(1.4, 9);
+	});
+
+	test("a version 2 skin fades the number over a quarter of the duration and never scales it", () => {
+		const tracks = legacyCircleTracks(obj, hit, true, 2.7);
+		expect(trackValueAt(tracks.numberAlpha, 1060, 1)).toBeCloseTo(0, 9);
+		expect(trackValueAt(tracks.numberScale, 1240, 1)).toBe(1);
+	});
+
+	test("a version 1 skin scales and fades the number along with everything else", () => {
+		const tracks = legacyCircleTracks(obj, hit, true, 1);
+		expect(trackValueAt(tracks.numberAlpha, 1060, 1)).toBeGreaterThan(0.5);
+		expect(trackValueAt(tracks.numberAlpha, 1240, 1)).toBeCloseTo(0, 9);
+		expect(trackValueAt(tracks.numberScale, 1240, 1)).toBeCloseTo(1.4, 9);
+	});
+
+	test("hit animations off bypasses the version 2 number fade entirely", () => {
+		// legacymaincirclepiece.cs:187-189 -- deliberately, "to avoid users
+		// abusing this to achieve even better results"; the number then follows
+		// the container's own lifetime instead
+		const tracks = legacyCircleTracks(obj, hit, false, 2.7);
+		expect(trackValueAt(tracks.numberAlpha, 1060, 1)).toBe(1);
+		// while a version 1 skin's number keeps fading, because that fade is the
+		// piece's own rather than the hit-animation branch's
+		expect(trackValueAt(legacyCircleTracks(obj, hit, false, 1).numberAlpha, 1240, 1)).toBeCloseTo(0, 9);
+	});
+
+	test("a miss leaves the piece alone -- only ArmedState.Hit is handled", () => {
+		const tracks = legacyCircleTracks(obj, { time: 1000, grade: "miss" }, true, 2.7);
+		expect(trackValueAt(tracks.pieceAlpha, 1240, 0)).toBe(1);
+		expect(trackValueAt(tracks.pieceScale, 1240, 1)).toBe(1);
 	});
 });

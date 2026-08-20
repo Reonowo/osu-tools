@@ -5,7 +5,8 @@
 
 import { DIM_TINT, HIT_FADE_OUT_TIME, MISS_WINDOW, OBJECT_RADIUS } from "../../engine/game-constants";
 import { BORDER_THICKNESS } from "@/skin/argon/constants";
-import { none, outElasticHalf, outQuad, outQuint } from "../../engine/easing";
+import { LEGACY_FADE_DURATION, LEGACY_HIT_SCALE } from "@/skin/legacy/constants";
+import { none, out, outElasticHalf, outQuad, outQuint } from "../../engine/easing";
 import { jump, tween, type Track } from "../../engine/transforms";
 import type { Grade, JudgementEventDto } from "../../lib/scene-types";
 
@@ -136,5 +137,63 @@ export function circleTracks(
 
 	tracks.pieceAlpha.push(tween(hit, HIT_FADE_OUT_TIME, 1, 0, outQuad));
 	tracks.containerAlpha.push(jump(hit + HIT_FADE_OUT_TIME, 0));
+	return tracks;
+}
+
+/**
+ * the legacy circle piece's own state tracks.
+ *
+ * the SHARED half of a circle's timing -- when it appears, the pre-hit dim, the
+ * approach circle, the container's own lifetime -- is `circleTracks`'s and is
+ * the same in both eras, because it belongs to `DrawableHitCircle` rather than
+ * to any piece. what is here is the piece's, and every value in it is a
+ * different number from argon's: legacymaincirclepiece.cs:164-204
+ */
+export interface LegacyCircleTracks {
+	/** the circle and its overlay, which fade and scale together */
+	pieceAlpha: Track[];
+	pieceScale: Track[];
+	/** the combo number, which fades on its OWN schedule on a version 2 skin */
+	numberAlpha: Track[];
+	numberScale: Track[];
+}
+
+export function legacyCircleTracks(
+	obj: { startTime: number; preempt: number; fadeIn: number },
+	result: CircleResult,
+	hitAnimations: boolean,
+	skinVersion: number
+): LegacyCircleTracks {
+	const appear = obj.startTime - obj.preempt;
+	const hit = result.time;
+	const tracks: LegacyCircleTracks = {
+		pieceAlpha: [tween(appear, obj.fadeIn, 0, 1)],
+		pieceScale: [jump(appear, 1)],
+		// the number carries its OWN copy of the fade-in: in lazer it is a
+		// sibling of the circle sprites, so it shares the drawable's fade-in but
+		// never the piece fade the version fork applies below -- the draw site
+		// must not multiply the two tracks together
+		numberAlpha: [tween(appear, obj.fadeIn, 0, 1)],
+		numberScale: [jump(appear, 1)]
+	};
+	// legacymaincirclepiece.cs:170 -- only ArmedState.Hit is handled; a miss is
+	// the drawable's own 100ms fade, which `circleTracks` already carries
+	if (result.grade === "miss") return tracks;
+
+	// :173-177 -- FadeOut(240) and ScaleTo(1.4, 240, Easing.Out) on both
+	tracks.pieceAlpha.push(tween(hit, LEGACY_FADE_DURATION, 1, 0));
+	tracks.pieceScale.push(tween(hit, LEGACY_FADE_DURATION, 1, LEGACY_HIT_SCALE, out));
+
+	if (skinVersion > 1) {
+		// :183-191 -- a version 2 skin fades the number over a QUARTER of the
+		// duration and does not scale it. with hit animations off the fade is
+		// bypassed entirely, "to avoid users abusing this to achieve even better
+		// results" -- so the number then follows the container's own lifetime
+		if (hitAnimations) tracks.numberAlpha.push(tween(hit, LEGACY_FADE_DURATION / 4, 1, 0));
+	} else {
+		// :196-197 -- an old skin scales and fades it along with everything else
+		tracks.numberAlpha.push(tween(hit, LEGACY_FADE_DURATION, 1, 0));
+		tracks.numberScale.push(tween(hit, LEGACY_FADE_DURATION, 1, LEGACY_HIT_SCALE, out));
+	}
 	return tracks;
 }
