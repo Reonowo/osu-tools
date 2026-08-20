@@ -24,10 +24,23 @@ use crate::formats::beatmap::{Beatmap, HitObject, HitObjectKind};
 use crate::formats::samples::{HitSample, SampleBank, SampleName};
 use crate::math::Vec2;
 
-/// argonskin.cs:51-71 -- the argon skin's combo palette, used whenever the
-/// beatmap declares no colours of its own. beatmap skins refuse the legacy
-/// default-palette fallback (legacybeatmapskin.cs:40), so under the argon
-/// visual target a colourless map resolves to these six
+/// argonskin.cs:51-71 -- the argon skin's combo palette.
+///
+/// **the engine no longer substitutes this.** deciding a palette is a SKIN
+/// decision and this layer has no concept of a skin: it emits the beatmap's
+/// declared colours or nothing, and stops. the frontend, which knows the active
+/// skin, fills a `None` with that skin's declared palette or its era's default
+/// -- these six for argon, the classic four for a legacy skin.
+///
+/// the citation survives the move intact: beatmap skins refuse the legacy
+/// default-palette fallback (legacybeatmapskin.cs:40), so a colourless map
+/// resolves to the SKIN's palette rather than to the classic four by way of the
+/// beatmap. it simply resolves to "else the skin" now instead of "else argon".
+///
+/// kept here as the lazer CITATION for a palette this layer no longer
+/// substitutes -- not as a dependency of anything downstream. the frontend does
+/// not read it: `src/skin/combo-colours.ts` holds its own copy, because the
+/// wire cannot carry a value the engine has stopped emitting
 pub const ARGON_COMBO_COLOURS: [[u8; 4]; 6] = [
     [241, 116, 0, 255], // orange
     [0, 241, 53, 255],  // green
@@ -41,9 +54,21 @@ pub const ARGON_COMBO_COLOURS: [[u8; 4]; 6] = [
 #[serde(rename_all = "camelCase")]
 pub struct RenderPlan {
     pub playfield: PlayfieldConstants,
-    /// rgba rows; consumers pick colours[combo_colour_index % len]
-    /// (argonskin.cs:318-319)
-    pub combo_colours: Vec<[u8; 4]>,
+    /// the beatmap's OWN declared palette, or `None` when it declared none.
+    ///
+    /// nullable on purpose. the engine used to substitute argon's six here,
+    /// which was a skin decision made in a layer with no concept of a skin --
+    /// and the wire carried no record of which branch ran, so nothing
+    /// downstream could tell a beatmap that genuinely declared the argon
+    /// palette from one where the engine filled it in. now `None` means exactly
+    /// "the beatmap declared none", and the layer that knows the active skin
+    /// decides what to use instead.
+    ///
+    /// per-object colour data is unaffected by a palette's length: the index is
+    /// offset-based and the modulo is applied by the consumer
+    /// (argonskin.cs:318-319), so a four-colour palette indexes as correctly as
+    /// a six-colour one
+    pub combo_colours: Option<Vec<[u8; 4]>>,
     pub hit_windows: HitWindowBounds,
     pub scale: f32,
     pub preempt: f64,
@@ -388,11 +413,8 @@ fn finite_segment_ends(ends: Vec<f64>) -> Vec<f64> {
 }
 
 pub fn build_render_plan(map: &Beatmap, processed: &ProcessedBeatmap) -> RenderPlan {
-    let combo_colours = if map.combo_colors.is_empty() {
-        ARGON_COMBO_COLOURS.to_vec()
-    } else {
-        map.combo_colors.clone()
-    };
+    // the beatmap's own, or nothing. no substitution: see the field's doc
+    let combo_colours = (!map.combo_colors.is_empty()).then(|| map.combo_colors.clone());
 
     // process_beatmap pushes exactly one processed object per decoded hit
     // object, in order, so the two lists are index-aligned; zipping (rather
@@ -626,17 +648,32 @@ mod tests {
     }
 
     #[test]
-    fn colourless_maps_fall_back_to_the_argon_palette() {
+    fn a_colourless_map_emits_no_palette_rather_than_substituting_one() {
+        // the engine stops at "the beatmap declared none". which palette that
+        // resolves to is a SKIN decision, and this layer has no concept of a
+        // skin -- so a substitution here would be a decision made in the wrong
+        // place AND unrecoverable downstream, since the wire would carry no
+        // record of which branch ran
         let plan = plan_for(&base_map(vec![circle(0.0, 0.0, 0.0)]));
-        assert_eq!(plan.combo_colours, ARGON_COMBO_COLOURS.to_vec());
+        assert_eq!(plan.combo_colours, None);
     }
 
     #[test]
-    fn declared_combo_colours_win_over_the_fallback() {
+    fn a_declared_palette_passes_through_verbatim() {
         let mut map = base_map(vec![circle(0.0, 0.0, 0.0)]);
         map.combo_colors = vec![[255, 128, 64, 255], [1, 2, 3, 255]];
         let plan = plan_for(&map);
-        assert_eq!(plan.combo_colours, map.combo_colors);
+        assert_eq!(plan.combo_colours, Some(map.combo_colors.clone()));
+    }
+
+    #[test]
+    fn a_map_declaring_argons_own_palette_is_distinguishable_from_one_declaring_none() {
+        // the whole reason the field is nullable: these two used to serialize
+        // identically
+        let mut declared = base_map(vec![circle(0.0, 0.0, 0.0)]);
+        declared.combo_colors = ARGON_COMBO_COLOURS.to_vec();
+        assert_eq!(plan_for(&declared).combo_colours, Some(ARGON_COMBO_COLOURS.to_vec()));
+        assert_eq!(plan_for(&base_map(vec![circle(0.0, 0.0, 0.0)])).combo_colours, None);
     }
 
     #[test]
@@ -880,6 +917,14 @@ mod tests {
 
         assert_eq!(v["playfield"]["width"], 512.0);
         assert_eq!(v["comboColours"][0], serde_json::json!([255, 128, 64, 255]));
+        // and the nullable half of that contract, which the frontend's
+        // `RenderPlan.comboColours` mirrors as `[number, number, number,
+        // number][] | null`
+        let colourless = plan_for(&base_map(vec![circle(0.0, 0.0, 0.0)]));
+        assert_eq!(
+            serde_json::to_value(&colourless).unwrap()["comboColours"],
+            serde_json::Value::Null
+        );
         assert_eq!(v["hitWindows"]["great"], 49.5);
         assert_eq!(v["fadeIn"], 400.0);
 
