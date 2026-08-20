@@ -65,10 +65,54 @@ fn archive_err(what: impl std::fmt::Display) -> IpcError {
 // extract absolute paths. the spec calls for rejecting absolute names
 // outright, so that case is checked explicitly alongside enclosed_name
 fn is_absolute_entry_name(name: &str) -> bool {
-    name.starts_with('/')
-        || name.starts_with('\\')
-        || (name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-            && name.as_bytes().get(1) == Some(&b':'))
+    name.starts_with('/') || name.starts_with('\\') || name.split(['/', '\\']).any(has_drive_prefix)
+}
+
+/// a windows drive-relative segment such as `c:evil.png`.
+///
+/// checked on EVERY segment rather than only at the start of the name, because
+/// a prefix does not have to start the name to reach a join:
+/// `Path::new("wrapper/c:evil.png")` parses as two `Normal` components, but
+/// pushing that second one onto a `PathBuf` re-parses it alone, finds a disk
+/// prefix, and DISCARDS the buffer ("if path has a prefix but no root, it
+/// replaces self"). so `staging.join("c:evil.png")` is `c:evil.png` -- the
+/// app-owned root is gone and the write lands in the current directory of
+/// drive C:. zip's own `enclosed_name` is push-built the same way, so it
+/// collapses to the same bare name rather than rejecting it.
+///
+/// checked on every segment means an archive holding such a member is refused
+/// WHOLE, even when nothing references it -- the same fail-closed posture an
+/// absolute name already got. that is deliberate: the shape is indistinguishable
+/// from the attack, and a member whose name carries a `:` could not be written
+/// to a windows filesystem anyway, so nothing legitimate is lost here
+fn has_drive_prefix(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':')
+}
+
+/// the entry name as a relative path built from validated components ONLY.
+///
+/// `enclosed_name()` is not safe to join, for the reason above. this rebuilds
+/// from `Component::Normal` alone and refuses anything else, so what comes
+/// back can only ever descend
+fn safe_relative_path(name: &str) -> Option<std::path::PathBuf> {
+    let mut out = std::path::PathBuf::new();
+    let mut any = false;
+    for component in std::path::Path::new(name).components() {
+        match component {
+            std::path::Component::Normal(part) if !has_drive_prefix(&part.to_string_lossy()) => {
+                out.push(part);
+                any = true;
+            }
+            // a leading `./` is a no-op, not an escape. rust keeps it as a
+            // component (only a MID-path `.` is normalized away), and archives
+            // written by tools that join on "." carry it, so rejecting it would
+            // fail a safe archive that used to load
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    any.then_some(out)
 }
 
 // end-of-central-directory record: 22 fixed bytes plus up to 65535 comment
@@ -369,8 +413,13 @@ impl OszArchive {
         candidates
     }
 
-    /// reads member `index` in full, bounded by `cap`; None when it is larger
-    fn read_member_capped(&mut self, index: usize, cap: u64) -> Result<Option<Vec<u8>>, IpcError> {
+    /// reads member `index` in full, bounded by `cap`; None when it is larger.
+    ///
+    /// public because the `.osk` importer (`crate::osk`) extracts through the
+    /// same archive primitive: an `.osk` IS a zip, so the file-length cap, the
+    /// entry-count cap and the fail-closed unsafe-name check at [`open_osz`]
+    /// all apply to it unchanged, and only the destination policy differs
+    pub fn read_member_capped(&mut self, index: usize, cap: u64) -> Result<Option<Vec<u8>>, IpcError> {
         let entry = self.archive.by_index(index).map_err(archive_err)?;
         let mut bytes = Vec::new();
         entry.take(cap + 1).read_to_end(&mut bytes).map_err(archive_err)?;
@@ -491,7 +540,15 @@ impl std::fmt::Debug for ExtractedScene {
 /// disagree on both constantly, and stable resolves them on a
 /// case-insensitive filesystem
 fn normalize_entry_name(name: &str) -> String {
-    name.replace('\\', "/").to_ascii_lowercase()
+    // keyed the way the extractor WRITES it, so the two sides cannot disagree.
+    // a member named `./audio.mp3` is written to `audio.mp3`, and the beatmap
+    // asks for `audio.mp3` -- without dropping the no-op `.` here the archive
+    // index would key `./audio.mp3`, every media and hitsound lookup would miss,
+    // and the map would load silent and background-less instead of failing loudly
+    let rebuilt = safe_relative_path(name)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string());
+    rebuilt.replace('\\', "/").to_ascii_lowercase()
 }
 
 struct ByteBudget {
@@ -585,18 +642,21 @@ impl OszArchive {
         // the sample allow-list is derived from the map's hitsounding and can
         // reach tens of thousands of candidates, almost none of which exist,
         // so a linear scan each would be quadratic in archive size
-        let by_name: std::collections::HashMap<String, usize> = self
-            .names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| (normalize_entry_name(name), index))
-            .collect();
+        // FIRST wins on a collision, explicitly rather than by `collect`'s
+        // last-wins: normalization folds `./x`, `x` and `sb//x` onto one key, so
+        // two differently-spelled members can now share one. resolving toward
+        // the first keeps the same archive answering the same way every run
+        let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (index, name) in self.names.iter().enumerate() {
+            by_name.entry(normalize_entry_name(name)).or_insert(index);
+        }
 
         let osu_rel = {
             let entry = self.archive.by_index(osu_index).map_err(archive_err)?;
-            entry
-                .enclosed_name()
-                .expect("open_osz validated every entry name")
+            // rebuilt from validated components rather than taken from
+            // `enclosed_name`, which is push-built and can hand back a
+            // drive-relative name that discards the lease on join
+            safe_relative_path(entry.name()).ok_or_else(|| archive_err("unsafe entry name"))?
         };
         let osu_path = lease.dir().join(&osu_rel);
         budget.charge(osu_bytes.len() as u64)?;
@@ -637,9 +697,7 @@ impl OszArchive {
 
         for (index, is_sample) in wanted {
             let mut entry = self.archive.by_index(index).map_err(archive_err)?;
-            let rel = entry
-                .enclosed_name()
-                .expect("open_osz validated every entry name");
+            let rel = safe_relative_path(entry.name()).ok_or_else(|| archive_err("unsafe entry name"))?;
             let out_path = lease.dir().join(rel);
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -1135,6 +1193,65 @@ mod tests {
         let path = dir.path().join("not.osz");
         std::fs::write(&path, b"definitely not a zip").unwrap();
         assert!(matches!(open_osz(&path), Err(IpcError::BeatmapParse { .. })));
+    }
+
+    #[test]
+    fn a_dot_slash_prefixed_archive_extracts_its_media_too() {
+        // a leading `./` is a no-op component that some packing tools write.
+        // it must neither refuse the archive (it is safe) nor survive into the
+        // index key -- the beatmap asks for `audio.mp3`, so an index keyed
+        // `./audio.mp3` would load the map silent and background-less
+        let osu = b"osu file format v14".as_slice();
+        let (_dir, path) = temp_osz(&[
+            ("./map.osu", osu),
+            ("./audio.mp3", b"mp3 bytes".as_slice()),
+            ("./sb/bg.jpg", b"jpg bytes".as_slice()),
+        ]);
+        let cache_root = tempfile::tempdir().unwrap();
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+
+        let extracted = archive
+            .extract_scene(
+                matched.index,
+                &matched.bytes,
+                &["audio.mp3", "sb/bg.jpg"],
+                &[],
+                cache_root.path(),
+                "test",
+            )
+            .unwrap();
+
+        // the `.` is dropped on the way to disk, exactly as the writer drops it
+        assert_eq!(std::fs::read(&extracted.osu_path).unwrap(), osu);
+        assert_eq!(extracted.osu_path, extracted.beatmap_dir.join("map.osu"));
+        assert_eq!(
+            std::fs::read(extracted.beatmap_dir.join("audio.mp3")).unwrap(),
+            b"mp3 bytes"
+        );
+        assert_eq!(
+            std::fs::read(extracted.beatmap_dir.join("sb").join("bg.jpg")).unwrap(),
+            b"jpg bytes"
+        );
+    }
+
+    #[test]
+    fn safe_relative_path_drops_no_op_components_and_refuses_every_escape() {
+        // the direct unit pin: the `.osz` extraction path is the only caller,
+        // and its own tests reach it through several layers
+        assert_eq!(safe_relative_path("map.osu"), Some(std::path::PathBuf::from("map.osu")));
+        assert_eq!(safe_relative_path("./map.osu"), Some(std::path::PathBuf::from("map.osu")));
+        assert_eq!(safe_relative_path("./sb/./bg.jpg"), Some(std::path::PathBuf::from("sb/bg.jpg")));
+        // nothing but no-op components is not a path
+        assert_eq!(safe_relative_path("."), None);
+        assert_eq!(safe_relative_path("./"), None);
+        // and every escape still refused
+        assert_eq!(safe_relative_path(".."), None);
+        assert_eq!(safe_relative_path("./../evil"), None);
+        assert_eq!(safe_relative_path("/abs.txt"), None);
+        assert_eq!(safe_relative_path(r"C:\evil.png"), None);
+        assert_eq!(safe_relative_path("c:evil.png"), None);
+        assert_eq!(safe_relative_path("wrapper/c:evil.png"), None);
     }
 
     #[test]
