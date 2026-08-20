@@ -8,9 +8,11 @@ pub mod export;
 pub mod limits;
 pub mod load;
 pub mod media;
+pub mod osk;
 pub mod osz;
 pub mod scene;
 pub mod settings;
+pub mod skin;
 pub mod stable;
 pub mod state;
 
@@ -34,10 +36,13 @@ pub fn run() {
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let cache_root = app.path().app_local_data_dir()?.join("osz-cache");
+            // permanent, and deliberately NOT under the collected cache root:
+            // a persisted skin locator points here and must survive orphan gc
+            let skins_root = app.path().app_local_data_dir()?.join("skins");
             // a crash's leftover cache dirs are unlocked by now; a live
             // instance cannot race this because of single-instance + locks
             cache::collect_orphans(&cache_root);
-            app.manage(state::AppState::new(config_dir, cache_root));
+            app.manage(state::AppState::new(config_dir, cache_root, skins_root));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -47,6 +52,10 @@ pub fn run() {
             commands::set_osu_stable_path,
             commands::set_viewer_prefs,
             commands::clear_recents,
+            commands::list_skins,
+            commands::get_skin,
+            commands::set_skin,
+            commands::import_skin,
             commands::apply_edit,
             commands::undo,
             commands::redo,

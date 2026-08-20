@@ -14,6 +14,7 @@ use crate::settings::{
     save_settings, AudioPrefs, EditingPrefs, EffectPrefs, GameplayPrefs, KeybindOverrides, OverlayPrefs,
     RecentReplay, Settings, TimelinePrefs,
 };
+use crate::skin::{SkinEntry, SkinEra, SkinLocator, SkinManifest, SkinSource};
 use crate::state::AppState;
 use engine::formats::osr::FIRST_LAZER_VERSION;
 use engine::simulation::simulate;
@@ -52,6 +53,21 @@ fn install_scene<R: Runtime>(app: &AppHandle<R>, state: &AppState, outcome: Load
     // deletes its extracted directory
     *state.session.lock().expect("session lock") = Some(session);
     scene
+}
+
+/// a skin's own files ride the asset protocol exactly as the beatmap's media
+/// does, and for the same reason: `convertFileSrc` urls are only resolvable
+/// once the runtime scope allows the path. every entry in the manifest was
+/// resolved strictly inside the skin's own directory (`skin::load_skin`), so
+/// this widens the scope by exactly the files the lookup chain can ask for.
+///
+/// without it a user skin's samples resolve to a url the protocol refuses and
+/// the fetch fails silently, which reads as the skin having no samples at all
+fn allow_skin_files<R: Runtime>(app: &AppHandle<R>, manifest: &SkinManifest) {
+    let scope = app.asset_protocol_scope();
+    for path in manifest.files.values() {
+        let _ = scope.allow_file(Path::new(path));
+    }
 }
 
 /// standard accuracy over the header counts -- the same weighting the replay
@@ -228,6 +244,180 @@ pub fn set_viewer_prefs(
     save_settings(&state.config_dir, &candidate)?;
     *settings = candidate;
     Ok(settings.clone())
+}
+
+/// runs a closure off the ipc thread, mapping a join failure the way the other
+/// blocking commands do.
+///
+/// every skin command does unbounded disk work -- `scan_skin_dir` stats each
+/// file and opens each texture's header, and `list_skins` does that once per
+/// skin in the install -- and a non-async `#[tauri::command]` resolves inline
+/// on the webview's own thread. `get_skin` is on the STARTUP path, so leaving
+/// these synchronous would freeze the window for the length of a full skin
+/// walk before the app is interactive
+async fn off_thread<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, IpcError> + Send + 'static,
+) -> Result<T, IpcError> {
+    match tauri::async_runtime::spawn_blocking(work).await {
+        Ok(result) => result,
+        Err(error) => Err(IpcError::Internal {
+            message: format!("skin work failed to run: {error}"),
+        }),
+    }
+}
+
+/// every skin the app knows about: the bundled row first, then the detected
+/// stable install's, then the imported ones.
+///
+/// the bundled row is a ROW rather than a "no skin selected" state -- that is
+/// the decision that makes the rest coherent, since the user can always get
+/// back to the app's own look without having to know that "no skin" means
+/// something different.
+///
+/// no stable install is an empty stretch of the list, never an error: someone
+/// with no osu! installation still gets a picker with the bundled row and
+/// whatever they imported
+#[tauri::command]
+pub async fn list_skins(state: State<'_, AppState>) -> Result<Vec<SkinEntry>, IpcError> {
+    // owned before the await, so no lock and no state borrow crosses it
+    let (stable_root, selected) = {
+        let settings = state.settings.lock().expect("settings lock");
+        (settings.osu_stable_path.clone(), settings.skin.clone())
+    };
+    let skins_root = state.skins_root.clone();
+    off_thread(move || Ok(list_skins_blocking(stable_root, selected, &skins_root))).await
+}
+
+fn list_skins_blocking(
+    stable_root: Option<String>,
+    selected: SkinLocator,
+    skins_root: &Path,
+) -> Vec<SkinEntry> {
+    let candidates = match stable_root {
+        Some(path) => vec![PathBuf::from(path)],
+        None => crate::stable::default_candidates(),
+    };
+
+    let mut entries = vec![SkinEntry {
+        locator: SkinLocator::Bundled,
+        name: SkinManifest::bundled().name,
+        author: SkinManifest::bundled().author,
+        source: SkinSource::Bundled,
+        era: SkinEra::Lazer,
+        refusal: None,
+    }];
+
+    // the install is located by its own `Skins` folder rather than through
+    // `detect_install`: a user can have a skins folder without the `osu!.db`
+    // that beatmap lookup needs, and refusing to list their skins over a
+    // missing database would be a lookup rule leaking into an unrelated one
+    for root in candidates {
+        let found = crate::skin::enumerate_stable_skins(&root);
+        if !found.is_empty() {
+            entries.extend(found);
+            break;
+        }
+    }
+
+    entries.extend(crate::skin::enumerate_imported_skins(skins_root));
+
+    // a folder skin is not enumerable -- it lives wherever the user pointed
+    // at, and nothing walks the whole disk looking for more. so the SELECTED
+    // one is listed explicitly, or browsing to a skin would leave the picker
+    // showing no row selected at all and no way back to it but browsing again
+    if let SkinLocator::Folder { path } = &selected {
+        let dir = PathBuf::from(path);
+        if dir.is_dir() {
+            entries.push(crate::skin::entry_for(&dir, SkinSource::Folder));
+        }
+    }
+    entries
+}
+
+/// the persisted selection, resolved. called once at startup: a locator that
+/// no longer resolves comes back as the bundled default with `fellBack` set,
+/// so the surface can say what happened instead of the user wondering where
+/// their skin went
+#[tauri::command]
+pub async fn get_skin<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<SkinManifest, IpcError> {
+    let locator = state.settings.lock().expect("settings lock").skin.clone();
+    let manifest = off_thread(move || crate::skin::load_skin(&locator)).await?;
+    allow_skin_files(&app, &manifest);
+    Ok(manifest)
+}
+
+/// pick a skin. persists the locator and returns the loaded manifest.
+///
+/// a cap breach propagates: the skin is refused WHOLE and the previous
+/// selection stays, because a half-loaded skin is exactly the unexplained
+/// wrongness this posture exists to prevent. a locator that does not resolve
+/// is not a breach -- it is a miss, and the manifest says so
+#[tauri::command]
+pub async fn set_skin<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    locator: SkinLocator,
+) -> Result<SkinManifest, IpcError> {
+    // load BEFORE persisting: a refusal must not leave the settings file
+    // pointing at a skin the app just declined to load
+    // ticketed BEFORE the load, so the write order is CALL order -- see
+    // `SkinWriteOrder`. without it a slow pick finishing after a fast one would
+    // persist last and name a skin the user already moved off
+    let ticket = state.skin_writes.lock().expect("skin write lock").issue();
+    let loading = locator.clone();
+    let manifest = off_thread(move || crate::skin::load_skin(&loading)).await?;
+    allow_skin_files(&app, &manifest);
+    persist_skin_selection(&state, ticket, locator)?;
+    Ok(manifest)
+}
+
+/// persists the selection only while this ticket is still the newest to reach
+/// the write. the manifest is returned to the caller either way -- what is
+/// dropped is the stale WRITE, not the answer
+fn persist_skin_selection(state: &AppState, ticket: u64, locator: SkinLocator) -> Result<(), IpcError> {
+    let mut order = state.skin_writes.lock().expect("skin write lock");
+    if !order.claim(ticket) {
+        return Ok(());
+    }
+    let mut settings = state.settings.lock().expect("settings lock");
+    let mut candidate = settings.clone();
+    candidate.skin = locator;
+    save_settings(&state.config_dir, &candidate)?;
+    *settings = candidate;
+    Ok(())
+}
+
+/// import an `.osk` and select it. the archive is copied into the app-owned
+/// skins directory -- the one path that copies, because an archive has nowhere
+/// else to be read from
+#[tauri::command]
+pub async fn import_skin<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<SkinManifest, IpcError> {
+    // the extract and the walk are both unbounded, so both go off the thread
+    let ticket = state.skin_writes.lock().expect("skin write lock").issue();
+    let skins_root = state.skins_root.clone();
+    let import_lock = state.import_lock.clone();
+    let (locator, manifest) = off_thread(move || {
+        // one import at a time: the staging and retiring directories are named
+        // after the skin, so two same-named archives would trample each other's
+        // half-extracted output and could leave the user with neither their old
+        // skin nor a whole new one
+        let _guard = import_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::fs::create_dir_all(&skins_root)?;
+        let locator = crate::osk::import_osk(Path::new(&path), &skins_root)?;
+        let manifest = crate::skin::load_skin(&locator)?;
+        Ok((locator, manifest))
+    })
+    .await?;
+    allow_skin_files(&app, &manifest);
+    persist_skin_selection(&state, ticket, locator)?;
+    Ok(manifest)
 }
 
 #[tauri::command]
@@ -703,6 +893,9 @@ mod tests {
         config_dir: std::path::PathBuf,
         cache_root: std::path::PathBuf,
     ) -> tauri::App<tauri::test::MockRuntime> {
+        // beside the cache root, never inside it: an imported skin's directory
+        // must survive the orphan collection the cache root is subject to
+        let skins_root = config_dir.join("skins");
         tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![
                 load_replay,
@@ -711,6 +904,10 @@ mod tests {
                 set_osu_stable_path,
                 set_viewer_prefs,
                 clear_recents,
+                list_skins,
+                get_skin,
+                set_skin,
+                import_skin,
                 apply_edit,
                 undo,
                 redo,
@@ -718,7 +915,7 @@ mod tests {
                 resync,
                 export_replay
             ])
-            .manage(AppState::new(config_dir, cache_root))
+            .manage(AppState::new(config_dir, cache_root, skins_root))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap()
     }
@@ -930,6 +1127,237 @@ mod tests {
             get_settings(app.state()).osu_stable_path.as_deref(),
             Some(r"D:\osu!")
         );
+    }
+
+    /// stages a skin folder under a fake stable install root
+    fn stage_stable_skin(root: &std::path::Path, name: &str, ini: &[u8]) -> std::path::PathBuf {
+        let dir = root.join("Skins").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("skin.ini"), ini).unwrap();
+        std::fs::write(dir.join("cursor.png"), b"x").unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_picker_lists_the_bundled_row_plus_the_stable_installs_skins() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let install = dir.path().join("osu!");
+        stage_stable_skin(&install, "Rafis", b"[General]\nName: Rafis 2016\nAuthor: Rafis\n");
+        stage_stable_skin(&install, "Unnamed", b"[General]\n");
+        set_osu_stable_path(app.state(), Some(install.to_string_lossy().into_owned())).unwrap();
+
+        let listed = tauri::async_runtime::block_on(list_skins(app.state())).unwrap();
+        assert_eq!(listed[0].locator, SkinLocator::Bundled);
+        assert_eq!(listed[0].source, SkinSource::Bundled);
+        assert_eq!(listed[0].era, SkinEra::Lazer);
+
+        let names: Vec<&str> = listed[1..].iter().map(|entry| entry.name.as_str()).collect();
+        // the declared name where there is one, the folder name where there is not
+        assert_eq!(names, vec!["Rafis 2016", "Unnamed"]);
+        assert!(listed[1..].iter().all(|entry| entry.source == SkinSource::Stable));
+        assert_eq!(listed[1].author, "Rafis");
+    }
+
+    #[test]
+    fn a_browsed_folder_skin_is_listed_so_the_picker_can_show_it_selected() {
+        // a folder skin is not enumerable -- nothing walks the disk for more --
+        // so without listing the selected one the picker shows NO row selected
+        // after browsing, and the only route back to that skin is browsing to
+        // it again
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let loose = dir.path().join("loose").join("Rafis 2016");
+        std::fs::create_dir_all(&loose).unwrap();
+        std::fs::write(loose.join("skin.ini"), b"[General]
+Name: Rafis 2016
+Author: Rafis
+").unwrap();
+        std::fs::write(loose.join("cursor.png"), b"x").unwrap();
+
+        // not listed until it is the selection: nothing enumerates loose folders
+        assert!(!tauri::async_runtime::block_on(list_skins(app.state())).unwrap()
+            .iter()
+            .any(|entry| entry.source == SkinSource::Folder));
+
+        let locator = SkinLocator::Folder {
+            path: loose.to_string_lossy().into_owned(),
+        };
+        tauri::async_runtime::block_on(set_skin(app.handle().clone(), app.state(), locator.clone())).unwrap();
+
+        let listed = tauri::async_runtime::block_on(list_skins(app.state())).unwrap();
+        let row = listed
+            .iter()
+            .find(|entry| entry.source == SkinSource::Folder)
+            .expect("the selected folder skin is a row");
+        assert_eq!(row.name, "Rafis 2016");
+        assert_eq!(row.locator, locator);
+    }
+
+    #[test]
+    fn selecting_a_skin_persists_across_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+        let install = dir.path().join("osu!");
+        let skin = stage_stable_skin(&install, "Chosen", b"[General]\nName: Chosen\nVersion: 2.5\n");
+        let locator = SkinLocator::Stable {
+            path: skin.to_string_lossy().into_owned(),
+        };
+
+        let manifest = tauri::async_runtime::block_on(set_skin(app.handle().clone(), app.state(), locator.clone())).unwrap();
+        assert_eq!(manifest.name, "Chosen");
+        assert_eq!(manifest.config.version, 2.5);
+        assert!(manifest.fell_back.is_none());
+
+        // a fresh app over the same config dir is the restart
+        let restarted = mock_app(config_dir, dir.path().join("cache2"));
+        assert_eq!(get_settings(restarted.state()).skin, locator);
+        assert_eq!(tauri::async_runtime::block_on(get_skin(restarted.handle().clone(), restarted.state())).unwrap().name, "Chosen");
+    }
+
+    #[test]
+    fn a_selected_skins_files_are_allowed_on_the_asset_protocol() {
+        // the manifest carries absolute paths and the frontend hands them to
+        // convertFileSrc, whose urls the protocol refuses unless the runtime
+        // scope allows the path -- the static scope in tauri.conf.json is
+        // empty. without the widening a user skin's samples fetch 403 and fall
+        // silently back to the bundled default, which looks like the skin
+        // simply having none. both routes that produce a manifest are checked:
+        // set_skin is the pick, get_skin is the startup path a user who never
+        // re-picks their skin is the only one to exercise
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+        let install = dir.path().join("osu!");
+        let skin = stage_stable_skin(&install, "Audible", b"[General]
+Name: Audible
+");
+        std::fs::write(skin.join("normal-hitnormal.wav"), b"x").unwrap();
+        let locator = SkinLocator::Stable {
+            path: skin.to_string_lossy().into_owned(),
+        };
+
+        let manifest = tauri::async_runtime::block_on(set_skin(app.handle().clone(), app.state(), locator)).unwrap();
+        let sample = manifest
+            .files
+            .get("normal-hitnormal.wav")
+            .expect("the skin's sample is in the file map");
+        assert!(
+            app.asset_protocol_scope().is_allowed(std::path::Path::new(sample)),
+            "set_skin widened the scope by the skin's own files"
+        );
+
+        let restarted = mock_app(config_dir, dir.path().join("cache2"));
+        let hydrated = tauri::async_runtime::block_on(get_skin(restarted.handle().clone(), restarted.state())).unwrap();
+        assert!(
+            restarted
+                .asset_protocol_scope()
+                .is_allowed(std::path::Path::new(&hydrated.files["normal-hitnormal.wav"])),
+            "get_skin widened it too -- the startup route is the one that must not be missed"
+        );
+    }
+
+    #[test]
+    fn a_skin_folder_deleted_between_sessions_falls_back_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+        let install = dir.path().join("osu!");
+        let skin = stage_stable_skin(&install, "Doomed", b"[General]\nName: Doomed\n");
+        tauri::async_runtime::block_on(set_skin(
+            app.handle().clone(),
+            app.state(),
+            SkinLocator::Stable {
+                path: skin.to_string_lossy().into_owned(),
+            },
+        ))
+        .unwrap();
+
+        std::fs::remove_dir_all(&skin).unwrap();
+        let restarted = mock_app(config_dir, dir.path().join("cache2"));
+        let manifest = tauri::async_runtime::block_on(get_skin(restarted.handle().clone(), restarted.state())).unwrap();
+
+        // a miss, not an error: the app opens on the bundled default and the
+        // manifest carries what happened so the surface can say it
+        assert_eq!(manifest.locator, SkinLocator::Bundled);
+        let fallback = manifest.fell_back.expect("the miss is reported");
+        assert!(matches!(fallback.requested, SkinLocator::Stable { .. }));
+        // the selection itself is untouched, so restoring the folder restores
+        // the skin without the user re-picking it
+        assert!(matches!(
+            get_settings(restarted.state()).skin,
+            SkinLocator::Stable { .. }
+        ));
+    }
+
+    #[test]
+    fn importing_an_osk_selects_it_and_lists_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let osk = dir.path().join("downloaded.osk");
+        write_osz(
+            &osk,
+            &[
+                ("skin.ini", b"[General]\nName: Imported One\nAuthor: Someone\n"),
+                ("cursor.png", b"x"),
+            ],
+        );
+
+        let manifest =
+            tauri::async_runtime::block_on(import_skin(app.handle().clone(), app.state(), osk.to_string_lossy().into_owned())).unwrap();
+        assert_eq!(manifest.name, "Imported One");
+        assert_eq!(manifest.source, SkinSource::Imported);
+        assert!(matches!(get_settings(app.state()).skin, SkinLocator::Imported { .. }));
+
+        let listed = tauri::async_runtime::block_on(list_skins(app.state())).unwrap();
+        let imported: Vec<&SkinEntry> = listed
+            .iter()
+            .filter(|entry| entry.source == SkinSource::Imported)
+            .collect();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].name, "Imported One");
+    }
+
+    #[test]
+    fn a_refused_skin_leaves_the_previous_selection_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let install = dir.path().join("osu!");
+        let good = stage_stable_skin(&install, "Good", b"[General]\nName: Good\n");
+        set_osu_stable_path(app.state(), Some(install.to_string_lossy().into_owned())).unwrap();
+        tauri::async_runtime::block_on(set_skin(
+            app.handle().clone(),
+            app.state(),
+            SkinLocator::Stable {
+                path: good.to_string_lossy().into_owned(),
+            },
+        ))
+        .unwrap();
+
+        let refused = install.join("Skins").join("Enormous");
+        std::fs::create_dir_all(&refused).unwrap();
+        std::fs::write(
+            refused.join("cursor.png"),
+            vec![0u8; (crate::limits::MAX_SKIN_FILE_BYTES + 1) as usize],
+        )
+        .unwrap();
+
+        let error = tauri::async_runtime::block_on(set_skin(
+            app.handle().clone(),
+            app.state(),
+            SkinLocator::Stable {
+                path: refused.to_string_lossy().into_owned(),
+            },
+        ))
+        .expect_err("refused whole");
+        assert!(matches!(&error, IpcError::ResourceLimit { cap, .. } if cap == "MAX_SKIN_FILE_BYTES"));
+        // the refusal is whole: the good skin is still what is selected
+        assert_eq!(tauri::async_runtime::block_on(get_skin(app.handle().clone(), app.state())).unwrap().name, "Good");
+        // and it still LISTS, with its reason, rather than vanishing
+        let listed = tauri::async_runtime::block_on(list_skins(app.state())).unwrap();
+        let row = listed.iter().find(|entry| entry.name == "Enormous").expect("listed");
+        assert!(row.refusal.as_deref().unwrap_or("").contains("MAX_SKIN_FILE_BYTES"));
     }
 
     #[test]
