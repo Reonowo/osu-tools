@@ -7,6 +7,7 @@ import { DEFAULT_EFFECTS, effectiveEffects } from "../../state/defaults";
 import { testScene } from "../../test/scene";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
 import { FollowPointsDrawable, generateFollowPoints } from "./follow-points";
+import { objectAccents } from "@/skin/combo-colours";
 
 function circle(startTime: number, x: number, y: number, comboIndex: number): RenderObject {
 	return {
@@ -82,7 +83,6 @@ describe("follow point generation (followpointconnection.cs)", () => {
  * doesn't provide -- see judgements.test.ts's stubContextWithoutCanvas for
  * the same substitution reasoning. Texture.WHITE needs no canvas at all */
 function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFECTS): RenderContext {
-	const palette = scene.renderPlan.comboColours;
 	const noCanvas: TextureBaker = {
 		canvasTexture: () => Texture.WHITE,
 		glowTexture: () => Texture.WHITE,
@@ -94,7 +94,10 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 	return {
 		scene,
 		derived: deriveScene(scene),
-		accents: scene.renderPlan.objects.map((o) => fromBytes(palette[o.comboColourIndex % palette.length])),
+		// the palette resolves through the skin layer now: the engine emits the
+		// beatmap's declared colours or null, and a null skin is the bundled
+		// default, so these tests see argon's own six
+		accents: objectAccents(scene.renderPlan, null).map(fromBytes),
 		textures: noCanvas,
 		renderer: {} as unknown as Renderer,
 		getOverlays: () => ({

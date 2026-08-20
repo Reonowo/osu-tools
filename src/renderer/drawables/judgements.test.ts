@@ -16,13 +16,16 @@ import { testScene } from "../../test/scene";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
 import * as textures from "../textures";
 import { JudgementsDrawable } from "./judgements";
+import { objectAccents } from "@/skin/combo-colours";
 
 function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
-	const palette = scene.renderPlan.comboColours;
 	return {
 		scene,
 		derived: deriveScene(scene),
-		accents: scene.renderPlan.objects.map((o) => fromBytes(palette[o.comboColourIndex % palette.length])),
+		// the palette resolves through the skin layer now: the engine emits the
+		// beatmap's declared colours or null, and a null skin is the bundled
+		// default, so these tests see argon's own six
+		accents: objectAccents(scene.renderPlan, null).map(fromBytes),
 		textures,
 		// never touched by JudgementsDrawable; no headless renderer is available to construct here
 		renderer: {} as unknown as Renderer,
