@@ -18,50 +18,6 @@ export const SOURCE_LABELS: Record<SkinSource, string> = {
 	imported: "imported"
 };
 
-/**
- * THE DEVELOPMENT GATE.
- *
- * legacy skins become selectable only once every element the playfield draws
- * has a legacy implementation. the gate is per-element coverage rather than a
- * date or a slice boundary, and that is what makes any half-implemented state a
- * development state rather than a shipped one: a build where the cursor is
- * legacy and the hit circles are Argon shows a mixed-era playfield, which is
- * exactly the look the classic floor was vendored to prevent.
- *
- * flip this to `true` when the inventory is complete -- cursor, hit circle and
- * approach circle, slider ends, slider ball and follow circle, ticks and
- * reverses, slider body, spinner, follow points, judgements, hit lighting, and
- * the combo palette. removing the gate then means removing this constant and
- * its uses, NOT inverting it: a gate left in place reading `true` is a gate
- * someone will later wonder about.
- *
- * the sample CHAIN is not separately gated -- a legacy skin's hit samples
- * resolve and sound correct wherever a legacy skin is active, which is what
- * makes the sample half finished work rather than work behind this flag.
- *
- * what the gate withholds is the manifest itself, and therefore the samples
- * along with the playfield: `selectSkin` and `importSkin` refuse a legacy skin
- * outright, and `hydrateSettings` refuses one a dev build persisted (the two
- * builds share a settings file). that is deliberate -- the combo palette is
- * already a drawing decision keyed on the era, so a manifest left on the store
- * "for the samples only" would colour an Argon playfield with the classic four,
- * which is the mixed-era look this exists to prevent. a shipped build therefore
- * has no legacy skin at all rather than half of one
- */
-export const LEGACY_SKINS_IMPLEMENTED = false;
-
-/** the gate as a predicate, so every route into a selection reads ONE rule.
- * the row list is not the only way to pick a skin -- browse… and import both
- * reach `selectSkin`/`importSkin` directly with a locator the picker never
- * enumerated -- and a gate applied only to the rows would let a shipped build
- * load a legacy skin through either of them */
-export function legacyAllowed(options: { legacyImplemented?: boolean; development?: boolean } = {}): boolean {
-	return (options.legacyImplemented ?? LEGACY_SKINS_IMPLEMENTED) || (options.development ?? false);
-}
-
-/** the refusal a gated skin carries, wherever it was reached from */
-export const LEGACY_GATE_REFUSAL = "legacy skins are not drawable yet in this build";
-
 export interface SkinRow extends SkinEntry {
 	/** whether this row is the active selection */
 	selected: boolean;
@@ -124,23 +80,16 @@ export function sameSelection(a: SkinManifest | null, b: SkinManifest | null): b
  * default. highlighting the missing folder there would tell the user their
  * skin is loaded when it is not.
  */
-export function skinRows(
-	entries: readonly SkinEntry[],
-	active: SkinManifest | null,
-	options: { legacyImplemented?: boolean; development?: boolean } = {}
-): SkinRow[] {
-	// a development build may select a legacy skin so the elements can be built
-	// against real ones; a shipped build may not, until the inventory is complete
-	const allowed = legacyAllowed(options);
-	return entries.map((entry) => {
-		const gated = entry.era === "legacy" && !allowed;
-		return {
-			...entry,
-			selected: active !== null && sameSkin(entry.locator, active.locator),
-			selectable: entry.refusal === null && !gated,
-			refusal: gated && entry.refusal === null ? LEGACY_GATE_REFUSAL : entry.refusal
-		};
-	});
+export function skinRows(entries: readonly SkinEntry[], active: SkinManifest | null): SkinRow[] {
+	return entries.map((entry) => ({
+		...entry,
+		selected: active !== null && sameSkin(entry.locator, active.locator),
+		// the only thing that can make a row unselectable is the BACKEND refusing
+		// the skin -- a cap breach, an unreadable folder. there is no era gate any
+		// more: every element the playfield draws has a legacy implementation, so
+		// a legacy skin is as selectable as the bundled default
+		selectable: entry.refusal === null
+	}));
 }
 
 /**

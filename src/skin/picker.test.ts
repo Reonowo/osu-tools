@@ -29,6 +29,8 @@ function manifest(locator: SkinLocator, fellBack: SkinManifest["fellBack"] = nul
 			comboColours: [],
 			sliderBorder: null,
 			sliderTrackOverride: null,
+			sliderBall: null,
+			spinnerBackground: null,
 			animationFramerate: null,
 			layeredHitSounds: null,
 			allowSliderBallTint: null,
@@ -151,7 +153,7 @@ describe("rowLabel", () => {
 	});
 });
 
-describe("the development gate", () => {
+describe("legacy skins are selectable", () => {
 	const legacy = entry({
 		locator: { kind: "stable", path: "C:\\osu!\\Skins\\Rafis" },
 		name: "Rafis",
@@ -159,30 +161,23 @@ describe("the development gate", () => {
 		era: "legacy"
 	});
 
-	test("a legacy skin is not selectable in a shipped build", () => {
-		// the gate is per-element coverage: a build where the cursor is legacy
-		// and the hit circles are Argon shows the mixed-era playfield the
-		// classic floor was vendored to prevent
-		const [row] = skinRows([legacy], null, { legacyImplemented: false, development: false });
-		expect(row.selectable).toBe(false);
-		expect(row.refusal).toContain("not drawable yet");
+	test("a legacy skin is pickable in a shipped build", () => {
+		// the development gate that used to sit here is GONE rather than
+		// inverted: every element the playfield draws now has a legacy
+		// implementation, which is the coverage condition it always named
+		const [row] = skinRows([legacy], null);
+		expect(row.selectable).toBe(true);
+		expect(row.refusal).toBeNull();
 	});
 
-	test("a development build may select one, so the elements can be built against real skins", () => {
-		expect(skinRows([legacy], null, { legacyImplemented: false, development: true })[0].selectable).toBe(true);
+	test("Argon is selectable too -- it is the app's own look", () => {
+		expect(skinRows([entry()], null)[0].selectable).toBe(true);
 	});
 
-	test("the gate lifts by coverage, not by build kind", () => {
-		expect(skinRows([legacy], null, { legacyImplemented: true, development: false })[0].selectable).toBe(true);
-	});
-
-	test("Argon is never gated -- it is the app's own look", () => {
-		expect(skinRows([entry()], null, { legacyImplemented: false, development: false })[0].selectable).toBe(true);
-	});
-
-	test("a refused skin keeps its OWN reason rather than the gate's", () => {
+	test("only the backend's own refusal makes a row unselectable", () => {
 		const refused = entry({ ...legacy, refusal: "exceeds MAX_SKIN_BYTES (limit 1, actual 2)" });
-		const [row] = skinRows([refused], null, { legacyImplemented: false, development: false });
+		const [row] = skinRows([refused], null);
+		expect(row.selectable).toBe(false);
 		expect(row.refusal).toContain("MAX_SKIN_BYTES");
 	});
 });

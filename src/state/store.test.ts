@@ -33,7 +33,6 @@ import {
 } from "./defaults";
 import { createViewerStore, type IpcDeps, type ViewerState } from "./store";
 import type { SkinEntry, SkinLocator, SkinManifest } from "@/lib/scene-types";
-import { LEGACY_GATE_REFUSAL } from "@/skin/picker";
 
 /** the manifest a store test's ipc stub answers with: the app's own look,
  * which is what a fresh install resolves to */
@@ -52,6 +51,8 @@ function bundledManifest(): SkinManifest {
 			comboColours: [],
 			sliderBorder: null,
 			sliderTrackOverride: null,
+			sliderBall: null,
+			spinnerBackground: null,
 			animationFramerate: null,
 			layeredHitSounds: null,
 			allowSliderBallTint: null,
@@ -957,7 +958,7 @@ describe("viewer preferences", () => {
 });
 
 describe("effect settings", () => {
-	test("everything ships on, mirroring settings.rs EffectPrefs::default", () => {
+	test("everything ships on but the 300 popups, mirroring settings.rs EffectPrefs::default", () => {
 		expect(createViewerStore(deps()).getState().effects).toEqual({
 			enabled: true,
 			hitAnimations: true,
@@ -965,6 +966,10 @@ describe("effect settings", () => {
 			cursorGlow: true,
 			cursorTrail: true,
 			followPoints: true,
+			ignoreBeatmapSkin: false,
+			// the one that ships off: a popup on every great buries the 100s and
+			// 50s a replay is opened to find
+			show300Judgements: false,
 			backgroundDim: DEFAULT_BACKGROUND_DIM
 		});
 	});
@@ -985,7 +990,11 @@ describe("effect settings", () => {
 			cursorGlow: false,
 			cursorTrail: false,
 			followPoints: false,
-			// not an effect: the master takes the five down and leaves the
+			// not folded: refusing a map's art is a source decision, and the
+			// master must not silently start drawing art the user turned down
+			ignoreBeatmapSkin: false,
+			show300Judgements: false,
+			// not an effect: the master takes every toggle down and leaves the
 			// background exactly as dim as the user set it
 			backgroundDim: DEFAULT_BACKGROUND_DIM
 		});
@@ -3168,7 +3177,6 @@ describe("the active skin", () => {
 	// LEGACY_SKINS_IMPLEMENTED is false, so every legacy selection below would
 	// otherwise be refused by the gate. these tests are about what selection
 	// DOES, not about whether it is allowed -- the gate has its own two tests
-	const gateOpen = { legacySkinsSelectable: true };
 
 	test("the manifest is held BESIDE the scene, so a skin change is not a scene reload", async () => {
 		const store = createViewerStore(deps());
@@ -3193,7 +3201,7 @@ describe("the active skin", () => {
 		// the row-list publication that follows
 		const manifest = legacyManifest("C:\\skins\\Rafis");
 		const seen: [string | null, string | null][] = [];
-		const store = createViewerStore(deps({ setSkin: async () => manifest }), gateOpen);
+		const store = createViewerStore(deps({ setSkin: async () => manifest }));
 		// hydrated first so `settings` exists: the pair is only meaningful once
 		// there is a selection to disagree with
 		await store.getState().hydrateSettings();
@@ -3250,8 +3258,7 @@ describe("the active skin", () => {
 					}
 					return bundledManifest();
 				}
-			}),
-			{ legacySkinsSelectable: false }
+			})
 		);
 		await store.getState().hydrateSettings();
 
@@ -3269,23 +3276,20 @@ describe("the active skin", () => {
 		expect(setSkinCalls).toEqual(["folder", "bundled"]);
 	});
 
-	test("a shipped build refuses a legacy skin reached through browse, not just through a row", async () => {
-		// the picker gates its ROWS, but browse hands over a locator the row list
-		// never enumerated. without the same rule here the gate is one click wide
+	test("browse selects a legacy skin exactly as a picker row does", async () => {
+		// browse hands over a locator the row list never enumerated, and there is
+		// no longer any rule that treats it differently: the development gate
+		// that used to refuse both routes is gone, not inverted
 		const chosen = legacyManifest("C:\\skins\\Rafis");
 		const store = createViewerStore(
-			deps({ setSkin: async (locator) => (locator.kind === "bundled" ? bundledManifest() : chosen) }),
-			{ legacySkinsSelectable: false }
+			deps({ setSkin: async (locator) => (locator.kind === "bundled" ? bundledManifest() : chosen) })
 		);
 		await store.getState().hydrateSettings();
 		await store.getState().selectSkin({ kind: "folder", path: "C:\\skins\\Rafis" });
 
-		expect(store.getState().skin?.era).toBe("lazer");
-		// and the settings file does not keep naming a skin this build refuses
-		expect(store.getState().settings?.skin).toEqual({ kind: "bundled" });
-		// a deliberate product decision, surfaced as a notice rather than as a
-		// fabricated ipc error -- which the ui would title "internal error"
-		expect(store.getState().skinNotice).toBe(LEGACY_GATE_REFUSAL);
+		expect(store.getState().skin?.era).toBe("legacy");
+		expect(store.getState().settings?.skin).toEqual({ kind: "folder", path: "C:\\skins\\Rafis" });
+		expect(store.getState().skinNotice).toBeNull();
 		expect(store.getState().lastError).toBeNull();
 	});
 
@@ -3350,8 +3354,7 @@ describe("the active skin", () => {
 					listed += 1;
 					return [];
 				}
-			}),
-			gateOpen
+			})
 		);
 
 		const stale = store.getState().importSkin("C:\\downloads\\skin.osk");
@@ -3362,10 +3365,9 @@ describe("the active skin", () => {
 		expect(listed).toBeGreaterThan(0);
 	});
 
-	test("a shipped build refuses an imported legacy skin as the ACTIVE one", async () => {
-		// an .osk is legacy essentially always, so this is the route the gate
-		// would leak through most often. the archive still landed -- what is
-		// refused is making it the active skin
+	test("an imported legacy skin becomes the active one", async () => {
+		// an .osk is legacy essentially always, so this was the route the old
+		// development gate leaked through most often. it now simply works
 		const imported: SkinManifest = {
 			...legacyManifest("C:\\app\\skins\\Downloaded"),
 			locator: { kind: "imported", path: "C:\\app\\skins\\Downloaded" },
@@ -3376,15 +3378,13 @@ describe("the active skin", () => {
 				importSkin: async () => imported,
 				setSkin: async () => bundledManifest(),
 				listSkins: async () => []
-			}),
-			{ legacySkinsSelectable: false }
+			})
 		);
 		await store.getState().importSkin("C:\\downloads\\skin.osk");
 
-		expect(store.getState().skin?.era).toBe("lazer");
-		// a deliberate product decision, surfaced as a notice rather than as a
-		// fabricated ipc error -- which the ui would title "internal error"
-		expect(store.getState().skinNotice).toBe(LEGACY_GATE_REFUSAL);
+		expect(store.getState().skin?.era).toBe("legacy");
+		expect(store.getState().skin?.source).toBe("imported");
+		expect(store.getState().skinNotice).toBeNull();
 		expect(store.getState().lastError).toBeNull();
 	});
 
@@ -3405,29 +3405,14 @@ describe("the active skin", () => {
 		expect(store.getState().lastError?.error).toMatchObject({ kind: "resourceLimit", cap: "MAX_SKIN_BYTES" });
 	});
 
-	test("a persisted legacy locator does not become the ACTIVE skin in a shipped build", async () => {
+	test("a persisted legacy locator comes back as the active skin", async () => {
 		// hydration is the third route to an active skin, beside select and
-		// import. a dev build and a shipped one share one settings file, so a
-		// skin picked where the gate is open comes back where it is shut
-		const store = createViewerStore(deps({ getSkin: async () => legacyManifest("C:\\skins\\Rafis") }), {
-			legacySkinsSelectable: false
-		});
-		await store.getState().hydrateSettings();
-
-		// null reads as the bundled default everywhere, which is Argon
-		expect(store.getState().skin).toBeNull();
-		// and it says so: a null skin leaves every picker row unticked, so a
-		// silent refusal here would be indistinguishable from a bug
-		expect(store.getState().skinNotice).toBe(LEGACY_GATE_REFUSAL);
-	});
-
-	test("a persisted legacy locator IS active where the gate is open", async () => {
-		// the other half of the same rule: the gate withholds drawing, and a
-		// dev build is exactly where the elements get built against real skins
-		const store = createViewerStore(deps({ getSkin: async () => legacyManifest("C:\\skins\\Rafis") }), gateOpen);
+		// import. all three now agree: a legacy skin is a skin like any other
+		const store = createViewerStore(deps({ getSkin: async () => legacyManifest("C:\\skins\\Rafis") }));
 		await store.getState().hydrateSettings();
 
 		expect(store.getState().skin?.era).toBe("legacy");
+		expect(store.getState().skinNotice).toBeNull();
 	});
 
 	test("a stale locator hydrates as the bundled default carrying its notice", async () => {
@@ -3513,8 +3498,7 @@ describe("the active skin", () => {
 						era,
 						refusal
 					}))
-			}),
-			gateOpen
+			})
 		);
 		await store.getState().importSkin("C:\\downloads\\skin.osk");
 		expect(store.getState().skin?.name).toBe("Downloaded");

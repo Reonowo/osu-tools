@@ -37,7 +37,7 @@ export function SkinCategory({
 
 	// import.meta.env.DEV is vite's build-time flag, so the gate compiles out
 	// of a shipped bundle rather than being a runtime branch someone can trip
-	const rows = skinRows(skins, active, { development: import.meta.env.DEV });
+	const rows = skinRows(skins, active);
 	// two different things to say, and they can both be true: the fallback
 	// notice explains what loaded, the skin notice explains what did not
 	const notice = fallbackNotice(active);
