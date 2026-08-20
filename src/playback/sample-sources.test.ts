@@ -12,6 +12,8 @@ import {
 	resolveSample,
 	sampleRequest,
 	sampleSources,
+	skinLookupNames,
+	skinSampleSource,
 	type ResolvedSample,
 	type SampleSource
 } from "./sample-sources";
@@ -268,7 +270,120 @@ describe("the beatmap's own sample files", () => {
 		// storyboard sample is answered by the beatmap even with beatmap
 		// hitsounds off, because it is the storyboard's sound rather than the
 		// map's hitsounding. nothing produces one yet
-		const storyboard = { names: ["normal-hitnormal"], storyboard: true, universalName: null };
+		const storyboard = { names: ["normal-hitnormal"], storyboard: true, universalName: null, layered: false };
 		expect(source(true).lookup(storyboard)).toMatchObject({ answer: "found" });
 	});
+});
+
+describe("a user skin's own hit samples", () => {
+	const files = {
+		"normal-hitnormal.wav": "C:/skin/normal-hitnormal.wav",
+		"soft-hitclap.wav": "C:/skin/soft-hitclap.wav",
+		"soft-hitclap3.wav": "C:/skin/soft-hitclap3.wav",
+		"hitwhistle.mp3": "C:/skin/hitwhistle.mp3"
+	};
+	const source = (layeredHitSounds: boolean | null = null) =>
+		skinSampleSource({
+			files,
+			toUrl: (path) => `asset://${path}`,
+			extensions: ["wav", "mp3", "ogg"],
+			layeredHitSounds
+		});
+
+	test("the skin's sample plays in place of the bundled default", () => {
+		expect(source().lookup(sampleRequest(lookup()))).toEqual({
+			answer: "found",
+			value: { sourceId: "skin", url: "asset://C:/skin/normal-hitnormal.wav" }
+		});
+	});
+
+	test("a suffixed lookup falls back to the skin's own UNSUFFIXED file", () => {
+		// legacyskin.cs:612-621 -- and this is the OPPOSITE of the beatmap
+		// source's rule. `UseCustomSampleBanks` is false for a user skin, so
+		// every suffixed candidate is filtered OUT; a beatmap skin must use its
+		// suffix and falls through to the next source when it has no such file.
+		// the skin here ships BOTH spellings, so a fallback-shaped
+		// implementation would wrongly answer the suffixed one
+		expect(source().lookup(sampleRequest(lookup({ bank: "soft", name: "hitclap", suffix: 3 })))).toMatchObject({
+			value: { url: "asset://C:/skin/soft-hitclap.wav" }
+		});
+		expect(
+			beatmapSampleSource({
+				files: { "soft-hitclap3": "C:/map/soft-hitclap3.wav" },
+				toUrl: (path) => `asset://${path}`,
+				ignoreBeatmapHitsounds: false
+			}).lookup(sampleRequest(lookup({ bank: "soft", name: "hitclap", suffix: 3 })))
+		).toMatchObject({ value: { url: "asset://C:/map/soft-hitclap3.wav" } });
+	});
+
+	test("the universal fallback still applies", () => {
+		// legacyskin.cs:628-632 -- the bare name, with no bank at all
+		expect(source().lookup(sampleRequest(lookup({ bank: "drum", name: "hitwhistle" })))).toMatchObject({
+			value: { url: "asset://C:/skin/hitwhistle.mp3" }
+		});
+	});
+
+	test("a skin with no such file DECLINES, so the bundled default answers", () => {
+		const chain = sampleSources(null, source());
+		expect(resolveSample(chain, sampleRequest(lookup({ bank: "drum", name: "hitfinish" })))).toMatchObject({
+			value: { sourceId: "bundled" }
+		});
+	});
+
+	test("a layered sample a skin switched off answers EMPTY, ending the chain", () => {
+		// legacyskintransformer.cs:30-32 -- SampleVirtual(), which is an answer
+		// of silence. falling through here would resurrect the bundled default's
+		// layered hitnormal, which is precisely what the user turned off
+		const layered = sampleRequest(lookup({ layered: true }));
+		expect(source(false).lookup(layered)).toEqual({ answer: "empty" });
+		expect(resolveSample(sampleSources(null, source(false)), layered)).toEqual({ answer: "empty" });
+
+		// and it is gated on the setting, not on layeredness alone
+		expect(source(true).lookup(layered)).toMatchObject({ answer: "found" });
+		expect(source(null).lookup(layered)).toMatchObject({ answer: "found" });
+		// a non-layered sample is unaffected whatever the setting says
+		expect(source(false).lookup(sampleRequest(lookup()))).toMatchObject({ answer: "found" });
+	});
+
+	test("the beatmap still wins over the skin, and the bundled default answers last", () => {
+		const beatmap = beatmapSampleSource({
+			files: { "normal-hitnormal": "C:/map/normal-hitnormal.wav" },
+			toUrl: (path) => `asset://${path}`,
+			ignoreBeatmapHitsounds: false
+		});
+		const chain = sampleSources(beatmap, source());
+		expect(resolveSample(chain, sampleRequest(lookup()))).toMatchObject({
+			value: { sourceId: "beatmap" }
+		});
+		// the map ships nothing for this one, so the skin answers
+		expect(resolveSample(chain, sampleRequest(lookup({ bank: "soft", name: "hitclap" })))).toMatchObject({
+			value: { sourceId: "skin" }
+		});
+		// and neither ships this one
+		expect(resolveSample(chain, sampleRequest(lookup({ bank: "drum", name: "hitfinish" })))).toMatchObject({
+			value: { sourceId: "bundled" }
+		});
+	});
+
+	test("the suffix filter is the ONLY difference in the name walk", () => {
+		const unsuffixed = sampleRequest(lookup({ bank: "soft", name: "hitclap" }));
+		expect(skinLookupNames(unsuffixed)).toEqual(lookupNamesLowered(unsuffixed));
+		const suffixed = sampleRequest(lookup({ bank: "soft", name: "hitclap", suffix: 3 }));
+		expect(skinLookupNames(suffixed)).toEqual([
+			"gameplay/soft-hitclap",
+			"soft-hitclap",
+			"gameplay/hitclap",
+			"hitclap",
+			"hitclap"
+		]);
+	});
+
+	function lookupNamesLowered(request: { names: readonly string[]; universalName: string | null }) {
+		const expanded = request.names.flatMap((name) => {
+			const piece = name.split("/").pop() ?? name;
+			return piece === name ? [name] : [name, piece];
+		});
+		const names = request.universalName === null ? expanded : [...expanded, request.universalName];
+		return names.map((name) => name.toLowerCase());
+	}
 });

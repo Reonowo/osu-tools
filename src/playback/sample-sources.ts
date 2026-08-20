@@ -28,6 +28,10 @@ export interface SampleRequest {
 	 * with no universal fallback at all, so a plain `SampleInfo` must not
 	 * acquire one by having its name guessed back out of its lookup names */
 	universalName: string | null;
+	/** a hitnormal that plays UNDER an object's additions rather than instead
+	 * of them. only a user skin reads it, and only to answer EMPTY when the
+	 * skin switched layered hit sounds off (legacyskintransformer.cs:30-32) */
+	layered: boolean;
 }
 
 /** where a lookup's bytes are. one url per FILE, which is the identity the
@@ -73,7 +77,8 @@ export function sampleRequest(lookup: SampleLookup): SampleRequest {
 		storyboard: false,
 		// a file sample's own Name is hitnormal, which is what a
 		// FileHitSampleInfo is constructed as
-		universalName: lookup.filename === null ? lookup.name : "hitnormal"
+		universalName: lookup.filename === null ? lookup.name : "hitnormal",
+		layered: lookup.layered
 	};
 }
 
@@ -81,7 +86,7 @@ export function sampleRequest(lookup: SampleLookup): SampleRequest {
  * `SampleInfo("Gameplay/combobreak")`, whose only lookup name is itself and
  * which takes the non-hit-sample branch of a legacy source's lookup */
 export function namedRequest(name: string): SampleRequest {
-	return { names: [name], storyboard: false, universalName: null };
+	return { names: [name], storyboard: false, universalName: null, layered: false };
 }
 
 /** `Path.ChangeExtension(name, null)`: strips from the last `.` in the file
@@ -141,12 +146,17 @@ export function bundledSampleSource(tiers: readonly SampleTier[] = BUNDLED_SAMPL
  * `SkinProvidingContainer`'s own order (skinprovidingcontainer.cs:149-159),
  * which is why the list is the precedence and nothing else needs to encode it.
  *
- * the middle slot is deliberately empty for now: the user-skin source was
- * deferred at ticketing, and filling it later is a list insert, which is the
- * point of the seam
+ * the middle slot is the USER SKIN's, filled by `skinSampleSource` below. it
+ * was deliberately empty until the skinning work landed, and filling it turned
+ * out to be exactly the list insert the seam was shaped for -- nothing about
+ * this function's precedence changed to accommodate it
  */
-export function sampleSources(beatmap: SampleSource | null): readonly SampleSource[] {
-	return beatmap === null ? [bundledSampleSource()] : [beatmap, bundledSampleSource()];
+export function sampleSources(beatmap: SampleSource | null, skin: SampleSource | null = null): readonly SampleSource[] {
+	const sources: SampleSource[] = [];
+	if (beatmap !== null) sources.push(beatmap);
+	if (skin !== null) sources.push(skin);
+	sources.push(bundledSampleSource());
+	return sources;
 }
 
 export function resolveSample(sources: readonly SampleSource[], request: SampleRequest): SourceAnswer<ResolvedSample> {
@@ -238,4 +248,76 @@ function customBankSuffix(names: readonly string[]): string | null {
 	if (!first.startsWith(second)) return null;
 	const suffix = first.slice(second.length);
 	return /^\d+$/.test(suffix) ? suffix : null;
+}
+
+/**
+ * a USER SKIN's own sample files -- the chain's middle slot, between the
+ * beatmap and the bundled default.
+ *
+ * this is the same `LegacySkin.GetSample` walk `beatmapSampleSource` runs, and
+ * two things about it differ. Both are consequences of one flag,
+ * `UseCustomSampleBanks`, which is true for a beatmap skin and false for a user
+ * skin (legacyskin.cs:38):
+ *
+ * - **the suffix rule inverts.** legacyskin.cs:612-621 -- a beatmap skin MUST
+ *   use the custom-bank suffix and may not fall back to the unsuffixed file; a
+ *   user skin MUST NOT use it, so every suffixed candidate is filtered *out*
+ *   and the lookup lands on the skin's own unsuffixed sound. the observable
+ *   effect is a fallback, but the mechanism is a filter, and writing it as a
+ *   fallback would answer the suffixed file when the skin happened to ship one.
+ * - **layered hit sounds can answer EMPTY.** legacyskintransformer.cs:30-32 --
+ *   a skin that switched `LayeredHitSounds` off returns a `SampleVirtual()` for
+ *   a layered sample, which is an answer of silence rather than a decline. the
+ *   chain therefore stops here rather than resurrecting the bundled default's
+ *   layered `hitnormal`, which is exactly what the three-valued answer exists
+ *   for.
+ *
+ * a skin with no such file DECLINES, so the bundled default answers -- an
+ * incomplete skin falls through per lookup, never per skin.
+ */
+export function skinSampleSource(options: {
+	/** lowercased file name (extension included) -> absolute path, as the skin
+	 * manifest carries it */
+	files: Readonly<Record<string, string>>;
+	/** absolute path -> a url the webview may fetch */
+	toUrl: (path: string) => string;
+	/** the extensions a lookup tries, in preference order. the skin's file map
+	 * is keyed with extensions because it is a directory listing, where the
+	 * beatmap's is keyed by lookup name because the app crate resolved it */
+	extensions: readonly string[];
+	/** the skin's `LayeredHitSounds`, or null when it did not say */
+	layeredHitSounds: boolean | null;
+}): SampleSource {
+	return {
+		id: "skin",
+		lookup(request) {
+			// the layered gate runs BEFORE any name is tried: lazer answers
+			// SampleVirtual without consulting the file map at all
+			if (request.layered && options.layeredHitSounds === false) return { answer: "empty" };
+
+			for (const name of skinLookupNames(request)) {
+				for (const extension of options.extensions) {
+					const path = options.files[`${name}.${extension}`];
+					if (path !== undefined) {
+						return { answer: "found", value: { sourceId: "skin", url: options.toUrl(path) } };
+					}
+				}
+			}
+			return { answer: "none" };
+		}
+	};
+}
+
+/** legacyskin.cs:608-632 with `UseCustomSampleBanks` FALSE -- identical to
+ * `legacyLookupNames` except that the suffix filter is inverted, which is the
+ * one line that separates a user skin from a beatmap skin */
+export function skinLookupNames(request: SampleRequest): string[] {
+	const expanded = request.names.flatMap((name) => {
+		const piece = name.split("/").pop() ?? name;
+		return piece === name ? [name] : [name, piece];
+	});
+	const suffix = customBankSuffix(request.names);
+	const filtered = suffix === null ? expanded : expanded.filter((name) => !name.endsWith(suffix));
+	const names = request.universalName === null ? filtered : [...filtered, request.universalName];
+	return names.map((name) => name.toLowerCase());
 }

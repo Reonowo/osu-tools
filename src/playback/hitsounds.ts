@@ -33,13 +33,21 @@ export const hitsoundScheduler = new HitsoundScheduler({
 	graph: audioGraph,
 	store: sampleStore,
 	// read live rather than captured: the beatmap source appears and vanishes
-	// with the scene, and the scheduler must not hold a stale list across a
-	// swap
-	sources: () => sampleSources(beatmapSource)
+	// with the scene and the skin source with the selection, and the scheduler
+	// must not hold a stale list across either swap
+	sources: () => sampleSources(beatmapSource, skinSource)
 });
 
 export function setBeatmapSampleSource(source: SampleSource | null): void {
 	beatmapSource = source;
+}
+
+/** the selected skin's own sample files. null while the bundled default is
+ * selected, which is a skin with no files rather than "no skin" */
+let skinSource: SampleSource | null = null;
+
+export function setSkinSampleSource(source: SampleSource | null): void {
+	skinSource = source;
 }
 
 /** every url the bundled default set can resolve to. decoded eagerly at
