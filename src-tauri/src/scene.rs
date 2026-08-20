@@ -43,6 +43,17 @@ pub struct LoadedScene {
     /// the engine's own resolution, which is also what lets the `.osz`
     /// extractor stay a targeted allow-list
     pub sample_files: std::collections::BTreeMap<String, String>,
+    /// the beatmap's OWN image files, keyed by lowercased file NAME (extension
+    /// included) rather than by lookup name -- which of `hitcircle@2x.png` and
+    /// `hitcircle.png` answers a `hitcircle` lookup is an era rule, and era
+    /// rules live in the frontend's lookup chain. the same shape a skin
+    /// manifest's file map has, for the same reason.
+    ///
+    /// only files whose name matches a ruleset element prefix are enumerated
+    /// (`media::BEATMAP_SKIN_PREFIXES`): a mapset's background and storyboard
+    /// can answer no lookup, and putting them here would charge a byte cap
+    /// against art nothing would ever draw
+    pub texture_files: std::collections::BTreeMap<String, String>,
     pub warnings: Vec<Warning>,
     /// the header-vs-simulated comparison, shipped only for pre-lazer
     /// authoritative scenes; always describes the loaded file, never
@@ -391,6 +402,7 @@ pub fn assemble_scene(
     audio_path: Option<PathBuf>,
     background_path: Option<PathBuf>,
     sample_files: std::collections::BTreeMap<String, PathBuf>,
+    texture_files: std::collections::BTreeMap<String, PathBuf>,
     warnings: Vec<Warning>,
     integrity: Option<IntegrityDto>,
     incompleteness: Option<IncompletenessDto>,
@@ -435,6 +447,10 @@ pub fn assemble_scene(
         audio_path: audio_path.map(|p| p.to_string_lossy().into_owned()),
         background_path: background_path.map(|p| p.to_string_lossy().into_owned()),
         sample_files: sample_files
+            .into_iter()
+            .map(|(name, path)| (name, path.to_string_lossy().into_owned()))
+            .collect(),
+        texture_files: texture_files
             .into_iter()
             .map(|(name, path)| (name, path.to_string_lossy().into_owned()))
             .collect(),
@@ -566,6 +582,12 @@ mod tests {
             [(
                 "normal-hitnormal".to_string(),
                 std::path::PathBuf::from(r"C:\somewhere\normal-hitnormal.wav"),
+            )]
+            .into_iter()
+            .collect(),
+            [(
+                "hitcircle@2x.png".to_string(),
+                std::path::PathBuf::from(r"C:\somewhere\hitcircle@2x.png"),
             )]
             .into_iter()
             .collect(),

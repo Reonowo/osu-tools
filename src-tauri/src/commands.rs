@@ -38,14 +38,18 @@ fn install_scene<R: Runtime>(app: &AppHandle<R>, state: &AppState, outcome: Load
     scene.epoch = epoch;
     session.epoch = epoch;
     let scope = app.asset_protocol_scope();
-    // the map's own hit-sample files ride the same protocol as its audio and
-    // background. every one of them was resolved strictly inside the beatmap's
-    // own directory (media::resolve_sample_files), so allowing them widens the
-    // scope by exactly the files the lookup chain can ask for
+    // the map's own hit-sample files and its own ART ride the same protocol as
+    // its audio and background. every one of them was resolved strictly inside
+    // the beatmap's own directory (media::resolve_sample_files and
+    // media::resolve_texture_files), so allowing them widens the scope by
+    // exactly the files the lookup chain can ask for -- and without it a
+    // beatmap skin's textures resolve to urls the protocol refuses, which reads
+    // as the mapset having shipped no art at all
     for path in [scene.audio_path.as_deref(), scene.background_path.as_deref()]
         .into_iter()
         .flatten()
         .chain(scene.sample_files.values().map(String::as_str))
+        .chain(scene.texture_files.values().map(String::as_str))
     {
         let _ = scope.allow_file(Path::new(path));
     }

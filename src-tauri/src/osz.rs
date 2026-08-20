@@ -602,6 +602,8 @@ impl OszArchive {
             label,
             MAX_OSZ_EXTRACTED_BYTES,
             engine::limits::MAX_SAMPLE_BYTES,
+            engine::limits::MAX_BEATMAP_TEXTURE_BYTES,
+            crate::limits::MAX_BEATMAP_TEXTURES,
         )
     }
 
@@ -613,7 +615,15 @@ impl OszArchive {
     /// `sample_names` is separated from `media_names` because the two are
     /// bounded differently: the media list is one audio file and one image,
     /// while the sample list is derived from the map's own hitsounding and is
-    /// charged against the sample budget as well as the archive one
+    /// charged against the sample budget as well as the archive one.
+    ///
+    /// the beatmap's own ART has no name list at all: a texture lookup name is
+    /// an element name, not something the map declares, so its members are
+    /// found by the same prefix filter the folder load runs
+    /// (`media::is_beatmap_texture_name`) over the archive's root-level names,
+    /// and charged against the texture budget as well as the archive one. the
+    /// filter is what keeps this targeted -- extracting every image would hand
+    /// an attacker the decompression budget the allow-lists exist to bound
     #[allow(clippy::too_many_arguments)]
     pub fn extract_scene_with_budget(
         &mut self,
@@ -625,6 +635,8 @@ impl OszArchive {
         label: &str,
         max_total: u64,
         max_samples: u64,
+        max_texture_bytes: u64,
+        max_textures: usize,
     ) -> Result<ExtractedScene, IpcError> {
         std::fs::create_dir_all(cache_root)?;
         let lease = create_leased_dir(cache_root, label)?;
@@ -637,6 +649,11 @@ impl OszArchive {
             used: 0,
             max: max_samples,
             cap: "MAX_SAMPLE_BYTES",
+        };
+        let mut texture_budget = ByteBudget {
+            used: 0,
+            max: max_texture_bytes,
+            cap: "MAX_BEATMAP_TEXTURE_BYTES",
         };
         // one pass over the entry names rather than a scan per wanted name:
         // the sample allow-list is derived from the map's hitsounding and can
@@ -671,7 +688,7 @@ impl OszArchive {
         // whose `AudioFilename` is also one of its hitsound candidates buys
         // that file past the sample cap on the media budget's much larger
         // allowance
-        let mut wanted: Vec<(usize, bool)> = Vec::new();
+        let mut wanted: Vec<(usize, bool, bool)> = Vec::new();
         let mut position: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for (name, is_sample) in media_names
             .iter()
@@ -690,12 +707,43 @@ impl OszArchive {
                 Some(&at) => wanted[at].1 |= is_sample,
                 None => {
                     position.insert(index, wanted.len());
-                    wanted.push((index, is_sample));
+                    wanted.push((index, is_sample, false));
                 }
             }
         }
 
-        for (index, is_sample) in wanted {
+        // the art walk: root-level members only, because the folder scan that
+        // will answer lookups reads the extraction root and nothing deeper. the
+        // count is capped BEFORE anything is written -- the byte budget cannot
+        // see a crafted archive of element-named zero-byte members
+        let mut texture_count: usize = 0;
+        for (index, name) in self.names.iter().enumerate() {
+            let normalized = normalize_entry_name(name);
+            if normalized.contains('/') || !crate::media::is_beatmap_texture_name(&normalized) {
+                continue;
+            }
+            // FIRST wins on a collision, the same resolution `by_name` records
+            if by_name.get(&normalized) != Some(&index) {
+                continue;
+            }
+            texture_count += 1;
+            if texture_count > max_textures {
+                return Err(IpcError::ResourceLimit {
+                    cap: "MAX_BEATMAP_TEXTURES".to_string(),
+                    limit: max_textures as u64,
+                    actual: texture_count as u64,
+                });
+            }
+            match position.get(&index) {
+                Some(&at) => wanted[at].2 = true,
+                None => {
+                    position.insert(index, wanted.len());
+                    wanted.push((index, false, true));
+                }
+            }
+        }
+
+        for (index, is_sample, is_texture) in wanted {
             let mut entry = self.archive.by_index(index).map_err(archive_err)?;
             let rel = safe_relative_path(entry.name()).ok_or_else(|| archive_err("unsafe entry name"))?;
             let out_path = lease.dir().join(rel);
@@ -713,6 +761,9 @@ impl OszArchive {
                 budget.charge(n as u64)?;
                 if is_sample {
                     sample_budget.charge(n as u64)?;
+                }
+                if is_texture {
+                    texture_budget.charge(n as u64)?;
                 }
                 out.write_all(&buf[..n])?;
             }
@@ -1377,6 +1428,8 @@ mod tests {
                 "t",
                 9,
                 9,
+                u64::MAX,
+                usize::MAX,
             )
             .is_ok());
     }
@@ -1401,6 +1454,8 @@ mod tests {
                 "t",
                 u64::MAX,
                 6,
+                u64::MAX,
+                usize::MAX,
             )
             .is_ok());
 
@@ -1415,6 +1470,8 @@ mod tests {
             "t",
             u64::MAX,
             5,
+            u64::MAX,
+            usize::MAX,
         ) {
             Err(IpcError::ResourceLimit { cap, limit: 5, .. }) => assert_eq!(cap, "MAX_SAMPLE_BYTES"),
             other => panic!("expected ResourceLimit, got {other:?}"),
@@ -1449,6 +1506,8 @@ mod tests {
             "t",
             u64::MAX,
             5,
+            u64::MAX,
+            usize::MAX,
         ) {
             Err(IpcError::ResourceLimit { cap, limit: 5, .. }) => assert_eq!(cap, "MAX_SAMPLE_BYTES"),
             other => panic!("expected ResourceLimit, got {other:?}"),
@@ -1468,12 +1527,146 @@ mod tests {
                 "t",
                 9,
                 6,
+                u64::MAX,
+                usize::MAX,
             )
             .expect("3 osu bytes + 6 member bytes fits the archive budget exactly");
         assert_eq!(
             std::fs::read(scene.beatmap_dir.join("normal-hitnormal.wav")).unwrap(),
             b"123456"
         );
+    }
+
+    #[test]
+    fn element_named_textures_are_extracted_and_other_images_are_not() {
+        // the art needs no allow-list from the caller: a texture lookup name is
+        // an element name, so the extractor runs the same prefix filter the
+        // folder walk does. everything outside it -- the background, a
+        // storyboard's nested art -- stays in the archive
+        let (_dir, path) = temp_osz(&[
+            ("map.osu", b"osu".as_slice()),
+            ("hitcircle.png", b"png bytes".as_slice()),
+            ("bg.jpg", b"never art".as_slice()),
+            ("sb/hit0.png", b"not root".as_slice()),
+        ]);
+        let cache_root = tempfile::tempdir().unwrap();
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        let extracted = archive
+            .extract_scene(matched.index, &matched.bytes, &[], &[], cache_root.path(), "t")
+            .unwrap();
+        assert_eq!(
+            std::fs::read(extracted.beatmap_dir.join("hitcircle.png")).unwrap(),
+            b"png bytes"
+        );
+        assert!(
+            !extracted.beatmap_dir.join("bg.jpg").exists(),
+            "an image outside the element prefixes must not be extracted"
+        );
+        assert!(
+            !extracted.beatmap_dir.join("sb").join("hit0.png").exists(),
+            "a nested member cannot answer the root-level folder walk and must not be extracted"
+        );
+    }
+
+    #[test]
+    fn texture_byte_budget_boundary() {
+        // engine::limits::MAX_BEATMAP_TEXTURE_BYTES on the EXTRACT side,
+        // charged separately from the archive budget the way the sample
+        // budget is
+        let (_dir, path) = temp_osz(&[
+            ("map.osu", b"osu".as_slice()),
+            ("hitcircle.png", b"123456".as_slice()),
+        ]);
+        let cache_root = tempfile::tempdir().unwrap();
+
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        assert!(archive
+            .extract_scene_with_budget(
+                matched.index,
+                &matched.bytes,
+                &[],
+                &[],
+                cache_root.path(),
+                "t",
+                u64::MAX,
+                u64::MAX,
+                6,
+                usize::MAX,
+            )
+            .is_ok());
+
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        match archive.extract_scene_with_budget(
+            matched.index,
+            &matched.bytes,
+            &[],
+            &[],
+            cache_root.path(),
+            "t",
+            u64::MAX,
+            u64::MAX,
+            5,
+            usize::MAX,
+        ) {
+            Err(IpcError::ResourceLimit { cap, limit: 5, .. }) => {
+                assert_eq!(cap, "MAX_BEATMAP_TEXTURE_BYTES");
+            }
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn texture_count_cap_boundary() {
+        // zero-byte members, deliberately: no byte budget can see these, and
+        // the count is checked before anything is written
+        let (_dir, path) = temp_osz(&[
+            ("map.osu", b"osu".as_slice()),
+            ("hitcircle.png", b"".as_slice()),
+            ("cursor.png", b"".as_slice()),
+        ]);
+        let cache_root = tempfile::tempdir().unwrap();
+
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        assert!(archive
+            .extract_scene_with_budget(
+                matched.index,
+                &matched.bytes,
+                &[],
+                &[],
+                cache_root.path(),
+                "t",
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                2,
+            )
+            .is_ok());
+
+        let mut archive = open_osz(&path).unwrap();
+        let matched = archive.first_osu().unwrap().unwrap();
+        match archive.extract_scene_with_budget(
+            matched.index,
+            &matched.bytes,
+            &[],
+            &[],
+            cache_root.path(),
+            "t",
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            1,
+        ) {
+            Err(IpcError::ResourceLimit {
+                cap,
+                limit: 1,
+                actual: 2,
+            }) => assert_eq!(cap, "MAX_BEATMAP_TEXTURES"),
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1493,7 +1686,9 @@ mod tests {
                 cache_root.path(),
                 "t",
                 10,
-                u64::MAX
+                u64::MAX,
+                u64::MAX,
+                usize::MAX,
             )
             .is_ok());
 
@@ -1508,6 +1703,8 @@ mod tests {
             "t",
             9,
             u64::MAX,
+            u64::MAX,
+            usize::MAX,
         ) {
             Err(IpcError::ResourceLimit { cap, limit: 9, .. }) => {
                 assert_eq!(cap, "MAX_OSZ_EXTRACTED_BYTES");

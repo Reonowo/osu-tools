@@ -14,6 +14,134 @@ use crate::error::IpcError;
 /// ships the same stem twice
 pub const SAMPLE_EXTENSIONS: [&str; 3] = ["wav", "mp3", "ogg"];
 
+/// the extensions a texture lookup tries, in the order the framework's texture
+/// store registers them (textureloaderstore.cs:27-28). the frontend's chain
+/// applies the same order; this list only decides which files are enumerated
+pub const TEXTURE_EXTENSIONS: [&str; 2] = ["png", "jpg"];
+
+/// which of a beatmap folder's images can ever answer a texture lookup.
+///
+/// a mapset folder holds its background, its video frames and often a whole
+/// storyboard's art, none of which any element name can reach. enumerating
+/// everything would put hundreds of megabytes into a file map the frontend
+/// would never read -- and, worse, would let an ordinary storyboard-heavy map
+/// breach [`engine::limits::MAX_BEATMAP_TEXTURE_BYTES`] and fail to load a map
+/// that loads fine today. so the walk is filtered to the ruleset's own element
+/// names, by prefix.
+///
+/// prefixes rather than exact names deliberately: `hitcircle` and
+/// `hitcircleoverlay`, `sliderb0`..`sliderb9` and `sliderfollowcircle`, the ten
+/// `default-N` digits and every `spinner-*` layer are all reached by a handful
+/// of stems, and stable's element names have not changed in a decade. this
+/// mirrors the inventory in `src/skin/pieces.ts`, which is the frontend's own
+/// statement of what it can ask for.
+///
+/// the one gap, and it is deliberate: a beatmap that renames its combo digit
+/// font through `HitCirclePrefix` is not enumerated. that key is a SKIN
+/// configuration and a beatmap skin declaring one is vanishingly rare, while
+/// admitting arbitrary prefixes would defeat the filter's whole purpose
+pub const BEATMAP_SKIN_PREFIXES: [&str; 9] = [
+    "approachcircle",
+    "cursor",
+    "default-",
+    "followpoint",
+    // covers `hitcircle`, `hitcircleoverlay` and the four `hitN` judgements
+    "hit",
+    "lighting",
+    "reversearrow",
+    // covers every `sliderb*`, `sliderfollowcircle`, `sliderscorepoint` and the
+    // dedicated `sliderstartcircle`/`sliderendcircle` pair
+    "slider",
+    "spinner-",
+];
+
+/// every image file in the beatmap's own folder that could answer a texture
+/// lookup, keyed by its lowercased file NAME (extension included).
+///
+/// keyed by file name rather than by lookup name, unlike the sample map: which
+/// of `hitcircle@2x.png` and `hitcircle.png` answers a `hitcircle` lookup is an
+/// era rule, and era rules live in the frontend's lookup chain -- the same
+/// shape a skin manifest's own file map has, for the same reason.
+///
+/// as with the sample walk, this needs no new path handling: `read_dir` over
+/// the canonicalized directory yields only its own entries, so the "strictly
+/// inside" property `resolve_media_path` enforces for a named file holds by
+/// construction
+pub fn resolve_texture_files(dir: &Path) -> Result<BTreeMap<String, PathBuf>, IpcError> {
+    resolve_texture_files_with_budget(
+        dir,
+        engine::limits::MAX_BEATMAP_TEXTURE_BYTES,
+        crate::limits::MAX_BEATMAP_TEXTURES,
+    )
+}
+
+/// whether a lowercased file name could ever answer a texture lookup: one of
+/// the ruleset element prefixes under one of the extensions the loader tries.
+/// shared with the `.osz` extractor's member filter, so the archive and folder
+/// paths cannot disagree about which files are the beatmap's own art
+pub fn is_beatmap_texture_name(name: &str) -> bool {
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    TEXTURE_EXTENSIONS.contains(&extension)
+        && BEATMAP_SKIN_PREFIXES
+            .iter()
+            .any(|prefix| stem.starts_with(prefix))
+}
+
+/// both budgets are parameters so the boundary tests can drive them with tiny
+/// inputs, mirroring every other capped entry point in this crate. the count
+/// cap exists because the byte budget alone cannot bound the walk: a folder of
+/// element-named zero-byte files charges nothing while growing both maps and
+/// the scene that crosses ipc, so the entry count is checked as names are
+/// collected
+pub fn resolve_texture_files_with_budget(
+    dir: &Path,
+    max_bytes: u64,
+    max_files: usize,
+) -> Result<BTreeMap<String, PathBuf>, IpcError> {
+    let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let Ok(dir) = dunce::canonicalize(dir) else {
+        return Ok(found);
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(found);
+    };
+    let mut used: u64 = 0;
+    // sizes are collected into the map first and charged in NAME order, so
+    // which file tips the budget does not depend on readdir order
+    let mut sizes: BTreeMap<String, u64> = BTreeMap::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if !is_beatmap_texture_name(&name) {
+            continue;
+        }
+        sizes.insert(name.clone(), entry.metadata().map(|m| m.len()).unwrap_or(0));
+        found.insert(name, entry.path());
+        if found.len() > max_files {
+            return Err(IpcError::ResourceLimit {
+                cap: "MAX_BEATMAP_TEXTURES".to_string(),
+                limit: max_files as u64,
+                actual: found.len() as u64,
+            });
+        }
+    }
+    for size in sizes.values() {
+        used = used.saturating_add(*size);
+        if used > max_bytes {
+            return Err(IpcError::ResourceLimit {
+                cap: "MAX_BEATMAP_TEXTURE_BYTES".to_string(),
+                limit: max_bytes,
+                actual: used,
+            });
+        }
+    }
+    Ok(found)
+}
+
 /// every hit-sample file the beatmap's own folder holds, keyed by the LOOKUP
 /// NAME the frontend's chain will ask for.
 ///
@@ -165,7 +293,10 @@ pub fn read_file_capped(path: &Path, cap: u64, cap_name: &'static str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{read_file_capped, resolve_media_path, resolve_sample_files, resolve_sample_files_with_budget};
+    use super::{
+        read_file_capped, resolve_media_path, resolve_sample_files, resolve_sample_files_with_budget,
+        resolve_texture_files, resolve_texture_files_with_budget,
+    };
     use crate::error::IpcError;
 
     #[test]
@@ -205,6 +336,84 @@ mod tests {
         let resolved = resolve_media_path(dir.path(), "audio.mp3").unwrap();
         // the \\?\ prefix breaks the asset protocol url round-trip
         assert!(!resolved.display().to_string().starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn resolves_a_maps_own_art_by_file_name() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["hitcircle@2x.png", "hitcircleoverlay.png", "SLIDERB0.PNG", "default-3.jpg"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let found = resolve_texture_files(dir.path()).unwrap();
+        // keyed by lowercased FILE NAME, extension included: which of an `@2x`
+        // and a plain file answers a lookup is the frontend chain's rule
+        assert!(found.contains_key("hitcircle@2x.png"));
+        assert!(found.contains_key("hitcircleoverlay.png"));
+        assert!(found.contains_key("sliderb0.png"));
+        assert!(found.contains_key("default-3.jpg"));
+    }
+
+    #[test]
+    fn a_maps_background_and_storyboard_art_are_not_enumerated() {
+        // the whole point of the prefix filter: a mapset's own art can answer
+        // no element lookup, and enumerating it would charge the byte cap
+        // against images nothing would ever draw
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["bg.jpg", "storyboard-flash.png", "video-frame-1.png", "menu-background.jpg"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        assert!(resolve_texture_files(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_image_extensions_are_enumerated() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["hitcircle.png", "hitnormal.wav", "hitcircle.psd"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let found = resolve_texture_files(dir.path()).unwrap();
+        assert_eq!(found.keys().collect::<Vec<_>>(), vec!["hitcircle.png"]);
+    }
+
+    #[test]
+    fn a_missing_directory_is_no_art_rather_than_an_error() {
+        assert!(resolve_texture_files(std::path::Path::new("does/not/exist"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn beatmap_texture_byte_budget_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hitcircle.png"), vec![0u8; 4]).unwrap();
+        std::fs::write(dir.path().join("cursor.png"), vec![0u8; 4]).unwrap();
+        assert_eq!(resolve_texture_files_with_budget(dir.path(), 8, 16).unwrap().len(), 2);
+        match resolve_texture_files_with_budget(dir.path(), 7, 16) {
+            Err(IpcError::ResourceLimit {
+                cap,
+                limit: 7,
+                actual: 8,
+            }) => assert_eq!(cap, "MAX_BEATMAP_TEXTURE_BYTES"),
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn beatmap_texture_count_cap_boundary() {
+        // zero-byte files, deliberately: the byte budget cannot see these, and
+        // the count cap is what bounds the maps they would grow
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hitcircle.png"), b"").unwrap();
+        std::fs::write(dir.path().join("cursor.png"), b"").unwrap();
+        assert_eq!(resolve_texture_files_with_budget(dir.path(), 8, 2).unwrap().len(), 2);
+        match resolve_texture_files_with_budget(dir.path(), 8, 1) {
+            Err(IpcError::ResourceLimit {
+                cap,
+                limit: 1,
+                actual: 2,
+            }) => assert_eq!(cap, "MAX_BEATMAP_TEXTURES"),
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
     }
 
     #[test]

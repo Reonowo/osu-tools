@@ -17,7 +17,9 @@ use engine::simulation::simulate;
 use crate::cache::CacheLease;
 use crate::error::{IpcError, Warning};
 use crate::limits::MAX_RECENT_DIR_OSU_FILES;
-use crate::media::{read_file_capped, resolve_media_path, resolve_sample_files, SAMPLE_EXTENSIONS};
+use crate::media::{
+    read_file_capped, resolve_media_path, resolve_sample_files, resolve_texture_files, SAMPLE_EXTENSIONS,
+};
 use crate::osz::{open_osz, MatchedOsu, OszArchive};
 use crate::scene::{assemble_scene, LoadedScene, NotSimulatedReason, SimulationDto};
 use crate::stable::{detect_install, find_beatmap_by_md5, ListingCache};
@@ -214,6 +216,11 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     // wider, which is the same reason the .osz extractor can stay an
     // allow-list
     let sample_files = resolve_sample_files(&source.dir, &engine::render_plan::sample_file_stems(&render_plan))?;
+    // and the map's own ART, on the same terms and under its own cap. unlike
+    // the samples there is no per-object data to derive candidates from -- a
+    // texture lookup name is an element name, not something the map declares --
+    // so the walk is filtered by element prefix instead
+    let texture_files = resolve_texture_files(&source.dir)?;
 
     // computed before assemble_scene consumes simulation, and cloned rather
     // than derived from the scene afterwards -- the scene's copy is a dto,
@@ -232,6 +239,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         audio_path,
         background_path,
         sample_files,
+        texture_files,
         warnings,
         integrity,
         incompleteness,
