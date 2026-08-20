@@ -3,6 +3,7 @@ import { readdirSync } from "node:fs";
 import type { SkinManifest } from "@/lib/scene-types";
 import { CLASSIC_FLOOR_FILES } from "./legacy/floor-manifest";
 import {
+	beatmapTextureSource,
 	classicFloorTextureSource,
 	expandNames,
 	frameLength,
@@ -27,6 +28,8 @@ function skin(files: Record<string, string>, options: Partial<SkinManifest> = {}
 			comboColours: [],
 			sliderBorder: null,
 			sliderTrackOverride: null,
+			sliderBall: null,
+			spinnerBackground: null,
 			animationFramerate: null,
 			layeredHitSounds: null,
 			allowSliderBallTint: null,
@@ -388,5 +391,84 @@ describe("frame length", () => {
 		const manifest = skin({}, { config: { ...skin({}).config, animationFramerate: 5 } });
 		expect(frameLength(manifest, answered("skin", 10), true)).toBe(1000 / 5);
 		expect(frameLength(manifest, answered("classic", 10), true)).toBe(1000 / 10);
+	});
+});
+
+describe("the beatmap's own art is the chain's first texture source", () => {
+	const map = { "hitcircle.png": "C:\\map\\hitcircle.png" };
+
+	test("a beatmap that ships a texture answers ahead of the selected skin", () => {
+		const manifest = skin(paths("hitcircle.png"));
+		const sources = textureSources({
+			beatmap: beatmapTextureSource({ files: map, toUrl, ignoreBeatmapSkin: false }),
+			skin: manifest,
+			toUrl
+		});
+		expect(resolveTexture(sources, textureRequest("hitcircle"))).toMatchObject({
+			answer: "found",
+			value: { sourceId: "beatmap" }
+		});
+	});
+
+	test("with the toggle off it DECLINES, so the user's skin answers -- not the floor", () => {
+		const manifest = skin(paths("hitcircle.png"));
+		const sources = textureSources({
+			beatmap: beatmapTextureSource({ files: map, toUrl, ignoreBeatmapSkin: true }),
+			skin: manifest,
+			toUrl
+		});
+		expect(resolveTexture(sources, textureRequest("hitcircle"))).toMatchObject({
+			answer: "found",
+			value: { sourceId: "skin" }
+		});
+	});
+
+	test("with the toggle off and no user skin file, the floor answers", () => {
+		const sources = textureSources({
+			beatmap: beatmapTextureSource({ files: map, toUrl, ignoreBeatmapSkin: true }),
+			skin: skin({}),
+			toUrl
+		});
+		expect(resolveTexture(sources, textureRequest("hitcircle"))).toMatchObject({
+			answer: "found",
+			value: { sourceId: "classic" }
+		});
+	});
+
+	test("it answers in the lazer era too, where nothing else would", () => {
+		const argon = skin({}, { era: "lazer" });
+		const sources = textureSources({
+			beatmap: beatmapTextureSource({ files: map, toUrl, ignoreBeatmapSkin: false }),
+			skin: argon,
+			toUrl
+		});
+		expect(resolveTexture(sources, textureRequest("hitcircle"))).toMatchObject({
+			answer: "found",
+			value: { sourceId: "beatmap" }
+		});
+		// and declines to nothing at all once the toggle is off: an argon skin
+		// has no files of its own for the chain to fall through to
+		const refused = textureSources({
+			beatmap: beatmapTextureSource({ files: map, toUrl, ignoreBeatmapSkin: true }),
+			skin: argon,
+			toUrl
+		});
+		expect(resolveTexture(refused, textureRequest("hitcircle"))).toEqual({ answer: "none" });
+	});
+
+	test("it resolves by the legacy rules -- @2x, frames and all", () => {
+		const files = {
+			"followpoint-0@2x.png": "C:\\map\\followpoint-0@2x.png",
+			"followpoint-1@2x.png": "C:\\map\\followpoint-1@2x.png"
+		};
+		const sources = textureSources({
+			beatmap: beatmapTextureSource({ files, toUrl, ignoreBeatmapSkin: false }),
+			skin: skin({}),
+			toUrl
+		});
+		expect(resolveTexture(sources, textureRequest("followpoint", true))).toMatchObject({
+			answer: "found",
+			value: { sourceId: "beatmap", animated: true, resolutionFactors: [2, 2] }
+		});
 	});
 });

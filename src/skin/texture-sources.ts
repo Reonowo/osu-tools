@@ -12,6 +12,50 @@ import type { SkinManifest } from "@/lib/scene-types";
 import { resolveThroughChain, type LookupSource, type SourceAnswer } from "@/playback/lookup-chain";
 import { CLASSIC_FLOOR_FILES } from "./legacy/floor-manifest";
 
+/**
+ * the bundled default, as a manifest.
+ *
+ * `null` on the store means the bundled default rather than "no skin" -- there
+ * is no such state -- and every consumer that forks on the era needs a manifest
+ * rather than a null. this is that manifest, and it is deliberately empty: the
+ * lazer era resolves no textures off disk at all, so a file map with entries
+ * would be a lie about where argon's art comes from
+ */
+export const BUNDLED_SKIN: SkinManifest = {
+	locator: { kind: "bundled" },
+	name: "Argon",
+	author: "osu!",
+	source: "bundled",
+	era: "lazer",
+	files: {},
+	blank: [],
+	config: {
+		version: 2.7,
+		isLatestVersion: true,
+		comboColours: [],
+		sliderBorder: null,
+		sliderTrackOverride: null,
+		sliderBall: null,
+		spinnerBackground: null,
+		animationFramerate: null,
+		layeredHitSounds: null,
+		allowSliderBallTint: null,
+		comboPrefix: null,
+		comboOverlap: null,
+		hitCirclePrefix: null,
+		hitCircleOverlap: null,
+		cursorCentre: null,
+		cursorExpand: null,
+		cursorRotate: null,
+		cursorTrailRotate: null,
+		hitCircleOverlayAboveNumber: null,
+		spinnerFrequencyModulate: null,
+		spinnerNoBlink: null,
+		settings: {}
+	},
+	fellBack: null
+};
+
 /** the extensions a texture lookup tries, in order.
  *
  * exactly what the framework's texture store registers
@@ -346,4 +390,52 @@ export function frameLength(
 	if (declared !== null && declared > 0) return 1000 / declared;
 	// the whole animation in one second, however many frames it has
 	return 1000 / Math.max(1, answered.frames.length);
+}
+
+/**
+ * the beatmap's own art, which is the chain's FIRST texture source -- exactly
+ * as its samples already are.
+ *
+ * two properties are worth stating because both are easy to get backwards:
+ *
+ * - **it DECLINES when the toggle is off, it does not answer empty.** the user
+ *   refusing a map's art is a statement about this source, not about the
+ *   element: the next source -- their own skin -- must answer instead. an empty
+ *   answer here would hide the element outright, which is the opposite of what
+ *   the toggle means.
+ * - **it is asked in BOTH eras.** a mapset that ships its own hit circles draws
+ *   with them whichever skin is selected, and the piece resolver draws whatever
+ *   answered with the composited piece rather than argon's procedural stack.
+ *   that is not a mixed-era look: the beatmap is authoring the element, and
+ *   lazer's `BeatmapSkin` sits above the user skin for the same reason.
+ *
+ * the resolution rules are the legacy ones, unconditionally: a beatmap skin is
+ * a legacy skin, whatever the user has selected
+ */
+export function beatmapTextureSource(options: {
+	/** lowercased file name -> absolute path, as the scene carries it */
+	files: Readonly<Record<string, string>>;
+	toUrl: (path: string) => string;
+	ignoreBeatmapSkin: boolean;
+}): TextureSource {
+	return {
+		id: "beatmap",
+		lookup(request) {
+			if (options.ignoreBeatmapSkin) return { answer: "none" };
+			return lookupInFiles(
+				request,
+				"beatmap",
+				(file) => options.files[file],
+				options.toUrl,
+				// a beatmap's blank asset is a decision like any other skinner's,
+				// but this map carries no size information -- the app crate does not
+				// measure a beatmap's images the way `skin.rs` measures a skin's.
+				// so a blank one here answers FOUND with a transparent texture,
+				// which draws the same nothing; the distinction only matters for
+				// whether a later source gets asked, and a beatmap that shipped the
+				// file has already said it wants it
+				() => false
+			);
+		}
+	};
 }
