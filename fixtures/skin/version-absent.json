@@ -1,0 +1,53 @@
+{
+  "ini_present": true,
+  "name": "Version Absent",
+  "author": "fixture-gen",
+  "legacy_version": 1.0,
+  "effective_version": 1.0,
+  "custom_combo_colours": [],
+  "combo_colours": [
+    {
+      "r": 255,
+      "g": 192,
+      "b": 0,
+      "a": 255
+    },
+    {
+      "r": 0,
+      "g": 202,
+      "b": 0,
+      "a": 255
+    },
+    {
+      "r": 18,
+      "g": 124,
+      "b": 255,
+      "a": 255
+    },
+    {
+      "r": 242,
+      "g": 24,
+      "b": 57,
+      "a": 255
+    }
+  ],
+  "custom_colours": {},
+  "config_dictionary": {},
+  "settings": {
+    "animation_framerate": null,
+    "layered_hit_sounds": null,
+    "allow_slider_ball_tint": null,
+    "combo_prefix": null,
+    "combo_overlap": null,
+    "hit_circle_prefix": null,
+    "hit_circle_overlap": null,
+    "cursor_centre": null,
+    "cursor_expand": null,
+    "cursor_rotate": null,
+    "cursor_trail_rotate": null,
+    "hit_circle_overlay_above_number": null,
+    "hit_circle_overlay_above_numer": null,
+    "spinner_frequency_modulate": null,
+    "spinner_no_blink": null
+  }
+}

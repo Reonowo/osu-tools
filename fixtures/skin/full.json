@@ -1,0 +1,100 @@
+{
+  "ini_present": true,
+  "name": "Scenario Full",
+  "author": "fixture-gen",
+  "legacy_version": 2.5,
+  "effective_version": 2.5,
+  "custom_combo_colours": [
+    {
+      "r": 255,
+      "g": 128,
+      "b": 0,
+      "a": 255
+    },
+    {
+      "r": 0,
+      "g": 202,
+      "b": 0,
+      "a": 255
+    },
+    {
+      "r": 18,
+      "g": 124,
+      "b": 255,
+      "a": 255
+    }
+  ],
+  "combo_colours": [
+    {
+      "r": 255,
+      "g": 128,
+      "b": 0,
+      "a": 255
+    },
+    {
+      "r": 0,
+      "g": 202,
+      "b": 0,
+      "a": 255
+    },
+    {
+      "r": 18,
+      "g": 124,
+      "b": 255,
+      "a": 255
+    }
+  ],
+  "custom_colours": {
+    "InputOverlayText": {
+      "r": 200,
+      "g": 201,
+      "b": 202,
+      "a": 255
+    },
+    "SliderBorder": {
+      "r": 10,
+      "g": 20,
+      "b": 30,
+      "a": 255
+    },
+    "SliderTrackOverride": {
+      "r": 40,
+      "g": 50,
+      "b": 60,
+      "a": 255
+    }
+  },
+  "config_dictionary": {
+    "AllowSliderBallTint": "1",
+    "AnimationFramerate": "30",
+    "ComboOverlap": "3",
+    "ComboPrefix": "myscore",
+    "CursorCentre": "0",
+    "CursorExpand": "0",
+    "CursorRotate": "0",
+    "CursorTrailRotate": "0",
+    "HitCircleOverlap": "5",
+    "HitCircleOverlayAboveNumber": "0",
+    "HitCirclePrefix": "mydefault",
+    "LayeredHitSounds": "1",
+    "SpinnerFrequencyModulate": "0",
+    "SpinnerNoBlink": "1"
+  },
+  "settings": {
+    "animation_framerate": 30,
+    "layered_hit_sounds": true,
+    "allow_slider_ball_tint": true,
+    "combo_prefix": "myscore",
+    "combo_overlap": 3,
+    "hit_circle_prefix": "mydefault",
+    "hit_circle_overlap": 5,
+    "cursor_centre": false,
+    "cursor_expand": false,
+    "cursor_rotate": false,
+    "cursor_trail_rotate": false,
+    "hit_circle_overlay_above_number": false,
+    "hit_circle_overlay_above_numer": null,
+    "spinner_frequency_modulate": false,
+    "spinner_no_blink": true
+  }
+}

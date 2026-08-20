@@ -199,6 +199,20 @@ if (onlyFamily == null)
         "resolved at start + LENIENCY + 1 there, end + LENIENCY here), which reaches exactly the " +
         "slider tick sample. see engine tests/sample_fixtures.rs and TODO.md.",
 
+        "skin/*.json pins `skin.ini` DECODING and nothing else -- what the configuration says, never " +
+        "what a drawable does when it says nothing. every value is read off a real LegacySkin over " +
+        "the hand-built scenario directories in skin/inputs/, so the two \"no version declared\" " +
+        "cases are told apart: an absent skin.ini answers LATEST_VERSION (Skin.cs:108-113) while a " +
+        "present one with no Version key answers the decoder's template default of 1.0 " +
+        "(LegacySkinDecoder.cs:66-72). a null in the settings object means the skin did not answer, " +
+        "which is distinct from a declared false or 0 -- the consumer-side defaults (?? \"default\", " +
+        "?? -2f, ?? true) are cited at their own call sites in the port and deliberately not baked " +
+        "in here. version-signed records a quirk worth not rediscovering: the parse uses " +
+        "NumberStyles.AllowDecimalPoint ALONE, which admits no leading sign, so `Version: -1` is a " +
+        "parse failure that leaves the template default rather than a negative version. no " +
+        "tolerances apply -- every field is a string, an integer, a bool, or a decimal compared " +
+        "exact.",
+
         "judgement/*.json is the scenario judgement-dump family: lazer gameplay itself (a headless " +
         "ReplayPlayer under the Classic mod, the legacy rules path the engine ports) judges the " +
         "hand-built replays recorded in each dump's frames array over the committed minimal maps in " +
@@ -458,6 +472,12 @@ void DumpBeatmapFixtures() => FixtureGen.BeatmapDumps.Run(outDir, namedFloatLite
 // no lazer analogue to dump and is covered by frontend tests instead
 if (runFamily("samples"))
     FixtureGen.SampleDumps.Run(outDir, jsonOptions);
+
+// `skin.ini` decoding, run through a real LegacySkin so the version field's
+// two "no declaration" cases -- absent file vs present file with no Version --
+// are told apart, which a decoder-only dump could not do
+if (runFamily("skin"))
+    FixtureGen.SkinDumps.Run(outDir, jsonOptions);
 
 if (runFamily("replays"))
     FixtureGen.ReplayDumps.Run(outDir, jsonOptions);

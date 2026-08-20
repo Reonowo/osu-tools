@@ -120,6 +120,56 @@ breaks the rerun-leaves-the-tree-clean check. Enforced since 2026-08-12:
 `.oxlintrc.json`, which also covers the lint-staged pre-commit hook (the
 ignore wins even over explicitly passed file arguments).
 
+## Skin dumps (scenario fixtures)
+
+`skin/` pins `skin.ini` decoding. Inputs are the hand-built scenario
+directories under `skin/inputs/`, each holding at most one `skin.ini`;
+`tools/fixture-gen/SkinDumps.cs` constructs a real `LegacySkin` over each
+and records the decoded configuration plus what `GetConfig` answers for
+every key this project honours. Inputs are hand-authored and are never a
+copy of anyone's actual skin — that would be both a licence problem and a
+non-reproducible input.
+
+It runs through a `LegacySkin` rather than the bare `LegacySkinDecoder`
+because the two disagree in one load-bearing place: an **absent** `skin.ini`
+answers `LATEST_VERSION` (`Skin.cs:108-113`), while a **present** one with no
+`Version` key answers the decoder's template default of `1.0`
+(`LegacySkinDecoder.cs:66-72`). A decoder-only dump could not tell those
+apart, and `[General] Version` forks real drawing behaviour (`< 2.5`,
+`< 2`, `<= 1` across the osu! pieces), so the fork has to be pinned rather
+than guessed.
+
+Two shapes are worth knowing before reading a dump:
+
+- A `null` under `settings` means **the skin did not answer**, which is
+  distinct from a declared `false` or `0`. The consumer-side defaults
+  (`?? "default"`, `?? -2f`, `?? true`) are cited at their own call sites in
+  the port and are deliberately not baked in here — this dump pins what the
+  configuration said, never what a drawable does when it said nothing.
+- `version-signed` records a quirk that is easy to rediscover the hard way:
+  the version parse passes `NumberStyles.AllowDecimalPoint` **alone**, which
+  admits no leading sign, so `Version: -1` is a parse *failure* that leaves
+  the template default in place rather than a negative version.
+
+`name-mojibake`'s `skin.ini` holds deliberately invalid UTF-8 in its `Name`
+and `Author` fields, so its dump records U+FFFD replacement characters —
+the case the picker's folder-name fallback exists for. `bom` carries a
+UTF-8 byte-order mark. `section-padded` pins the one place a section header
+is not matched literally: the header goes through a single `Enum.TryParse`,
+which trims before deciding whether the text names a member or an ordinal,
+so `[ Colours ]` resolves where a literal comparison would fail it into
+`default(Section)` and read the rest of the file as `[General]`.
+
+`absent-ini` is deliberately an **empty** directory — that is the scenario.
+It carries a `.gitkeep` because git stores no empty directory, and without
+one the scenario would vanish on the next clone: the generator and the
+engine test both enumerate `skin/inputs/` rather than a written list, so a
+missing directory silently stops being covered instead of failing. No tolerances apply to this family: every field is a
+string, an integer, a bool, or a decimal, all compared exact.
+
+`dotnet run --project tools/fixture-gen -- --out fixtures --family skin`
+regenerates this family alone.
+
 ## Score dumps
 
 `score/` pins the derived-field regeneration (engine `score` module) with

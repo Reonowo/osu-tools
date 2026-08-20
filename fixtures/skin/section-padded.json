@@ -1,0 +1,42 @@
+{
+  "ini_present": true,
+  "name": "Padded",
+  "author": "",
+  "legacy_version": 1.0,
+  "effective_version": 1.0,
+  "custom_combo_colours": [
+    {
+      "r": 1,
+      "g": 2,
+      "b": 3,
+      "a": 255
+    }
+  ],
+  "combo_colours": [
+    {
+      "r": 1,
+      "g": 2,
+      "b": 3,
+      "a": 255
+    }
+  ],
+  "custom_colours": {},
+  "config_dictionary": {},
+  "settings": {
+    "animation_framerate": null,
+    "layered_hit_sounds": null,
+    "allow_slider_ball_tint": null,
+    "combo_prefix": null,
+    "combo_overlap": null,
+    "hit_circle_prefix": null,
+    "hit_circle_overlap": null,
+    "cursor_centre": null,
+    "cursor_expand": null,
+    "cursor_rotate": null,
+    "cursor_trail_rotate": null,
+    "hit_circle_overlay_above_number": null,
+    "hit_circle_overlay_above_numer": null,
+    "spinner_frequency_modulate": null,
+    "spinner_no_blink": null
+  }
+}

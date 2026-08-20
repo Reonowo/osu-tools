@@ -1,0 +1,133 @@
+{
+  "ini_present": true,
+  "name": "Combo Max",
+  "author": "",
+  "legacy_version": 2.7,
+  "effective_version": 2.7,
+  "custom_combo_colours": [
+    {
+      "r": 1,
+      "g": 1,
+      "b": 1,
+      "a": 255
+    },
+    {
+      "r": 2,
+      "g": 2,
+      "b": 2,
+      "a": 255
+    },
+    {
+      "r": 3,
+      "g": 3,
+      "b": 3,
+      "a": 255
+    },
+    {
+      "r": 4,
+      "g": 4,
+      "b": 4,
+      "a": 255
+    },
+    {
+      "r": 5,
+      "g": 5,
+      "b": 5,
+      "a": 255
+    },
+    {
+      "r": 6,
+      "g": 6,
+      "b": 6,
+      "a": 255
+    },
+    {
+      "r": 7,
+      "g": 7,
+      "b": 7,
+      "a": 255
+    },
+    {
+      "r": 8,
+      "g": 8,
+      "b": 8,
+      "a": 255
+    }
+  ],
+  "combo_colours": [
+    {
+      "r": 1,
+      "g": 1,
+      "b": 1,
+      "a": 255
+    },
+    {
+      "r": 2,
+      "g": 2,
+      "b": 2,
+      "a": 255
+    },
+    {
+      "r": 3,
+      "g": 3,
+      "b": 3,
+      "a": 255
+    },
+    {
+      "r": 4,
+      "g": 4,
+      "b": 4,
+      "a": 255
+    },
+    {
+      "r": 5,
+      "g": 5,
+      "b": 5,
+      "a": 255
+    },
+    {
+      "r": 6,
+      "g": 6,
+      "b": 6,
+      "a": 255
+    },
+    {
+      "r": 7,
+      "g": 7,
+      "b": 7,
+      "a": 255
+    },
+    {
+      "r": 8,
+      "g": 8,
+      "b": 8,
+      "a": 255
+    }
+  ],
+  "custom_colours": {
+    "Combo9": {
+      "r": 9,
+      "g": 9,
+      "b": 9,
+      "a": 255
+    }
+  },
+  "config_dictionary": {},
+  "settings": {
+    "animation_framerate": null,
+    "layered_hit_sounds": null,
+    "allow_slider_ball_tint": null,
+    "combo_prefix": null,
+    "combo_overlap": null,
+    "hit_circle_prefix": null,
+    "hit_circle_overlap": null,
+    "cursor_centre": null,
+    "cursor_expand": null,
+    "cursor_rotate": null,
+    "cursor_trail_rotate": null,
+    "hit_circle_overlay_above_number": null,
+    "hit_circle_overlay_above_numer": null,
+    "spinner_frequency_modulate": null,
+    "spinner_no_blink": null
+  }
+}
