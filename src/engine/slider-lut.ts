@@ -21,19 +21,19 @@ export function colourAt(position: number, accent: Rgba, border: Rgba, borderPor
 	return darken(accent, 4);
 }
 
+/** how a position across the ribbon becomes a colour. the one thing the two
+ * eras genuinely disagree about in the body, which is why it is the parameter
+ * and the bake below is shared */
+export type SliderColourSampler = (position: number) => Rgba;
+
 /** smoothpath.cs:48-66 -- width (int)max(radius,1)*2, alpha ramped over the
  * outer aa_portion of u */
-export function bakeSliderLut(
-	accent: Rgba,
-	border: Rgba,
-	pathRadius: number,
-	borderPortion: number
-): { width: number; rgba: Uint8Array } {
+export function bakeSliderLut(sample: SliderColourSampler, pathRadius: number): { width: number; rgba: Uint8Array } {
 	const width = Math.trunc(Math.max(pathRadius, 1)) * 2;
 	const data = new Uint8Array(width * 4);
 	for (let i = 0; i < width; i++) {
 		const progress = i / (width - 1);
-		const c = colourAt(progress, accent, border, borderPortion);
+		const c = sample(progress);
 		const alpha = c.a * Math.min(progress / LUT_AA_PORTION, 1);
 		data[i * 4] = Math.round(c.r * 255);
 		data[i * 4 + 1] = Math.round(c.g * 255);

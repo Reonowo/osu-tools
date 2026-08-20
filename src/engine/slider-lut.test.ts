@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { SLIDER_BORDER_PORTION, SLIDER_PATH_RADIUS } from "@/skin/argon/constants";
-import { darken, rgba, withAlpha } from "./color";
+import { LEGACY_SLIDER_SHADOW_PORTION, LEGACY_SLIDER_TRACK_ALPHA } from "@/skin/legacy/constants";
+import { legacyColourAt } from "@/skin/legacy/slider-body";
+import { darken, lighten, rgba, withAlpha } from "./color";
 import { bakeSliderLut, colourAt } from "./slider-lut";
 
 describe("argon slider gradient (argonsliderbody.cs:40-47)", () => {
@@ -20,7 +22,10 @@ describe("argon slider gradient (argonsliderbody.cs:40-47)", () => {
 	});
 
 	test("the baked lut matches smoothpath.cs:48-66", () => {
-		const { width, rgba: data } = bakeSliderLut(accent, border, SLIDER_PATH_RADIUS, SLIDER_BORDER_PORTION);
+		const { width, rgba: data } = bakeSliderLut(
+			(position) => colourAt(position, accent, border, SLIDER_BORDER_PORTION),
+			SLIDER_PATH_RADIUS
+		);
 		// (int)max(55.172, 1) * 2 = 110
 		expect(width).toBe(110);
 		expect(data.length).toBe(110 * 4);
@@ -47,5 +52,49 @@ describe("argon slider gradient (argonsliderbody.cs:40-47)", () => {
 		expect(c.r).toBeCloseTo(0.5 / 1.5, 9);
 		expect(c.g).toBeCloseTo(1 / 1.5, 9);
 		expect(c.a).toBe(0.7);
+	});
+});
+
+describe("the legacy slider ramp (legacysliderbody.cs:27-44)", () => {
+	const accent = withAlpha(rgba(0.2, 0.4, 0.8), LEGACY_SLIDER_TRACK_ALPHA);
+	const white = rgba(1, 1, 1, 1);
+
+	test("the outermost band is a shadow fading up from nothing", () => {
+		expect(legacyColourAt(0, accent, white)).toEqual({ r: 0, g: 0, b: 0, a: 0 });
+		const edge = legacyColourAt(LEGACY_SLIDER_SHADOW_PORTION, accent, white);
+		expect(edge).toEqual({ r: 0, g: 0, b: 0, a: 0.25 });
+	});
+
+	test("the shadow's width is the padding the circle art carries and the body does not", () => {
+		// 1 - 59/64: the reason a legacy body is visibly narrower than argon's
+		expect(LEGACY_SLIDER_SHADOW_PORTION).toBeCloseTo(1 - 59 / 64, 12);
+	});
+
+	test("the border is flat from the shadow to 0.1875", () => {
+		expect(legacyColourAt(0.1, accent, white)).toEqual(white);
+		expect(legacyColourAt(0.1875, accent, white)).toEqual(white);
+	});
+
+	test("the track ramps darkened to lightened, at the flat legacy alpha", () => {
+		const outer = legacyColourAt(0.1875001, accent, white);
+		const inner = legacyColourAt(1, accent, white);
+		// darken(0.1) at the border edge, lighten(0.5) at the spine
+		expect(outer.r).toBeCloseTo(0.2 / 1.1, 6);
+		expect(inner.r).toBeGreaterThan(outer.r);
+		expect(inner.b).toBeGreaterThan(outer.b);
+		// the alpha is the era's constant, whatever the source colour was
+		expect(outer.a).toBeCloseTo(LEGACY_SLIDER_TRACK_ALPHA, 9);
+		expect(inner.a).toBeCloseTo(LEGACY_SLIDER_TRACK_ALPHA, 9);
+	});
+
+	test("a declared border colour is used verbatim", () => {
+		const red = rgba(1, 0, 0, 1);
+		expect(legacyColourAt(0.15, accent, red)).toEqual(red);
+	});
+
+	test("lighten brightens a black channel rather than leaving it black", () => {
+		// the whole reason legacysliderbody.cs writes its own lighten instead of
+		// using color4extensions'
+		expect(lighten(rgba(0, 0, 0, 1), 0.5).r).toBeCloseTo(0.25, 9);
 	});
 });

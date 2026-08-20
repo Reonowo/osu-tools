@@ -27,6 +27,21 @@ export function darken(c: Rgba, amount: number): Rgba {
 	return { r: Math.min(1, c.r * s), g: Math.min(1, c.g * s), b: Math.min(1, c.b * s), a: c.a };
 }
 
+/** legacysliderbody.cs:49-57 -- lightens "in a way more friendly to dark or
+ * strong colours": the amount is halved, then each channel is scaled up AND
+ * offset, so a channel at zero still brightens. deliberately not
+ * color4extensions' own Lighten, which is a plain multiply and leaves black
+ * black -- a legacy slider's inner track has to lift off its own border */
+export function lighten(c: Rgba, amount: number): Rgba {
+	const k = amount * 0.5;
+	return {
+		r: Math.min(1, c.r * (1 + 0.5 * k) + k),
+		g: Math.min(1, c.g * (1 + 0.5 * k) + k),
+		b: Math.min(1, c.b * (1 + 0.5 * k) + k),
+		a: c.a
+	};
+}
+
 /** color4extensions.cs:50 -- opacity replaces alpha only, rgb untouched */
 export function withAlpha(c: Rgba, a: number): Rgba {
 	return { ...c, a };
