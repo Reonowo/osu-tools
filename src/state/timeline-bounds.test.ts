@@ -25,10 +25,49 @@ import {
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
+	DEFAULT_SKIN,
 	DEFAULT_TIMELINE
 } from "./defaults";
 import { createViewerStore, type IpcDeps, type ViewerState } from "./store";
 import type { StoreApi } from "zustand";
+import type { SkinManifest } from "@/lib/scene-types";
+
+/** the manifest a store test's ipc stub answers with: the app's own look,
+ * which is what a fresh install resolves to */
+function bundledManifest(): SkinManifest {
+	return {
+		locator: DEFAULT_SKIN,
+		name: "Argon",
+		author: "osu!",
+		source: "bundled",
+		era: "lazer",
+		files: {},
+		blank: [],
+		config: {
+			version: 1,
+			isLatestVersion: false,
+			comboColours: [],
+			sliderBorder: null,
+			sliderTrackOverride: null,
+			animationFramerate: null,
+			layeredHitSounds: null,
+			allowSliderBallTint: null,
+			comboPrefix: null,
+			comboOverlap: null,
+			hitCirclePrefix: null,
+			hitCircleOverlap: null,
+			cursorCentre: null,
+			cursorExpand: null,
+			cursorRotate: null,
+			cursorTrailRotate: null,
+			hitCircleOverlayAboveNumber: null,
+			spinnerFrequencyModulate: null,
+			spinnerNoBlink: null,
+			settings: {}
+		},
+		fellBack: null
+	};
+}
 
 const K1_BITS = 5; // k1 rides with m1, stable's own encoding
 const K2_BITS = 10;
@@ -126,7 +165,8 @@ const settings: Settings = {
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
-	keybinds: {}
+	keybinds: {},
+	skin: DEFAULT_SKIN
 };
 
 // the DetailLanes draw math, verbatim: paused clock at 9200 -- parked where
@@ -161,6 +201,12 @@ async function openTestScene(): Promise<Store> {
 		setOsuStablePath: async () => settings,
 		setViewerPrefs: async () => settings,
 		clearRecents: async () => settings,
+		// the skin deps: a test that does not exercise skinning still needs them,
+		// since hydrateSettings resolves the persisted locator on every startup
+		listSkins: async () => [],
+		getSkin: async () => bundledManifest(),
+		setSkin: async () => bundledManifest(),
+		importSkin: async () => bundledManifest(),
 		applyEdit: async (_epoch, baseRevision, ops, _label): Promise<EditDelta> => {
 			const { next, updated, inserted } = applyOps(engineFrames, ops);
 			engineFrames = next;

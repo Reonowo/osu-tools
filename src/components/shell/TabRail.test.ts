@@ -16,6 +16,45 @@ import {
 } from "../../state/defaults";
 import { createViewerStore, type IpcDeps } from "../../state/store";
 import { railTabClick } from "./TabRail";
+import type { SkinManifest } from "@/lib/scene-types";
+import { DEFAULT_SKIN } from "@/state/defaults";
+
+/** the manifest a store test's ipc stub answers with: the app's own look,
+ * which is what a fresh install resolves to */
+function bundledManifest(): SkinManifest {
+	return {
+		locator: DEFAULT_SKIN,
+		name: "Argon",
+		author: "osu!",
+		source: "bundled",
+		era: "lazer",
+		files: {},
+		blank: [],
+		config: {
+			version: 1,
+			isLatestVersion: false,
+			comboColours: [],
+			sliderBorder: null,
+			sliderTrackOverride: null,
+			animationFramerate: null,
+			layeredHitSounds: null,
+			allowSliderBallTint: null,
+			comboPrefix: null,
+			comboOverlap: null,
+			hitCirclePrefix: null,
+			hitCircleOverlap: null,
+			cursorCentre: null,
+			cursorExpand: null,
+			cursorRotate: null,
+			cursorTrailRotate: null,
+			hitCircleOverlayAboveNumber: null,
+			spinnerFrequencyModulate: null,
+			spinnerNoBlink: null,
+			settings: {}
+		},
+		fellBack: null
+	};
+}
 
 const baseSettings: Settings = {
 	osuStablePath: null,
@@ -27,7 +66,8 @@ const baseSettings: Settings = {
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
-	keybinds: {}
+	keybinds: {},
+	skin: { kind: "bundled" }
 };
 
 const identityDelta: EditDelta = {
@@ -60,6 +100,13 @@ function deps(): IpcDeps {
 			effects
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
+		// the skin deps: the picker's rows, the resolved selection, and the two
+		// writes. a test that does not exercise skinning still needs them, since
+		// hydrateSettings resolves the persisted locator on every startup
+		listSkins: async () => [],
+		getSkin: async () => bundledManifest(),
+		setSkin: async () => bundledManifest(),
+		importSkin: async () => bundledManifest(),
 		applyEdit: async () => identityDelta,
 		undo: async () => identityDelta,
 		redo: async () => identityDelta,

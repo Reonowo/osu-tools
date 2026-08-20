@@ -25,12 +25,52 @@ import {
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
+	DEFAULT_SKIN,
 	DEFAULT_TIMELINE,
 	DETAIL_SPAN_MAX,
 	DETAIL_SPAN_MIN,
 	effectiveEffects
 } from "./defaults";
 import { createViewerStore, type IpcDeps, type ViewerState } from "./store";
+import type { SkinEntry, SkinLocator, SkinManifest } from "@/lib/scene-types";
+import { LEGACY_GATE_REFUSAL } from "@/skin/picker";
+
+/** the manifest a store test's ipc stub answers with: the app's own look,
+ * which is what a fresh install resolves to */
+function bundledManifest(): SkinManifest {
+	return {
+		locator: DEFAULT_SKIN,
+		name: "Argon",
+		author: "osu!",
+		source: "bundled",
+		era: "lazer",
+		files: {},
+		blank: [],
+		config: {
+			version: 1,
+			isLatestVersion: false,
+			comboColours: [],
+			sliderBorder: null,
+			sliderTrackOverride: null,
+			animationFramerate: null,
+			layeredHitSounds: null,
+			allowSliderBallTint: null,
+			comboPrefix: null,
+			comboOverlap: null,
+			hitCirclePrefix: null,
+			hitCircleOverlap: null,
+			cursorCentre: null,
+			cursorExpand: null,
+			cursorRotate: null,
+			cursorTrailRotate: null,
+			hitCircleOverlayAboveNumber: null,
+			spinnerFrequencyModulate: null,
+			spinnerNoBlink: null,
+			settings: {}
+		},
+		fellBack: null
+	};
+}
 
 const baseSettings: Settings = {
 	osuStablePath: null,
@@ -42,7 +82,8 @@ const baseSettings: Settings = {
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
-	keybinds: {}
+	keybinds: {},
+	skin: DEFAULT_SKIN
 };
 
 const sampleRecent: RecentReplay = {
@@ -77,6 +118,13 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 			keybinds
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
+		// the skin deps: the picker's rows, the resolved selection, and the two
+		// writes. a test that does not exercise skinning still needs them, since
+		// hydrateSettings resolves the persisted locator on every startup
+		listSkins: async () => [],
+		getSkin: async () => bundledManifest(),
+		setSkin: async () => bundledManifest(),
+		importSkin: async () => bundledManifest(),
 		applyEdit: async () => identityDelta,
 		undo: async () => identityDelta,
 		redo: async () => identityDelta,
@@ -447,7 +495,8 @@ describe("viewer preferences", () => {
 			editing: { ...DEFAULT_EDITING, snapToLattice: false },
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
-			keybinds: {}
+			keybinds: {},
+			skin: DEFAULT_SKIN
 		};
 		const store = createViewerStore(deps({ getSettings: async () => stored }));
 
@@ -1616,7 +1665,14 @@ describe("recents", () => {
 	test("clearRecents publishes the returned settings", async () => {
 		const store = createViewerStore(
 			deps({
-				clearRecents: async () => ({ ...baseSettings, recents: [] })
+				clearRecents: async () => ({ ...baseSettings, recents: [] }),
+				// the skin deps: the picker's rows, the resolved selection, and the two
+				// writes. a test that does not exercise skinning still needs them, since
+				// hydrateSettings resolves the persisted locator on every startup
+				listSkins: async () => [],
+				getSkin: async () => bundledManifest(),
+				setSkin: async () => bundledManifest(),
+				importSkin: async () => bundledManifest()
 			})
 		);
 		await store.getState().clearRecents();
@@ -3095,5 +3151,414 @@ describe("press selection", () => {
 		});
 		expect(store.getState().scene!.frames.map((f) => f.buttons)).toEqual([0, 0, 0, 0, 5, 0]);
 		expect(store.getState().editor!.pressSelection).toBeNull();
+	});
+});
+
+describe("the active skin", () => {
+	const legacyManifest = (path: string): SkinManifest => ({
+		...bundledManifest(),
+		locator: { kind: "stable", path },
+		name: "Rafis 2016",
+		author: "Rafis",
+		source: "stable",
+		era: "legacy",
+		files: { "cursor.png": `${path}\\cursor.png` }
+	});
+
+	// LEGACY_SKINS_IMPLEMENTED is false, so every legacy selection below would
+	// otherwise be refused by the gate. these tests are about what selection
+	// DOES, not about whether it is allowed -- the gate has its own two tests
+	const gateOpen = { legacySkinsSelectable: true };
+
+	test("the manifest is held BESIDE the scene, so a skin change is not a scene reload", async () => {
+		const store = createViewerStore(deps());
+		await store.getState().openReplay("a.osr");
+		const sceneId = store.getState().sceneId;
+		const scene = store.getState().scene;
+
+		await store.getState().selectSkin({ kind: "stable", path: "C:\\skins\\Rafis" });
+
+		expect(store.getState().skin?.name).toBe("Argon");
+		// the stub answers with the bundled manifest whatever it is handed --
+		// what matters here is that nothing about the SCENE moved
+		expect(store.getState().sceneId).toBe(sceneId);
+		expect(store.getState().scene).toBe(scene);
+	});
+
+	test("selecting a skin publishes the whole manifest in one step", async () => {
+		// atomic by construction: the manifest resolves before anything is
+		// published, so no observer can see a half-swapped skin. the SKIN and the
+		// selection it came from are recorded per emission -- the pair is what
+		// atomicity means here, and counting skin emissions alone would also count
+		// the row-list publication that follows
+		const manifest = legacyManifest("C:\\skins\\Rafis");
+		const seen: [string | null, string | null][] = [];
+		const store = createViewerStore(deps({ setSkin: async () => manifest }), gateOpen);
+		// hydrated first so `settings` exists: the pair is only meaningful once
+		// there is a selection to disagree with
+		await store.getState().hydrateSettings();
+		store.subscribe((state) => seen.push([state.skin?.name ?? null, state.settings?.skin.kind ?? null]));
+
+		await store.getState().selectSkin(manifest.locator);
+		expect(store.getState().skin).toEqual(manifest);
+
+		// every emission carrying the new skin also carried the selection it came
+		// from -- no observer saw one without the other, in either order
+		const withSkin = seen.filter(([name]) => name === "Rafis 2016");
+		expect(withSkin.length).toBeGreaterThan(0);
+		expect(withSkin.every(([, kind]) => kind === "stable")).toBe(true);
+		expect(seen.some(([name, kind]) => name !== "Rafis 2016" && kind === "stable")).toBe(false);
+	});
+
+	test("the persisted selection is what the user ASKED for, not what resolved", async () => {
+		// the two disagree in exactly the case that matters: a folder that no
+		// longer resolves falls back to the bundled default while the selection
+		// keeps naming the folder, so restoring the folder restores the skin
+		// without the user re-picking it. a stub answering with the requested
+		// locator could not tell the two rules apart
+		const requested: SkinLocator = { kind: "folder", path: "C:\\skins\\Gone" };
+		const resolved: SkinManifest = {
+			...bundledManifest(),
+			fellBack: { requested, reason: "no longer there" }
+		};
+		const store = createViewerStore(deps({ setSkin: async () => resolved }));
+		await store.getState().hydrateSettings();
+		await store.getState().selectSkin(requested);
+
+		expect(store.getState().skin?.locator).toEqual({ kind: "bundled" });
+		expect(store.getState().settings?.skin).toEqual(requested);
+	});
+
+	test("a superseded pick neither writes nor publishes, even when it would be gated", async () => {
+		// the gate branch issues a backend settings WRITE of its own. checking
+		// the sequence only at publication time would let a stale refusal rewrite
+		// the file under a newer selection that already landed -- leaving the
+		// picker showing one skin and the settings naming another
+		const legacy = legacyManifest("C:\\skins\\Slow");
+		const setSkinCalls: string[] = [];
+		let releaseSlow: (() => void) | null = null;
+		const slow = new Promise<void>((resolve) => {
+			releaseSlow = resolve;
+		});
+		const store = createViewerStore(
+			deps({
+				setSkin: async (locator) => {
+					setSkinCalls.push(locator.kind);
+					if (locator.kind === "folder") {
+						await slow;
+						return legacy;
+					}
+					return bundledManifest();
+				}
+			}),
+			{ legacySkinsSelectable: false }
+		);
+		await store.getState().hydrateSettings();
+
+		// the slow legacy pick starts, then a newer pick lands ahead of it
+		const stale = store.getState().selectSkin({ kind: "folder", path: "C:\\skins\\Slow" });
+		await store.getState().selectSkin({ kind: "bundled" });
+		const afterNewer = store.getState().skin;
+		releaseSlow!();
+		await stale;
+
+		// the stale refusal changed nothing: no notice over the newer selection,
+		// and no third setSkin call undoing what the newer one persisted
+		expect(store.getState().skin).toBe(afterNewer);
+		expect(store.getState().skinNotice).toBeNull();
+		expect(setSkinCalls).toEqual(["folder", "bundled"]);
+	});
+
+	test("a shipped build refuses a legacy skin reached through browse, not just through a row", async () => {
+		// the picker gates its ROWS, but browse hands over a locator the row list
+		// never enumerated. without the same rule here the gate is one click wide
+		const chosen = legacyManifest("C:\\skins\\Rafis");
+		const store = createViewerStore(
+			deps({ setSkin: async (locator) => (locator.kind === "bundled" ? bundledManifest() : chosen) }),
+			{ legacySkinsSelectable: false }
+		);
+		await store.getState().hydrateSettings();
+		await store.getState().selectSkin({ kind: "folder", path: "C:\\skins\\Rafis" });
+
+		expect(store.getState().skin?.era).toBe("lazer");
+		// and the settings file does not keep naming a skin this build refuses
+		expect(store.getState().settings?.skin).toEqual({ kind: "bundled" });
+		// a deliberate product decision, surfaced as a notice rather than as a
+		// fabricated ipc error -- which the ui would title "internal error"
+		expect(store.getState().skinNotice).toBe(LEGACY_GATE_REFUSAL);
+		expect(store.getState().lastError).toBeNull();
+	});
+
+	test("a stale row list never lands over a newer one", async () => {
+		// the walk behind listSkins is off-thread and unordered, and one caller
+		// (a superseded import) fetches its list at a moment when the newer
+		// operation has not landed yet -- so that list is guaranteed to be the
+		// one MISSING the newer skin. it must not publish last
+		const row = (name: string): SkinEntry => ({
+			locator: { kind: "imported", path: `C:\\\\skins\\\\${name}` },
+			name,
+			author: "",
+			source: "imported",
+			era: "lazer",
+			refusal: null
+		});
+		let call = 0;
+		let releaseFirst: (() => void) | null = null;
+		const firstListed = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const store = createViewerStore(
+			deps({
+				listSkins: async () => {
+					call += 1;
+					if (call === 1) {
+						// the stale walk, which resolves LAST and knows only the old row
+						await firstListed;
+						return [row("Old")];
+					}
+					return [row("Old"), row("New")];
+				}
+			})
+		);
+
+		const stale = store.getState().refreshSkins();
+		await store.getState().refreshSkins();
+		expect(store.getState().skins.map((s) => s.name)).toEqual(["Old", "New"]);
+		releaseFirst!();
+		await stale;
+
+		// the stale answer arrived last and was dropped
+		expect(store.getState().skins.map((s) => s.name)).toEqual(["Old", "New"]);
+	});
+
+	test("a superseded import still re-lists, because the archive did land", async () => {
+		// the selection and the row list are separate facts. the import wrote the
+		// archive into the app-owned directory whatever happened to the
+		// selection, so skipping the re-list would leave a skin that exists on
+		// disk with no row anywhere until the dialog is reopened
+		let listed = 0;
+		const imported: SkinManifest = {
+			...bundledManifest(),
+			locator: { kind: "imported", path: "C:\\app\\skins\\New" },
+			source: "imported"
+		};
+		const store = createViewerStore(
+			deps({
+				importSkin: async () => imported,
+				setSkin: async () => bundledManifest(),
+				listSkins: async () => {
+					listed += 1;
+					return [];
+				}
+			}),
+			gateOpen
+		);
+
+		const stale = store.getState().importSkin("C:\\downloads\\skin.osk");
+		// a newer pick claims the sequence while the import is in flight
+		await store.getState().selectSkin({ kind: "bundled" });
+		await stale;
+
+		expect(listed).toBeGreaterThan(0);
+	});
+
+	test("a shipped build refuses an imported legacy skin as the ACTIVE one", async () => {
+		// an .osk is legacy essentially always, so this is the route the gate
+		// would leak through most often. the archive still landed -- what is
+		// refused is making it the active skin
+		const imported: SkinManifest = {
+			...legacyManifest("C:\\app\\skins\\Downloaded"),
+			locator: { kind: "imported", path: "C:\\app\\skins\\Downloaded" },
+			source: "imported"
+		};
+		const store = createViewerStore(
+			deps({
+				importSkin: async () => imported,
+				setSkin: async () => bundledManifest(),
+				listSkins: async () => []
+			}),
+			{ legacySkinsSelectable: false }
+		);
+		await store.getState().importSkin("C:\\downloads\\skin.osk");
+
+		expect(store.getState().skin?.era).toBe("lazer");
+		// a deliberate product decision, surfaced as a notice rather than as a
+		// fabricated ipc error -- which the ui would title "internal error"
+		expect(store.getState().skinNotice).toBe(LEGACY_GATE_REFUSAL);
+		expect(store.getState().lastError).toBeNull();
+	});
+
+	test("a refused skin surfaces as an error and leaves the previous selection standing", async () => {
+		const store = createViewerStore(
+			deps({
+				setSkin: async () => {
+					throw { kind: "resourceLimit", cap: "MAX_SKIN_BYTES", limit: 1, actual: 2 };
+				}
+			})
+		);
+		await store.getState().hydrateSettings();
+		const before = store.getState().skin;
+
+		await store.getState().selectSkin({ kind: "folder", path: "C:\\huge" });
+
+		expect(store.getState().skin).toBe(before);
+		expect(store.getState().lastError?.error).toMatchObject({ kind: "resourceLimit", cap: "MAX_SKIN_BYTES" });
+	});
+
+	test("a persisted legacy locator does not become the ACTIVE skin in a shipped build", async () => {
+		// hydration is the third route to an active skin, beside select and
+		// import. a dev build and a shipped one share one settings file, so a
+		// skin picked where the gate is open comes back where it is shut
+		const store = createViewerStore(deps({ getSkin: async () => legacyManifest("C:\\skins\\Rafis") }), {
+			legacySkinsSelectable: false
+		});
+		await store.getState().hydrateSettings();
+
+		// null reads as the bundled default everywhere, which is Argon
+		expect(store.getState().skin).toBeNull();
+		// and it says so: a null skin leaves every picker row unticked, so a
+		// silent refusal here would be indistinguishable from a bug
+		expect(store.getState().skinNotice).toBe(LEGACY_GATE_REFUSAL);
+	});
+
+	test("a persisted legacy locator IS active where the gate is open", async () => {
+		// the other half of the same rule: the gate withholds drawing, and a
+		// dev build is exactly where the elements get built against real skins
+		const store = createViewerStore(deps({ getSkin: async () => legacyManifest("C:\\skins\\Rafis") }), gateOpen);
+		await store.getState().hydrateSettings();
+
+		expect(store.getState().skin?.era).toBe("legacy");
+	});
+
+	test("a stale locator hydrates as the bundled default carrying its notice", async () => {
+		const fellBack: SkinManifest = {
+			...bundledManifest(),
+			fellBack: { requested: { kind: "stable", path: "C:\\skins\\Gone" }, reason: "no longer there" }
+		};
+		const store = createViewerStore(deps({ getSkin: async () => fellBack }));
+		await store.getState().hydrateSettings();
+		expect(store.getState().skin?.fellBack?.requested).toEqual({ kind: "stable", path: "C:\\skins\\Gone" });
+	});
+
+	test("a superseded startup failure does not overwrite a newer working pick", async () => {
+		// the catch publishes too, so it owes the same sequence guard the success
+		// branch has: a slow persisted skin that fails must not drop its notice
+		// over a skin the user has since picked successfully
+		let releaseFailure: (() => void) | null = null;
+		const slow = new Promise<void>((resolve) => {
+			releaseFailure = resolve;
+		});
+		// signalled on ENTRY, so the pick below is guaranteed to claim its ticket
+		// after hydration claimed its own -- otherwise the pick is the superseded
+		// one and the test proves the opposite of what it says
+		let enteredGetSkin: (() => void) | null = null;
+		const resolving = new Promise<void>((resolve) => {
+			enteredGetSkin = resolve;
+		});
+		const store = createViewerStore(
+			deps({
+				getSkin: async () => {
+					enteredGetSkin!();
+					await slow;
+					throw { kind: "io", message: "unreadable" };
+				},
+				setSkin: async () => bundledManifest()
+			})
+		);
+
+		const hydrating = store.getState().hydrateSettings();
+		await resolving;
+		await store.getState().selectSkin({ kind: "bundled" });
+		releaseFailure!();
+		await hydrating;
+
+		// the newer pick stands, unannotated by the older failure
+		expect(store.getState().skin).not.toBeNull();
+		expect(store.getState().skinNotice).toBeNull();
+	});
+
+	test("a skin that will not resolve at all does not stop startup", async () => {
+		const store = createViewerStore(
+			deps({
+				getSkin: async () => {
+					throw new Error("disk on fire");
+				}
+			})
+		);
+		await store.getState().hydrateSettings();
+		// the settings still landed, and the null skin reads as the bundled
+		// default everywhere -- there is nothing to substitute
+		expect(store.getState().settings).not.toBeNull();
+		expect(store.getState().skin).toBeNull();
+	});
+
+	test("importing selects the imported skin and re-lists", async () => {
+		const imported: SkinManifest = {
+			...bundledManifest(),
+			locator: { kind: "imported", path: "C:\\app\\skins\\Downloaded" },
+			name: "Downloaded",
+			source: "imported",
+			era: "legacy"
+		};
+		const listed = [{ ...imported, refusal: null }];
+		const store = createViewerStore(
+			deps({
+				importSkin: async () => imported,
+				listSkins: async () =>
+					listed.map(({ locator, name, author, source, era, refusal }) => ({
+						locator,
+						name,
+						author,
+						source,
+						era,
+						refusal
+					}))
+			}),
+			gateOpen
+		);
+		await store.getState().importSkin("C:\\downloads\\skin.osk");
+		expect(store.getState().skin?.name).toBe("Downloaded");
+		expect(store.getState().skins.map((entry) => entry.name)).toEqual(["Downloaded"]);
+	});
+
+	test("refreshSkins publishes the picker's rows", async () => {
+		const store = createViewerStore(
+			deps({
+				listSkins: async () => [
+					{
+						locator: { kind: "bundled" },
+						name: "Argon",
+						author: "osu!",
+						source: "bundled",
+						era: "lazer",
+						refusal: null
+					}
+				]
+			})
+		);
+		await store.getState().refreshSkins();
+		expect(store.getState().skins).toHaveLength(1);
+	});
+});
+
+describe("the persisted selection after a fallback", () => {
+	test("picking a folder that does not resolve keeps naming the folder", async () => {
+		// the manifest falls back to the bundled default, but the SELECTION is
+		// what the user asked for -- which is what the backend persisted, and
+		// what lets restoring the folder restore the skin without re-picking it
+		const requested: SkinLocator = { kind: "folder", path: "C:\\gone" };
+		const store = createViewerStore(
+			deps({
+				setSkin: async () => ({
+					...bundledManifest(),
+					fellBack: { requested, reason: "no longer there" }
+				})
+			})
+		);
+		await store.getState().hydrateSettings();
+		await store.getState().selectSkin(requested);
+
+		expect(store.getState().skin?.locator).toEqual({ kind: "bundled" });
+		expect(store.getState().settings?.skin).toEqual(requested);
 	});
 });

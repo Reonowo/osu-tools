@@ -4,11 +4,16 @@
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { PhysicalKey } from "../engine/buttons";
 import { gesturePreview } from "../editor/preview";
+import { LEGACY_GATE_REFUSAL, legacyAllowed } from "../skin/picker";
 import { pressRunAt, pressRunFromIndex, type PressSelection } from "../editor/press-runs";
 import { applyFrameChanges, isFullFrames, remapQueuedOps, remapSelection } from "../editor/splice";
 import {
 	invokeApplyEdit,
 	invokeClearRecents,
+	invokeGetSkin,
+	invokeImportSkin,
+	invokeListSkins,
+	invokeSetSkin,
 	invokeExportReplay,
 	invokeGetSettings,
 	invokeLoadReplay,
@@ -37,6 +42,9 @@ import type {
 	LoadedScene,
 	OverlaySettings,
 	Settings,
+	SkinEntry,
+	SkinLocator,
+	SkinManifest,
 	TimelineSettings
 } from "../lib/scene-types";
 import { deriveScene, type DerivedScene } from "../lib/derive";
@@ -60,6 +68,7 @@ import {
 	DEFAULT_FEATHER_MS,
 	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
+	DEFAULT_SKIN,
 	DEFAULT_SMOOTH_STRENGTH,
 	DEFAULT_TIMELINE,
 	DEFAULT_VOLUME
@@ -97,6 +106,10 @@ export interface IpcDeps {
 		keybinds: KeybindOverrides
 	): Promise<Settings>;
 	clearRecents(): Promise<Settings>;
+	listSkins(): Promise<SkinEntry[]>;
+	getSkin(): Promise<SkinManifest>;
+	setSkin(locator: SkinLocator): Promise<SkinManifest>;
+	importSkin(path: string): Promise<SkinManifest>;
 	applyEdit(epoch: number, baseRevision: number, ops: EditOp[], label: string): Promise<EditDelta>;
 	undo(epoch: number): Promise<EditDelta>;
 	redo(epoch: number): Promise<EditDelta>;
@@ -170,6 +183,12 @@ export interface EditCommit {
  * tests can run without the singleton and assert against spies */
 export interface StoreHooks {
 	onSplice?(changes: FrameChanges): void;
+	/** whether a legacy skin may be selected at all. the picker gates its ROWS,
+	 * but browse… and import reach `selectSkin`/`importSkin` with a locator the
+	 * row list never enumerated, so the same rule has to hold here or a shipped
+	 * build could load a legacy skin through either of them. injected so a test
+	 * can drive both sides of the gate without a build flag */
+	legacySkinsSelectable?: boolean;
 }
 
 export interface ViewerState {
@@ -196,6 +215,14 @@ export interface ViewerState {
 	sceneId: number;
 	loading: boolean;
 	lastError: { error: IpcError; osrPath: string } | null;
+	/** why the skin the user just asked for was not made active, or null.
+	 *
+	 * deliberately NOT an `IpcError`: the development gate refusing a legacy
+	 * skin is a product decision, not a fault, and routing it through
+	 * `lastError` renders it as a toast titled "internal error" -- which tells
+	 * the user something broke when nothing did. the picker shows this in the
+	 * same strip the fallback notice uses */
+	skinNotice: string | null;
 	/** the osrPath of the load that most recently failed with a pickBeatmap-
 	 * recoverable error (beatmapNotFound / osuDbNotFound), so a dropped
 	 * beatmap can route to openWithBeatmap even after lastError itself is
@@ -220,6 +247,19 @@ export interface ViewerState {
 	 * effective bounds. null until metadata arrives; reset by every install */
 	audioDurationMs: number | null;
 	settings: Settings | null;
+	/**
+	 * the active skin, held BESIDE the scene rather than on it.
+	 *
+	 * a skin is app-wide and changes without a scene reload -- which is exactly
+	 * why the beatmap's sample file map, which rides the scene, is not the model
+	 * to copy. null until the startup hydrate resolves; every consumer treats
+	 * null as the bundled default rather than as "no skin", because there is no
+	 * such state
+	 */
+	skin: SkinManifest | null;
+	/** what the picker lists. refreshed on demand rather than held live: a
+	 * stable install with 138 skins is a directory walk, not a subscription */
+	skins: SkinEntry[];
 	overlays: OverlaySettings;
 	editing: EditingSettings;
 	/** the raw per-effect toggles, master included -- consumers gate on
@@ -352,6 +392,15 @@ export interface ViewerState {
 	loadSettings(): Promise<void>;
 	saveStablePath(path: string | null): Promise<void>;
 	clearRecents(): Promise<void>;
+	/** re-walks the skin locations and republishes the picker's rows */
+	refreshSkins(): Promise<void>;
+	/** picks a skin. the swap is ATOMIC by construction: the whole manifest
+	 * resolves before anything is published, so no frame can show a
+	 * half-swapped playfield. a refused skin surfaces through the toast flow
+	 * and leaves the previous selection in place */
+	selectSkin(locator: SkinLocator): Promise<void>;
+	/** imports an .osk and selects it */
+	importSkin(path: string): Promise<void>;
 
 	commitEdit(commit: EditCommit): Promise<void>;
 	undoEdit(): Promise<void>;
@@ -622,6 +671,26 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 		// to a racing write, so a stale resolution must recognize itself and
 		// no-op instead of overwriting -- or cancelling -- a newer publication
 		let settingsRefreshSeq = 0;
+		// the skin gets its OWN sequence: resolving a locator touches the disk
+		// and finishes on its own schedule, so borrowing the settings counter
+		// would let any unrelated settings publication -- a dialog open, a load's
+		// refresh, a debounced pref write -- discard a resolved manifest that
+		// nothing ever re-reads
+		let skinRefreshSeq = 0;
+		// the ROW LIST has its own order, separate from the selection's: it is
+		// published from four places (a refresh, a success, and both superseded
+		// and gated import branches), the walk behind it is off-thread and
+		// unordered, and one of those callers has already proven itself stale --
+		// so the list it fetched is the one guaranteed NOT to hold what the
+		// newer operation is about to add. without a sequence that stale list can
+		// land last and leave the picker with no row for the active skin
+		let skinListSeq = 0;
+		const publishSkins = async () => {
+			const seq = ++skinListSeq;
+			const rows = await deps.listSkins();
+			if (seq === skinListSeq) set({ skins: rows });
+		};
+		const legacySelectable = hooks.legacySkinsSelectable ?? legacyAllowed();
 
 		// every preference the user has touched, counted under `group.key`.
 		// hydration cannot detect an in-flight edit by comparing values -- a drag
@@ -813,6 +882,9 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			pendingOpen: null,
 			audioDurationMs: null,
 			settings: null,
+			skin: null,
+			skins: [],
+			skinNotice: null,
 			overlays: DEFAULT_OVERLAYS,
 			editing: DEFAULT_EDITING,
 			effects: DEFAULT_EFFECTS,
@@ -1074,6 +1146,52 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					// before this feature hydrates it empty
 					...(editedInFlight("keybinds") ? {} : installKeybinds(settings.keybinds ?? NO_KEYBIND_OVERRIDES))
 				});
+				// the skin is resolved separately from the settings read, because the
+				// persisted locator is a POINTER and resolving it touches the disk:
+				// a folder that moved between sessions comes back as the bundled
+				// default with a fallback notice rather than as a failed startup,
+				// which is the same posture a stale beatmap association gets
+				// declared OUTSIDE the try: the catch publishes too, and a failure
+				// that has been superseded must no more overwrite a newer pick than
+				// a success would
+				let skinSeq = 0;
+				try {
+					skinSeq = ++skinRefreshSeq;
+					const skin = await deps.getSkin();
+					// guarded on the SKIN sequence, not the settings one: only a
+					// newer skin resolution may cancel this, and an explicit pick
+					// that landed while this was in flight is exactly that
+					//
+					// and the gate applies HERE too: a persisted locator is the third
+					// route to an active skin, beside select and import. a dev build
+					// and a shipped one share one settings file (the identifier in
+					// tauri.conf.json carries no dev suffix), so a legacy skin picked
+					// where the gate is open would otherwise come back active where it
+					// is shut. the SELECTION is deliberately left alone rather than
+					// rewritten -- the user picked it legitimately, and a dev build
+					// must still restore it; what is refused is drawing it
+					const gated = skin.era === "legacy" && !legacySelectable;
+					// and it SAYS so, like the other two routes: a null skin leaves
+					// every picker row unticked (the bundled one included) while the
+					// playfield draws Argon, which without a notice is exactly the
+					// "no row selected and no explanation" state the picker works to
+					// avoid everywhere else
+					if (skinSeq === skinRefreshSeq) {
+						set(gated ? { skin: null, skinNotice: LEGACY_GATE_REFUSAL } : { skin });
+					}
+				} catch (e) {
+					// a skin that will not load must never stop the app opening: the
+					// null the store started with reads as the bundled default
+					// everywhere, so there is nothing to substitute. but it is SAID,
+					// for the reason the gated branch above says it -- a null skin
+					// leaves every picker row unticked, and an unreadable folder or a
+					// cap breach is exactly the case a user needs told about, since
+					// unlike a stale locator it does not come back as a fallback
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					if (skinSeq === skinRefreshSeq) {
+						set({ skinNotice: `your skin could not be loaded: ${describeIpcError(error).title}` });
+					}
+				}
 				// an edit made while the read was in flight predates the persistence
 				// subscription (App installs it only once this resolves), and the
 				// guards above re-emit nothing for it afterwards, so no debounced
@@ -1127,6 +1245,144 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					// callers void this promise (SettingsDialog buttons), so a failed
 					// save must surface through the toast flow, not vanish as an
 					// unhandled rejection
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					set({ lastError: { error, osrPath: "" } });
+				}
+			},
+			refreshSkins: async () => {
+				try {
+					await publishSkins();
+				} catch (e) {
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					set({ lastError: { error, osrPath: "" } });
+				}
+			},
+			selectSkin: async (locator) => {
+				try {
+					// resolve first, publish once: the manifest is complete before
+					// anything downstream sees the change, which is what makes the
+					// swap atomic. a per-element progressive swap would momentarily
+					// produce exactly the mixed-era look the floor rule exists to
+					// prevent
+					const skinSeq = ++skinRefreshSeq;
+					const skin = await deps.setSkin(locator);
+					// a superseded pick stops HERE, before it notifies or writes
+					// anything. the gate branch below issues a backend settings write
+					// of its own, so checking the sequence only at publication time
+					// would let a stale refusal rewrite the file under a newer
+					// selection that had already landed -- leaving the picker showing
+					// one skin and the settings naming another. the newer call owns
+					// the persisted state, including undoing what this one persisted
+					if (skinSeq !== skinRefreshSeq) return;
+					// the gate is per-ROUTE, not per-row: browse… hands a locator the
+					// picker never enumerated, so without this a shipped build loads a
+					// legacy skin off disk and persists it. refusing here rather than
+					// before the call is forced -- the era is a property of the skin
+					// and is not known until it resolves
+					if (skin.era === "legacy" && !legacySelectable) {
+						set({ skinNotice: LEGACY_GATE_REFUSAL });
+						// `set_skin` already persisted the locator, so put the bundled
+						// default back rather than leaving the file naming a skin this
+						// build refuses to draw
+						const restored = await deps.setSkin(DEFAULT_SKIN);
+						// the restore was a backend settings WRITE, so it claims the
+						// settings sequence exactly as the success path below does: a
+						// getSettings() issued before it could otherwise resolve after
+						// it and republish the pre-refusal snapshot
+						settingsRefreshSeq += 1;
+						if (skinSeq === skinRefreshSeq) {
+							set((state) => ({
+								skin: restored,
+								settings: state.settings === null ? null : { ...state.settings, skin: DEFAULT_SKIN }
+							}));
+						}
+						return;
+					}
+					if (skinSeq !== skinRefreshSeq) return;
+					// ONE publication, deliberately: the manifest and the settings
+					// snapshot the dialog reads are one fact, and two sets would let a
+					// subscriber observe the new skin beside the old selection.
+					//
+					// the REQUESTED locator is what lands in settings, not the
+					// manifest's, and the two differ in exactly one case: a folder that
+					// does not resolve falls back to the bundled default while the
+					// selection keeps naming the folder. that is deliberate and is what
+					// the backend persisted -- the user asked for that skin, so
+					// restoring the folder restores the skin without them re-picking it
+					// the sequence bump is what publishSettings does and for the same
+					// reason: a getSettings() issued before this write could resolve
+					// after it and publish its pre-write snapshot over the selection
+					settingsRefreshSeq += 1;
+					set((state) => ({
+						skin,
+						skinNotice: null,
+						settings: state.settings === null ? null : { ...state.settings, skin: locator }
+					}));
+					// the row list is a separate fact and it MOVED: a folder skin is
+					// not enumerable, so the backend lists whichever one is selected.
+					// without refetching, browsing to a skin leaves the picker with no
+					// row matching the active locator -- nothing ticked at all
+					await publishSkins();
+				} catch (e) {
+					// a cap breach refuses the skin WHOLE and the previous selection
+					// stands -- which is why nothing is published before the setSkin
+					// await. past that point the re-list can also land here, with the
+					// selection already committed, and it must not undo it: the row
+					// list is a separate fact, exactly as importSkin says of its own
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					set({ lastError: { error, osrPath: "" } });
+				}
+			},
+			importSkin: async (path) => {
+				try {
+					const skinSeq = ++skinRefreshSeq;
+					const skin = await deps.importSkin(path);
+					// superseded imports stop before notifying or writing, as in
+					// selectSkin -- but the archive DID land, so the row list is still
+					// re-published. it is a separate fact from the selection (the
+					// success path publishes it separately for the same reason), and
+					// skipping it would leave the imported skin with no row anywhere
+					// until the dialog is reopened
+					if (skinSeq !== skinRefreshSeq) {
+						await publishSkins();
+						return;
+					}
+					// an .osk is legacy essentially always, so this is the route the
+					// gate would leak through most often. the archive still lands in
+					// the app-owned directory -- the import succeeded and the skin is
+					// there to select once the gate lifts; what is refused is making
+					// it the ACTIVE skin
+					if (skin.era === "legacy" && !legacySelectable) {
+						set({ skinNotice: LEGACY_GATE_REFUSAL });
+						const restored = await deps.setSkin(DEFAULT_SKIN);
+						// the restore was a backend settings WRITE, so it claims the
+						// settings sequence exactly as the success path below does: a
+						// getSettings() issued before it could otherwise resolve after
+						// it and republish the pre-refusal snapshot
+						settingsRefreshSeq += 1;
+						if (skinSeq === skinRefreshSeq) {
+							set((state) => ({
+								skin: restored,
+								settings: state.settings === null ? null : { ...state.settings, skin: DEFAULT_SKIN }
+							}));
+						}
+						await publishSkins();
+						return;
+					}
+					if (skinSeq !== skinRefreshSeq) return;
+					// the manifest's own locator here, not a requested one: only the
+					// import knows where the archive landed
+					settingsRefreshSeq += 1;
+					set((state) => ({
+						skin,
+						skinNotice: null,
+						settings: state.settings === null ? null : { ...state.settings, skin: skin.locator }
+					}));
+					// the row list is a separate publication because it is a separate
+					// fact: the import already succeeded and the skin is already
+					// selected, so a failed re-list must not undo either
+					await publishSkins();
+				} catch (e) {
 					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
 					set({ lastError: { error, osrPath: "" } });
 				}
@@ -1211,6 +1467,10 @@ export const viewerStore = createViewerStore(
 		setOsuStablePath: invokeSetOsuStablePath,
 		setViewerPrefs: invokeSetViewerPrefs,
 		clearRecents: invokeClearRecents,
+		listSkins: invokeListSkins,
+		getSkin: invokeGetSkin,
+		setSkin: invokeSetSkin,
+		importSkin: invokeImportSkin,
 		applyEdit: invokeApplyEdit,
 		undo: invokeUndo,
 		redo: invokeRedo,
@@ -1218,9 +1478,15 @@ export const viewerStore = createViewerStore(
 		resync: invokeResync,
 		exportReplay: invokeExportReplay
 	},
-	// every landed splice keeps the gesture preview's pending entries in the
-	// authoritative index space (editor/preview.ts)
-	{ onSplice: (changes) => gesturePreview.applySplice(changes) }
+	{
+		// every landed splice keeps the gesture preview's pending entries in the
+		// authoritative index space (editor/preview.ts)
+		onSplice: (changes) => gesturePreview.applySplice(changes),
+		// import.meta.env.DEV is vite's build-time flag, so the gate compiles out
+		// of a shipped bundle rather than being a runtime branch someone can
+		// trip. read at the composition root, as SkinCategory reads it for rows
+		legacySkinsSelectable: legacyAllowed({ development: import.meta.env.DEV })
+	}
 );
 
 export function useViewerStore<T>(selector: (state: ViewerState) => T): T {
