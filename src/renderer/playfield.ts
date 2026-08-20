@@ -1,6 +1,6 @@
 // playfield placement and object culling; pure math, no pixi imports
 
-import { PLAYFIELD_SIZE_ADJUST } from "../engine/argon";
+import { PLAYFIELD_SIZE_ADJUST } from "../engine/game-constants";
 
 /** osuplayfieldadjustmentcontainer.cs: 4:3 fit, x0.8, centred; scale is
  * screen px per osu!px against the 512-wide base */

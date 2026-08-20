@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SLIDER_BORDER_PORTION, SLIDER_PATH_RADIUS } from "./argon";
+import { SLIDER_BORDER_PORTION, SLIDER_PATH_RADIUS } from "@/skin/argon/constants";
 import { darken, rgba, withAlpha } from "./color";
 import { bakeSliderLut, colourAt } from "./slider-lut";
 
@@ -9,18 +9,18 @@ describe("argon slider gradient (argonsliderbody.cs:40-47)", () => {
 
 	test("the border portion is exactly the outer 20%", () => {
 		expect(SLIDER_BORDER_PORTION).toBe(0.2);
-		expect(colourAt(0, accent, border)).toEqual(border);
-		expect(colourAt(0.2, accent, border)).toEqual(border);
-		const fill = colourAt(0.2000001, accent, border);
+		expect(colourAt(0, accent, border, SLIDER_BORDER_PORTION)).toEqual(border);
+		expect(colourAt(0.2, accent, border, SLIDER_BORDER_PORTION)).toEqual(border);
+		const fill = colourAt(0.2000001, accent, border, SLIDER_BORDER_PORTION);
 		expect(fill.r).toBeCloseTo(0.2, 6); // darken(4) = ×0.2
 		expect(fill.g).toBeCloseTo(0.1, 6);
 		expect(fill.b).toBeCloseTo(0.05, 6);
 		expect(fill.a).toBeCloseTo(0.98, 6); // alpha preserved by darken
-		expect(colourAt(1, accent, border)).toEqual(fill); // flat fill, no gradient
+		expect(colourAt(1, accent, border, SLIDER_BORDER_PORTION)).toEqual(fill); // flat fill, no gradient
 	});
 
 	test("the baked lut matches smoothpath.cs:48-66", () => {
-		const { width, rgba: data } = bakeSliderLut(accent, border, SLIDER_PATH_RADIUS);
+		const { width, rgba: data } = bakeSliderLut(accent, border, SLIDER_PATH_RADIUS, SLIDER_BORDER_PORTION);
 		// (int)max(55.172, 1) * 2 = 110
 		expect(width).toBe(110);
 		expect(data.length).toBe(110 * 4);

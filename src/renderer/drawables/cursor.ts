@@ -6,7 +6,7 @@
 // draws whatever that yields for the current time
 
 import { Container, Sprite } from "pixi.js";
-import { CURSOR_SIZE } from "../../engine/argon";
+import { CURSOR_SIZE } from "@/engine/game-constants";
 import { darken, fromHex, toNumber } from "../../engine/color";
 import { outElasticHalf, outQuad } from "../../engine/easing";
 import { cursorStateAt } from "../../engine/interpolation";

@@ -5,7 +5,7 @@
 // border 3), argonreversearrow.cs (40x20 capsule, 16px double chevron)
 
 import { Container, Graphics, Sprite } from "pixi.js";
-import { GRADIENT_THICKNESS, OUTER_GRADIENT_SIZE } from "../../engine/argon";
+import { GRADIENT_THICKNESS, OUTER_GRADIENT_SIZE } from "@/skin/argon/constants";
 import { darken, toNumber, type Rgba } from "../../engine/color";
 import type { RenderContext } from "../GameplayRenderer";
 

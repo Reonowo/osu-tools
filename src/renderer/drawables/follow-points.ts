@@ -4,7 +4,7 @@
 // chevron; drawn here as canvas glyphs -- decision 8)
 
 import { Container, Sprite } from "pixi.js";
-import { FOLLOW_POINT_PREEMPT, FOLLOW_POINT_SPACING, PREEMPT_MIN } from "../../engine/argon";
+import { FOLLOW_POINT_PREEMPT, FOLLOW_POINT_SPACING, PREEMPT_MIN } from "../../engine/game-constants";
 import { fromHex, toNumber } from "../../engine/color";
 import { out } from "../../engine/easing";
 import { trackValueAt, tween, type Track } from "../../engine/transforms";

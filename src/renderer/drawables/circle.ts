@@ -8,13 +8,8 @@
 // drawablehitcircle.cs's ProxiedLayer without ever parenting outside `view`
 
 import { Container, Sprite, Text } from "pixi.js";
-import {
-	BORDER_THICKNESS,
-	INNER_FILL_SIZE,
-	INNER_GRADIENT_SIZE,
-	OBJECT_RADIUS,
-	OUTER_GRADIENT_SIZE
-} from "../../engine/argon";
+import { OBJECT_RADIUS } from "../../engine/game-constants";
+import { BORDER_THICKNESS, INNER_FILL_SIZE, INNER_GRADIENT_SIZE, OUTER_GRADIENT_SIZE } from "@/skin/argon/constants";
 import { darken, toNumber, type Rgba } from "../../engine/color";
 import { trackValueAt } from "../../engine/transforms";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";

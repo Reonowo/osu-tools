@@ -1,7 +1,7 @@
 // everything computed once per scene: analysis edges, playback bounds,
 // judgement lookups, the object lane, and severity ticks
 
-import { HIT_FADE_OUT_TIME } from "../engine/argon";
+import { HIT_FADE_OUT_TIME } from "../engine/game-constants";
 import type { PhysicalKey } from "../engine/buttons";
 import { buttonEdges, pressEdges, type ButtonEdges, type Press } from "../engine/interpolation";
 import { analyseScene, judgedTime, type ReplayAnalysis } from "./analysis";

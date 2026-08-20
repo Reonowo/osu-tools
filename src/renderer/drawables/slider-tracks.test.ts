@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOLLOW_AREA } from "../../engine/argon";
+import { FOLLOW_AREA } from "../../engine/game-constants";
 import { pathToProgress, positionAt } from "../../engine/slider-path";
 import { trackValueAt } from "../../engine/transforms";
 import type { FrameDto, RenderPlan } from "../../lib/scene-types";

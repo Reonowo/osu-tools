@@ -3,7 +3,7 @@
 // sh_path.fs + smoothpath.cs against the pinned framework)
 
 import { Container, Geometry, Mesh, RenderTexture, Shader, Sprite, Texture, type Renderer } from "pixi.js";
-import { SLIDER_BODY_ALPHA, SLIDER_PATH_RADIUS } from "../../engine/argon";
+import { SLIDER_BODY_ALPHA, SLIDER_BORDER_PORTION, SLIDER_PATH_RADIUS } from "@/skin/argon/constants";
 import { withAlpha, type Rgba } from "../../engine/color";
 import { bakeSliderLut } from "../../engine/slider-lut";
 import { pathToProgress } from "../../engine/slider-path";
@@ -192,7 +192,13 @@ export class SliderBodyRenderer {
 		// keeps the texture it was built with until the drawable is recreated
 		this.target = RenderTexture.create(distanceTextureOptions(currentDensityBucket(), this.bounds));
 
-		const { width, rgba } = bakeSliderLut(withAlpha(accent, SLIDER_BODY_ALPHA), accent, this.radius);
+		// the era's border portion is the caller's to supply -- argon's here
+		const { width, rgba } = bakeSliderLut(
+			withAlpha(accent, SLIDER_BODY_ALPHA),
+			accent,
+			this.radius,
+			SLIDER_BORDER_PORTION
+		);
 		// explicit format: bufferimagesource.mjs defaults a raw Uint8Array to
 		// bgra8unorm (harmless under webgl, where bgra8unorm and rgba8unorm both
 		// map to gl.RGBA with no byte swizzle -- but wgpu does distinguish them,

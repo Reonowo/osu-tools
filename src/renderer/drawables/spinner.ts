@@ -4,7 +4,7 @@
 // simulation's spinnerspin events
 
 import { Container, Graphics } from "pixi.js";
-import { SPINNER_FADE_OUT_TIME } from "../../engine/argon";
+import { SPINNER_FADE_OUT_TIME } from "../../engine/game-constants";
 import { isLeft, isRight } from "../../engine/buttons";
 import { cursorStateAt } from "../../engine/interpolation";
 import { jump, trackValueAt, tween, type Track } from "../../engine/transforms";

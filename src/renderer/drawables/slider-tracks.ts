@@ -3,7 +3,7 @@
 // argonfollowcircle.cs, drawableslidertick.cs, drawablesliderrepeat.cs,
 // argonreversearrow.cs, drawableosuhitobject.cs
 
-import { FOLLOW_AREA, OBJECT_RADIUS, SLIDER_FADE_OUT_TIME } from "../../engine/argon";
+import { FOLLOW_AREA, OBJECT_RADIUS, SLIDER_FADE_OUT_TIME } from "../../engine/game-constants";
 import { isLeft, isRight } from "../../engine/buttons";
 import { cursorStateAt } from "../../engine/interpolation";
 import { outQuad, outQuint, outElasticHalf, out } from "../../engine/easing";

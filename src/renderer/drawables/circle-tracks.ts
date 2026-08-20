@@ -3,7 +3,8 @@
 // argonmaincirclepiece.cs:158-231 (the hit explosion, hit-lighting on),
 // drawableosuhitobject.cs:115-124 (dim, lifetime offset)
 
-import { BORDER_THICKNESS, DIM_TINT, HIT_FADE_OUT_TIME, MISS_WINDOW, OBJECT_RADIUS } from "../../engine/argon";
+import { DIM_TINT, HIT_FADE_OUT_TIME, MISS_WINDOW, OBJECT_RADIUS } from "../../engine/game-constants";
+import { BORDER_THICKNESS } from "@/skin/argon/constants";
 import { none, outElasticHalf, outQuad, outQuint } from "../../engine/easing";
 import { jump, tween, type Track } from "../../engine/transforms";
 import type { Grade, JudgementEventDto } from "../../lib/scene-types";
