@@ -21,6 +21,11 @@
 //! migration.
 //! v9 adds `gameplay`: the two gameplay preferences that are not render
 //! effects (positional hitsound level, always-play-first-combo-break).
+//! v10 adds `skin`: the selected skin, as a discriminated locator. it is an
+//! app-wide preference and is deliberately NOT carried on a recents entry
+//! the way a beatmap association is -- opening a recent replay must never
+//! silently change the app's whole appearance. a v9 file hydrates it as the
+//! bundled default, which is the same look that build drew.
 //!
 //! every field is `#[serde(default)]` at the container level, so a v1 file --
 //! or any future file written by an older build -- hydrates the new fields
@@ -33,6 +38,8 @@ use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::skin::SkinLocator;
 
 pub const SETTINGS_FILE: &str = "settings.json";
 
@@ -116,6 +123,18 @@ fn keybind_strings_within_cap(value: &serde_json::Value) -> bool {
     }
 }
 
+/// same posture as `lenient_keybinds`, and for the same reason: a newer build's
+/// locator kind -- or a hand edit -- must not fail the whole settings parse.
+/// `load_settings` swallows a parse error into `Settings::default()` and the
+/// next write persists it, so a strict field here does not reset the SKIN, it
+/// resets the stable path, the recents and every keybind override with it. an
+/// unrecognised kind falls back to the bundled default, which is the same
+/// answer a locator that no longer resolves already gets
+fn lenient_skin<'de, D: Deserializer<'de>>(deserializer: D) -> Result<SkinLocator, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -145,6 +164,12 @@ pub struct Settings {
     /// improvement to a default reach someone who has opened this surface
     #[serde(deserialize_with = "lenient_keybinds")]
     pub keybinds: KeybindOverrides,
+    /// the skin the user picked. a locator that no longer resolves is a MISS
+    /// resolved at load time (`skin::load_skin` falls back to the bundled
+    /// default and reports that it happened), never a parse failure here -- a
+    /// tidied disk must not stop the app opening
+    #[serde(deserialize_with = "lenient_skin")]
+    pub skin: SkinLocator,
 }
 
 impl Default for Settings {
@@ -160,6 +185,7 @@ impl Default for Settings {
             effects: EffectPrefs::default(),
             timeline: TimelinePrefs::default(),
             keybinds: KeybindOverrides::new(),
+            skin: SkinLocator::default(),
         }
     }
 }
@@ -500,6 +526,9 @@ mod tests {
                 severity_ticks: true,
             },
             keybinds: keybinds([("selectTool", json!({ "hotkey": "К", "codes": ["KeyV"] }))]),
+            skin: SkinLocator::Stable {
+                path: r"D:\games\osu!\Skins\Rafis 2016".into(),
+            },
         }
     }
 
@@ -632,6 +661,10 @@ mod tests {
                     "severityTicks": true,
                 },
                 "keybinds": { "selectTool": [{ "hotkey": "К", "codes": ["KeyV"] }] },
+                // the discriminated locator: both the KIND of location and the
+                // path, so a folder skin and a stable one that happen to share
+                // a path still resolve through their own rules
+                "skin": { "kind": "stable", "path": r"D:\games\osu!\Skins\Rafis 2016" },
             })
         );
 
@@ -675,8 +708,53 @@ mod tests {
                     "severityTicks": true,
                 },
                 "keybinds": {},
+                // a fresh install draws the app's own look, and that look is a
+                // selectable row rather than a "nothing selected" state
+                "skin": { "kind": "bundled" },
             })
         );
+    }
+
+    #[test]
+    fn a_settings_file_written_before_the_skin_field_hydrates_on_the_bundled_default() {
+        // the same posture every added field gets: an older build's file loads
+        // with the new field at its default rather than failing the parse and
+        // taking the stable path down with it
+        let older: Settings = serde_json::from_value(json!({
+            "osuStablePath": r"D:\osu!",
+            "volume": 42,
+        }))
+        .expect("a v9 file still parses");
+        assert_eq!(older.skin, SkinLocator::Bundled);
+        assert_eq!(older.volume, 42);
+    }
+
+    #[test]
+    fn an_unrecognised_skin_locator_kind_does_not_take_the_settings_file_down() {
+        // a newer build's locator kind, or a hand edit. exactly the keybind
+        // posture: the bad field alone falls back, because `load_settings`
+        // swallows a parse error into the DEFAULTS for the whole file -- so a
+        // strict field here would not reset the skin, it would reset the stable
+        // path, the recents and every override, which is the thing that breaks
+        // every load
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path()).unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            serde_json::to_string(&json!({
+                "volume": 42,
+                "osuStablePath": r"D:\games\osu!",
+                "skin": { "kind": "fromTheFuture", "path": "x" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.skin, SkinLocator::Bundled, "the unknown kind falls back on its own");
+        // and the rest of the file survived it, which is the whole point
+        assert_eq!(loaded.osu_stable_path.as_deref(), Some(r"D:\games\osu!"));
+        assert_eq!(loaded.volume, 42);
     }
 
     #[test]
