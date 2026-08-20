@@ -13,6 +13,9 @@ import { Application, Container, Graphics, RenderLayer, type Renderer } from "pi
 import { fromBytes, type Rgba } from "../engine/color";
 import { objectAccents } from "../skin/combo-colours";
 import { sameSelection } from "../skin/picker";
+import { BUNDLED_SKIN } from "../skin/texture-sources";
+import { resolvePieces, ALL_PIECES_ENABLED, type SkinPieces } from "../skin/pieces";
+import type { SkinTextureLookup } from "./skin-textures";
 import { HIT_FADE_OUT_TIME } from "../engine/game-constants";
 import type { BrushRing, ChromeShape, PreviewSnapshot } from "../editor/preview";
 import type { DerivedScene } from "../lib/derive";
@@ -88,6 +91,17 @@ export interface RenderContext {
 	derived: DerivedScene;
 	/** per-object accent colours (comboColours[comboColourIndex % len]) */
 	accents: Rgba[];
+	/** the active skin's manifest, normalised: a null selection is the bundled
+	 * default, which is a skin like any other rather than an absence */
+	skin: SkinManifest;
+	/** what the active skin draws for each element, resolved once per build.
+	 * a drawable reads its own element's spec and never re-resolves: piece
+	 * selection is a decision, and one decision per build is what makes the
+	 * swap atomic */
+	pieces: SkinPieces;
+	/** an already-loaded skin texture, by the url its spec named. null when the
+	 * file failed to load, which draws as nothing rather than as an error */
+	skinTexture: SkinTextureLookup;
 	textures: TextureBaker;
 	/** the pixi renderer, needed for the slider body's prepass render({ target }) calls */
 	renderer: Renderer;
@@ -217,6 +231,31 @@ export function applyDevicePixelRatio(target: ResolutionTarget, dpr: number, wid
 	target.resize(widthPx, heightPx);
 }
 
+/**
+ * what the renderer is handed for a skin: the manifest, the pieces resolved
+ * from it, and the loaded textures those pieces name.
+ *
+ * the three travel together because they must be consistent -- a pieces object
+ * naming a url the store has not loaded would draw a hole -- and because that
+ * is what makes the swap one publication rather than three
+ */
+export interface SkinBundle {
+	/** null is the bundled default, the same reading the store gives it */
+	manifest: SkinManifest | null;
+	pieces: SkinPieces;
+	texture: SkinTextureLookup;
+}
+
+/** the pieces before the first install: argon, procedural, nothing loaded. a
+ * scene can be installed before the startup hydrate resolves, and every element
+ * argon draws is code rather than a file, so this is complete rather than a
+ * placeholder */
+const ARGON_PIECES: SkinPieces = resolvePieces({
+	skin: BUNDLED_SKIN,
+	sources: [],
+	prefs: ALL_PIECES_ENABLED
+});
+
 export class GameplayRenderer {
 	private app!: Application;
 	private root = new Container();
@@ -239,9 +278,10 @@ export class GameplayRenderer {
 	private zoom = DEFAULT_VIEWPORT_ZOOM;
 	private pan: ViewportPan = NO_VIEWPORT_PAN;
 	private overlays: OverlaySettings | null = null;
-	/** the active skin; null until the startup hydrate resolves, which reads as
-	 * the bundled default rather than as "no skin" -- there is no such state */
-	private skin: SkinManifest | null = null;
+	/** the active skin, already resolved and already loaded. null until the
+	 * first install, which reads as the bundled default rather than as "no
+	 * skin" -- there is no such state */
+	private skinBundle: SkinBundle | null = null;
 	/** master already folded in; null until the first setEffects */
 	private effects: EffectSettings | null = null;
 	/** null in watch mode; set by PlayerView on mode changes */
@@ -385,7 +425,10 @@ export class GameplayRenderer {
 			// because the engine stopped substituting one: it emits the beatmap's
 			// declared colours or null, and the layer that knows the active skin
 			// decides what a null means (skin/combo-colours.ts)
-			accents: objectAccents(scene.renderPlan, this.skin).map(fromBytes),
+			accents: objectAccents(scene.renderPlan, this.skinBundle?.manifest ?? null).map(fromBytes),
+			skin: this.skinBundle?.manifest ?? BUNDLED_SKIN,
+			pieces: this.skinBundle?.pieces ?? ARGON_PIECES,
+			skinTexture: this.skinBundle?.texture ?? (() => null),
 			textures,
 			renderer: this.app.renderer,
 			getOverlays: () => this.overlays ?? DEFAULT_OVERLAYS,
@@ -442,29 +485,27 @@ export class GameplayRenderer {
 	}
 
 	/**
-	 * the active skin.
+	 * the active skin, resolved and loaded.
 	 *
-	 * the swap is atomic by construction: the whole manifest is resolved before
-	 * it reaches here, and installing it rebuilds every drawable in one step. a
-	 * per-element progressive swap is rejected -- it would momentarily produce
-	 * exactly the mixed-era playfield the classic floor exists to prevent.
+	 * the swap is atomic by construction, and this is the method that makes it
+	 * so: the caller resolves the whole manifest, loads every texture it named,
+	 * and only then publishes -- so installing it here is one synchronous
+	 * rebuild of every drawable. a per-element progressive swap is rejected,
+	 * because it would momentarily produce exactly the mixed-era playfield the
+	 * classic floor exists to prevent.
 	 *
 	 * the rebuild goes through setScene, which is the same path a density move
 	 * and a hit-animation toggle already take, so the playhead is untouched:
 	 * nothing here consults or moves the clock
 	 */
-	setSkin(skin: SkinManifest | null): void {
-		// compared by SELECTION, not by object identity: the manifest arrives
-		// fresh off ipc every time, so an identity check would never fire and
-		// re-picking the row that is already active would tear down and rebuild
-		// every drawable -- each live slider's render texture, lut, geometry and
-		// two shaders -- for a no-op
-		if (sameSelection(this.skin, skin)) return;
-		this.skin = skin;
-		// the combo accent is baked into the procedural cache's keys and the
-		// accent is a skin decision, so the previous palette's bakes are dead
-		// the moment the skin changes. bucket eviction cannot reach them
-		textures.clearAccentTextures();
+	setSkin(bundle: SkinBundle): void {
+		// the accent is baked into the procedural cache's keys and the palette is
+		// a skin decision, so the previous skin's bakes are dead the moment the
+		// SELECTION moves. compared by selection rather than by object identity:
+		// the manifest arrives fresh off ipc every time, and a mere preference
+		// change republishes the same skin with different pieces
+		if (!sameSelection(this.skinBundle?.manifest ?? null, bundle.manifest)) textures.clearAccentTextures();
+		this.skinBundle = bundle;
 		if (this.ctx !== null) {
 			const { scene, derived } = this.ctx;
 			this.setScene(scene, derived);
