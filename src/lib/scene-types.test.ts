@@ -5,6 +5,7 @@ import {
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
+	DEFAULT_SKIN,
 	DEFAULT_TIMELINE
 } from "../state/defaults";
 import type {
@@ -165,7 +166,8 @@ describe("scene contract mirror", () => {
 			editing: DEFAULT_EDITING,
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
-			keybinds: { selectTool: [{ hotkey: "К", codes: ["KeyV"] }], eraseTool: [] }
+			keybinds: { selectTool: [{ hotkey: "К", codes: ["KeyV"] }], eraseTool: [] },
+			skin: DEFAULT_SKIN
 		};
 		expect(settings.keybinds.selectTool?.[0].codes).toEqual(["KeyV"]);
 		expect(settings.keybinds.eraseTool).toEqual([]);

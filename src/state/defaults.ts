@@ -9,6 +9,7 @@ import type {
 	GameplaySettings,
 	EffectSettings,
 	OverlaySettings,
+	SkinLocator,
 	TimelineSettings
 } from "../lib/scene-types";
 
@@ -196,3 +197,9 @@ export function clampDetailSpan(spanMs: number): number {
 	if (!Number.isFinite(spanMs)) return DETAIL_SPAN_MAX;
 	return Math.min(Math.max(spanMs, DETAIL_SPAN_MIN), DETAIL_SPAN_MAX);
 }
+
+/** mirrors settings.rs `SkinLocator::default()`.
+ *
+ * the app's own look is a selectable ROW rather than a "nothing selected"
+ * state, which is what makes "no skin" and "Argon" one concept rather than two */
+export const DEFAULT_SKIN: SkinLocator = { kind: "bundled" };

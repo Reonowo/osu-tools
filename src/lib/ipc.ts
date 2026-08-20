@@ -12,6 +12,9 @@ import type {
 	LoadedScene,
 	OverlaySettings,
 	Settings,
+	SkinEntry,
+	SkinLocator,
+	SkinManifest,
 	TimelineSettings
 } from "./scene-types";
 
@@ -89,6 +92,29 @@ export function invokeSetViewerPrefs(
 
 export function invokeClearRecents(): Promise<Settings> {
 	return invoke<Settings>("clear_recents");
+}
+
+/** every skin the app knows about: the bundled row, the detected stable
+ * install's, then the imported ones. a refused skin is IN this list, carrying
+ * its reason -- omitting it would leave the user hunting for a skin they can
+ * see on disk */
+export function invokeListSkins(): Promise<SkinEntry[]> {
+	return invoke<SkinEntry[]>("list_skins");
+}
+
+/** the persisted selection, resolved. a locator that no longer points at a
+ * skin comes back as the bundled default with `fellBack` set: a miss, not an
+ * error, on the same terms as a stale beatmap association */
+export function invokeGetSkin(): Promise<SkinManifest> {
+	return invoke<SkinManifest>("get_skin");
+}
+
+export function invokeSetSkin(locator: SkinLocator): Promise<SkinManifest> {
+	return invoke<SkinManifest>("set_skin", { locator });
+}
+
+export function invokeImportSkin(path: string): Promise<SkinManifest> {
+	return invoke<SkinManifest>("import_skin", { path });
 }
 
 export function invokeApplyEdit(epoch: number, baseRevision: number, ops: EditOp[], label: string): Promise<EditDelta> {

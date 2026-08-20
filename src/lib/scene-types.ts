@@ -197,8 +197,14 @@ export type SimulationDto =
 
 export interface RenderPlan {
 	playfield: { width: number; height: number };
-	/// rgba rows; consumers pick comboColours[comboColourIndex % length]
-	comboColours: [number, number, number, number][];
+	/** the BEATMAP's own declared palette, or null when it declared none.
+	 *
+	 * nullable because the engine stopped substituting: picking a palette is a
+	 * skin decision and that layer has no concept of a skin. `skin/combo-colours.ts`
+	 * is where a null is filled -- the skin's declared colours, else that skin's
+	 * era default. per-object data is unaffected by the length, since the index is
+	 * offset-based and the modulo is applied by the consumer */
+	comboColours: [number, number, number, number][] | null;
 	hitWindows: { great: number; ok: number; meh: number; miss: number };
 	scale: number;
 	preempt: number;
@@ -447,6 +453,94 @@ export interface GameplaySettings {
 	alwaysPlayFirstComboBreak: boolean;
 }
 
+/** mirrors skin.rs SkinSource */
+export type SkinSource = "bundled" | "stable" | "folder" | "imported";
+
+/** mirrors skin.rs SkinEra -- the rule set a skin's lookups and drawing obey.
+ * a property of the skin, never a setting */
+export type SkinEra = "lazer" | "legacy";
+
+/** mirrors skin.rs SkinLocator: both the KIND of location and the path, so a
+ * folder skin and a stable one that happen to share a path still resolve
+ * through their own rules */
+export type SkinLocator =
+	| { kind: "bundled" }
+	| { kind: "stable"; path: string }
+	| { kind: "folder"; path: string }
+	| { kind: "imported"; path: string };
+
+/** mirrors skin.rs SkinConfigDto. a null field means the skin did not answer,
+ * which is distinct from a declared false or 0 -- the drawables' own defaults
+ * apply only to a null, and each is cited at its draw site */
+export interface SkinConfigDto {
+	/** what a LegacySetting.Version lookup answers: the declared version or the
+	 * latest. every version fork in the drawing code compares against this */
+	version: number;
+	isLatestVersion: boolean;
+	/** the DECLARED palette, empty when the skin declared none */
+	comboColours: [number, number, number, number][];
+	sliderBorder: [number, number, number, number] | null;
+	sliderTrackOverride: [number, number, number, number] | null;
+	animationFramerate: number | null;
+	layeredHitSounds: boolean | null;
+	allowSliderBallTint: boolean | null;
+	comboPrefix: string | null;
+	comboOverlap: number | null;
+	hitCirclePrefix: string | null;
+	hitCircleOverlap: number | null;
+	cursorCentre: boolean | null;
+	cursorExpand: boolean | null;
+	cursorRotate: boolean | null;
+	cursorTrailRotate: boolean | null;
+	hitCircleOverlayAboveNumber: boolean | null;
+	spinnerFrequencyModulate: boolean | null;
+	spinnerNoBlink: boolean | null;
+	settings: Record<string, string>;
+}
+
+/** mirrors skin.rs SkinEntry -- one row in the picker */
+export interface SkinEntry {
+	locator: SkinLocator;
+	name: string;
+	author: string;
+	source: SkinSource;
+	era: SkinEra;
+	/** a named reason this skin cannot load, or null. a refused skin still
+	 * appears: omitting it would leave the user hunting for a skin they can see
+	 * on disk */
+	refusal: string | null;
+}
+
+/** mirrors skin.rs SkinFallback */
+export interface SkinFallback {
+	requested: SkinLocator;
+	reason: string;
+}
+
+/** mirrors skin.rs SkinManifest: the resolved file map plus the decoded
+ * configuration. held BESIDE the scene rather than on it, because a skin is
+ * app-wide and changes without a scene reload */
+export interface SkinManifest {
+	locator: SkinLocator;
+	name: string;
+	author: string;
+	source: SkinSource;
+	era: SkinEra;
+	/** lowercased file name (extension included) -> absolute path. the file
+	 * map, not a lookup map: which of `cursor@2x.png` and `cursor.png` answers a
+	 * `cursor` lookup is an era rule, and era rules live in the lookup chain */
+	files: Record<string, string>;
+	/** the file names whose image is 1x1 or smaller. shipping a blank asset is
+	 * the standard way a skinner REMOVES an element, so this is a decision and
+	 * not an absence -- it is what lets a texture lookup answer `empty` rather
+	 * than `found`, keeping "the skin drew nothing" decidable without a canvas */
+	blank: string[];
+	config: SkinConfigDto;
+	/** set when the requested locator did not resolve and the bundled default
+	 * answered instead -- the miss posture, surfaced rather than swallowed */
+	fellBack: SkinFallback | null;
+}
+
 /** mirrors settings.rs Settings */
 export interface Settings {
 	osuStablePath: string | null;
@@ -462,4 +556,8 @@ export interface Settings {
 	effects: EffectSettings;
 	timeline: TimelineSettings;
 	keybinds: KeybindOverrides;
+	/** app-wide, and deliberately NOT carried on a recents entry the way a
+	 * beatmap association is: opening a recent replay must never silently change
+	 * the app's whole appearance */
+	skin: SkinLocator;
 }
