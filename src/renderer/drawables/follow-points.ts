@@ -1,10 +1,20 @@
 // follow point connections (followpointconnection.cs:55-123,
-// followpointlifetimeentry.cs:82-96) with the argon chevron
-// (argonfollowpoint.cs: additive, #fc618f->#bb1a41 gradient, 8px double
-// chevron; drawn here as canvas glyphs -- decision 8)
+// followpointlifetimeentry.cs:82-96), one era-invariant drawable over two
+// pieces: the argon chevron (argonfollowpoint.cs: additive, #fc618f->#bb1a41
+// gradient, 8px double chevron; drawn here as canvas glyphs -- decision 8) or
+// the skin's own `followpoint`, animated.
+//
+// the CONNECTION is not skinnable and never was: the spacing, the preempt and
+// the per-point fade come from the ruleset constants that were split out of the
+// skin (engine/game-constants.ts), so a skin decides what a chevron looks like
+// and nothing about where they go.
+//
+// the preference decides WHETHER: with follow points off the chain is never
+// asked, so the spec here is already `hidden` and there is no lookup to make
 
 import { Container, Sprite } from "pixi.js";
 import { FOLLOW_POINT_PREEMPT, FOLLOW_POINT_SPACING, PREEMPT_MIN } from "../../engine/game-constants";
+import { SkinSprite } from "../skin-sprite";
 import { fromHex, toNumber } from "../../engine/color";
 import { out } from "../../engine/easing";
 import { trackValueAt, tween, type Track } from "../../engine/transforms";
@@ -74,11 +84,24 @@ const CHEVRON_TOP = fromHex("FC618F");
  * for its round caps */
 const CHEVRON_SIZE = 12;
 
+/** the per-point fade, move and pop, which are the connection's and not any
+ * skin's -- both eras animate the identical envelope */
+function followPointTracks(spec: FollowPointSpec): { alpha: Track[]; move: Track[]; scale: Track[] } {
+	return {
+		alpha: [tween(spec.fadeInTime, spec.fadeDuration, 0, 1), tween(spec.fadeOutTime, spec.fadeDuration, 1, 0)],
+		move: [tween(spec.fadeInTime, spec.fadeDuration, 0, 1, out)],
+		scale: [tween(spec.fadeInTime, spec.fadeDuration, 1.5, 1, out)]
+	};
+}
+
 export class FollowPointsDrawable implements ObjectDrawable {
 	readonly view = new Container();
 	private readonly specs: FollowPointSpec[];
 	private readonly tracker: ActiveSetTracker;
-	private readonly sprites = new Map<number, { sprite: Sprite; alpha: Track[]; move: Track[]; scale: Track[] }>();
+	private readonly sprites = new Map<
+		number,
+		{ view: Container; frames: SkinSprite | null; alpha: Track[]; move: Track[]; scale: Track[] }
+	>();
 	private readonly scale: number;
 
 	constructor(private readonly ctx: RenderContext) {
@@ -109,6 +132,28 @@ export class FollowPointsDrawable implements ObjectDrawable {
 			this.tracker.update(t),
 			(index) => {
 				const spec = this.specs[index];
+				const piece = this.ctx.pieces.followPoint;
+				if (piece.kind === "hidden") {
+					// a skin's blank `followpoint` removed the element; falling
+					// through to the chevron would resurrect exactly what that
+					// blank asset removed. the empty entry keeps the tracker's
+					// bookkeeping identical either way
+					const view = new Container();
+					this.view.addChild(view);
+					return { view, frames: null, ...followPointTracks(spec) };
+				}
+				if (piece.kind === "textured") {
+					// legacy follow points are NOT additive: the additive blend is
+					// DefaultFollowPoint's own, not the element's
+					const frames = new SkinSprite(this.ctx.skinTexture, piece);
+					frames.view.rotation = spec.rotation;
+					this.view.addChild(frames.view);
+					return {
+						view: frames.view,
+						frames,
+						...followPointTracks(spec)
+					};
+				}
 				const sprite = new Sprite(
 					this.ctx.textures.canvasTexture(CHEVRON_SIZE, "followpoint", (c, size) => {
 						// the glyph is written as fractions of the canvas, which is
@@ -133,30 +178,24 @@ export class FollowPointsDrawable implements ObjectDrawable {
 				sprite.tint = toNumber(CHEVRON_TOP);
 				sprite.blendMode = "add";
 				this.view.addChild(sprite);
-				return {
-					sprite,
-					alpha: [
-						tween(spec.fadeInTime, spec.fadeDuration, 0, 1),
-						tween(spec.fadeOutTime, spec.fadeDuration, 1, 0)
-					],
-					move: [tween(spec.fadeInTime, spec.fadeDuration, 0, 1, out)],
-					scale: [tween(spec.fadeInTime, spec.fadeDuration, 1.5, 1, out)]
-				};
+				return { view: sprite, frames: null, ...followPointTracks(spec) };
 			},
-			(entry) => entry.sprite.destroy()
+			(entry) => entry.view.destroy({ children: true })
 		);
 		for (const [index, entry] of this.sprites) {
 			const spec = this.specs[index];
 			const k = trackValueAt(entry.move, t, 0);
-			entry.sprite.position.set(
-				spec.fromX + (spec.toX - spec.fromX) * k,
-				spec.fromY + (spec.toY - spec.fromY) * k
-			);
-			entry.sprite.alpha = trackValueAt(entry.alpha, t, 0);
+			entry.view.position.set(spec.fromX + (spec.toX - spec.fromX) * k, spec.fromY + (spec.toY - spec.fromY) * k);
+			entry.view.alpha = trackValueAt(entry.alpha, t, 0);
 			const s = trackValueAt(entry.scale, t, 1.5) * this.scale;
-			// the texture measures CHEVRON_SIZE osu!px whatever bucket baked it,
-			// so the tracked scale is the entire factor
-			entry.sprite.scale.set(s);
+			// the argon texture measures CHEVRON_SIZE osu!px whatever bucket baked
+			// it, and a skin sprite is already sized in osu!px, so the tracked
+			// scale is the entire factor either way
+			entry.view.scale.set(s);
+			// osulegacyskintransformer.cs:160 -- startAtCurrentTime is FALSE, so
+			// the animation runs from this connection's own appearance rather than
+			// from wherever the clock happens to be
+			entry.frames?.setElapsed(t - spec.fadeInTime);
 		}
 	}
 

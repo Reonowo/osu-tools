@@ -5,6 +5,7 @@ import { deriveScene } from "../../lib/derive";
 import type { RenderObject } from "../../lib/scene-types";
 import { DEFAULT_EFFECTS, effectiveEffects } from "../../state/defaults";
 import { testScene } from "../../test/scene";
+import { testSkinContext } from "@/test/skin";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
 import { FollowPointsDrawable, generateFollowPoints } from "./follow-points";
 import { objectAccents } from "@/skin/combo-colours";
@@ -98,6 +99,7 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 		// beatmap's declared colours or null, and a null skin is the bundled
 		// default, so these tests see argon's own six
 		accents: objectAccents(scene.renderPlan, null).map(fromBytes),
+		...testSkinContext(),
 		textures: noCanvas,
 		renderer: {} as unknown as Renderer,
 		getOverlays: () => ({
