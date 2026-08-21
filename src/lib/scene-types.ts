@@ -562,9 +562,12 @@ export interface SkinManifest {
 	author: string;
 	source: SkinSource;
 	era: SkinEra;
-	/** lowercased file name (extension included) -> absolute path. the file
-	 * map, not a lookup map: which of `cursor@2x.png` and `cursor.png` answers a
-	 * `cursor` lookup is an era rule, and era rules live in the lookup chain */
+	/** lowercased relative path (extension included, `/`-joined for a file in a
+	 * subdirectory) -> absolute path. the file map, not a lookup map: which of
+	 * `cursor@2x.png` and `cursor.png` answers a `cursor` lookup is an era
+	 * rule, and era rules live in the lookup chain. subdirectory keys are what
+	 * a skin.ini prefix such as `HitCirclePrefix: Assets/default/default`
+	 * resolves through */
 	files: Record<string, string>;
 	/** the file names whose image is 1x1 or smaller. shipping a blank asset is
 	 * the standard way a skinner REMOVES an element, so this is a decision and
