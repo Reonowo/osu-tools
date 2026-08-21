@@ -221,10 +221,14 @@ pub struct SkinManifest {
     pub author: String,
     pub source: SkinSource,
     pub era: SkinEra,
-    /// lowercased file name (extension included) -> absolute path. the file
-    /// map, not a lookup map: which of `cursor@2x.png` and `cursor.png`
-    /// answers a `cursor` lookup is an era rule, and era rules live in the
-    /// frontend's lookup chain beside the sample ones.
+    /// lowercased relative path (extension included, `/`-joined for a file in
+    /// a subdirectory) -> absolute path. the file map, not a lookup map: which
+    /// of `cursor@2x.png` and `cursor.png` answers a `cursor` lookup is an era
+    /// rule, and era rules live in the frontend's lookup chain beside the
+    /// sample ones. subdirectory keys are what a skin.ini prefix such as
+    /// `HitCirclePrefix: Assets/default/default` resolves through -- the same
+    /// full-relative-path keying lazer's own store uses
+    /// (RealmBackedResourceStore.cs:48-59).
     ///
     /// the key is UNICODE-lowercased, not ascii-lowercased, because the side
     /// that builds the lookup key is javascript and `String.toLowerCase` folds
@@ -446,12 +450,27 @@ pub fn load_skin(locator: &SkinLocator) -> Result<SkinManifest, IpcError> {
 /// walk a skin directory: every texture and sample file it holds, plus its
 /// decoded `skin.ini`.
 ///
-/// deliberately NOT recursive. osu! skins are flat by format -- every asset
-/// sits beside `skin.ini` -- and a recursive walk would turn a skin folder
-/// someone dropped a backup into (a common enough habit) into a scan of
-/// arbitrary depth for no gain
-/// every cap a LOAD applies, run over a directory before anything else acts on
-/// it.
+/// the walk RECURSES into subdirectories, because osu! skins are not flat by
+/// format: the skin.ini prefix keys (`HitCirclePrefix: Assets/default/default`)
+/// name files at depth, and both stable and lazer resolve them (lazer keys its
+/// lookup on the file's full relative path -- RealmBackedResourceStore.cs:48-59).
+/// a skin is untrusted third-party input, so the walk holds four properties:
+///
+/// - **symlinks are never followed**, files or directories. `DirEntry::file_type`
+///   reports a reparse point or symlink as neither a file nor a directory, and
+///   both branches additionally refuse `is_symlink`, so nothing outside the
+///   canonicalized root can ever be read through it
+/// - **depth and breadth are capped** (`MAX_SKIN_DIR_DEPTH`, `MAX_SKIN_DIRS`),
+///   each a named refusal like every other cap, so a folder someone dropped a
+///   backup into refuses loudly rather than scanning without bound
+/// - **map keys are built by the walk itself** -- lowercased entry names joined
+///   with `/` -- never parsed from any string the skin controls, so a `..` or an
+///   absolute component cannot occur in one
+/// - **dot-prefixed directories are skipped** (`.git` is common in distributed
+///   skins), matching the dot-skip the skins root already applies
+///
+/// `validate_skin_dir` is every cap a LOAD applies, run over a directory before
+/// anything else acts on it.
 ///
 /// the `.osk` import needs this: its own budgets bound the archive (member
 /// count, total and per-file bytes) but not the load-side ones (texture count,
@@ -482,6 +501,10 @@ pub struct SkinBudgets {
     /// each spend the whole 256 MiB. a parameter here for the same reason the
     /// rest are -- the real value is far too large to drive a boundary test
     pub max_sample_bytes: u64,
+    /// deepest subdirectory nesting the walk follows below the skin root
+    pub max_depth: usize,
+    /// most subdirectories one walk may visit in total
+    pub max_dirs: usize,
 }
 
 impl Default for SkinBudgets {
@@ -493,6 +516,8 @@ impl Default for SkinBudgets {
             max_textures: limits::MAX_SKIN_TEXTURES,
             max_animation_frames: limits::MAX_SKIN_ANIMATION_FRAMES,
             max_sample_bytes: engine::limits::MAX_SAMPLE_BYTES,
+            max_depth: limits::MAX_SKIN_DIR_DEPTH,
+            max_dirs: limits::MAX_SKIN_DIRS,
         }
     }
 }
@@ -514,79 +539,153 @@ fn scan_skin_dir_with_budgets(dir: &Path, budgets: &SkinBudgets) -> Result<SkinS
     // short animations
     let mut animation_frames: BTreeMap<String, usize> = BTreeMap::new();
 
-    let entries = std::fs::read_dir(&dir).map_err(|e| IpcError::Io {
-        message: format!("{}: {e}", dir.display()),
-    })?;
+    // subdirectories still to visit, each carrying the key prefix its files
+    // get (lowercased, `/`-joined -- built by the walk, never parsed from the
+    // skin) and the raw-cased twin the case-collision tie-break compares
+    struct PendingDir {
+        path: PathBuf,
+        lowered_prefix: String,
+        raw_prefix: String,
+        depth: usize,
+    }
+    let mut pending = vec![PendingDir {
+        path: dir.clone(),
+        lowered_prefix: String::new(),
+        raw_prefix: String::new(),
+        depth: 0,
+    }];
+    let mut dirs_visited: usize = 0;
 
-    for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_lowercase();
-        let Some((stem, extension)) = name.rsplit_once('.') else {
-            continue;
-        };
-        let is_texture = TEXTURE_EXTENSIONS.contains(&extension);
-        let is_sample = SAMPLE_EXTENSIONS.contains(&extension);
-        // `skin.ini` is read separately below; everything else that is neither
-        // a texture nor a sample (a readme, a source .psd, a backup) is not
-        // part of the skin and is not charged against its budget either
-        if !is_texture && !is_sample {
-            continue;
-        }
+    while let Some(current) = pending.pop() {
+        let entries = std::fs::read_dir(&current.path).map_err(|e| IpcError::Io {
+            message: format!("{}: {e}", current.path.display()),
+        })?;
 
-        let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
-        if size > budgets.max_file_bytes {
-            return Err(limit("MAX_SKIN_FILE_BYTES", budgets.max_file_bytes, size));
-        }
-        total_bytes = total_bytes.saturating_add(size);
-        if total_bytes > budgets.max_bytes {
-            return Err(limit("MAX_SKIN_BYTES", budgets.max_bytes, total_bytes));
-        }
-
-        if is_texture {
-            texture_count += 1;
-            if texture_count > budgets.max_textures {
-                return Err(limit(
-                    "MAX_SKIN_TEXTURES",
-                    budgets.max_textures as u64,
-                    texture_count as u64,
-                ));
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            // `file_type` does not follow links, so a symlink (or a windows
+            // junction, which rust reports the same way) is neither a file nor
+            // a directory here -- but the property is load-bearing enough to
+            // state rather than inherit: nothing outside the canonicalized
+            // root may ever be read through this walk
+            if kind.is_symlink() {
+                continue;
             }
-            if let Some(set) = animation_set_name(stem) {
-                let frames = animation_frames.entry(set).or_insert(0);
-                *frames += 1;
-                if *frames > budgets.max_animation_frames {
+            let raw_name = entry.file_name().to_string_lossy().into_owned();
+
+            if kind.is_dir() {
+                // `.git` is common in distributed skins; the dot-skip matches
+                // the one the skins root already applies to working directories
+                if raw_name.starts_with('.') {
+                    continue;
+                }
+                let depth = current.depth + 1;
+                if depth > budgets.max_depth {
                     return Err(limit(
-                        "MAX_SKIN_ANIMATION_FRAMES",
-                        budgets.max_animation_frames as u64,
-                        *frames as u64,
+                        "MAX_SKIN_DIR_DEPTH",
+                        budgets.max_depth as u64,
+                        depth as u64,
                     ));
                 }
+                dirs_visited += 1;
+                if dirs_visited > budgets.max_dirs {
+                    return Err(limit(
+                        "MAX_SKIN_DIRS",
+                        budgets.max_dirs as u64,
+                        dirs_visited as u64,
+                    ));
+                }
+                pending.push(PendingDir {
+                    path: entry.path(),
+                    lowered_prefix: format!("{}{}/", current.lowered_prefix, raw_name.to_lowercase()),
+                    raw_prefix: format!("{}{}/", current.raw_prefix, raw_name),
+                    depth,
+                });
+                continue;
             }
-        }
+            if !kind.is_file() {
+                continue;
+            }
 
-        // two files differing only in case collapse to one lookup name, and
-        // `read_dir`'s order is filesystem-defined -- without a tie-break the
-        // same folder could answer with a different file on a later run. the
-        // raw name decides, as `media`'s sample resolution decides its own
-        match files.entry(name) {
-            std::collections::btree_map::Entry::Vacant(slot) => {
-                slot.insert(entry.path());
+            let file_name = raw_name.to_lowercase();
+            let Some((stem, extension)) = file_name.rsplit_once('.') else {
+                continue;
+            };
+            let is_texture = TEXTURE_EXTENSIONS.contains(&extension);
+            let is_sample = SAMPLE_EXTENSIONS.contains(&extension);
+            // `skin.ini` is read separately below; everything else that is
+            // neither a texture nor a sample (a readme, a source .psd, a
+            // backup) is not part of the skin and is not charged against its
+            // budget either
+            if !is_texture && !is_sample {
+                continue;
             }
-            std::collections::btree_map::Entry::Occupied(mut slot) => {
-                let incumbent = slot
-                    .get()
-                    .file_name()
-                    .map(|raw| raw.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                if entry.file_name().to_string_lossy().as_ref() < incumbent.as_str() {
-                    slot.insert(entry.path());
+
+            let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+            if size > budgets.max_file_bytes {
+                return Err(limit("MAX_SKIN_FILE_BYTES", budgets.max_file_bytes, size));
+            }
+            total_bytes = total_bytes.saturating_add(size);
+            if total_bytes > budgets.max_bytes {
+                return Err(limit("MAX_SKIN_BYTES", budgets.max_bytes, total_bytes));
+            }
+
+            if is_texture {
+                texture_count += 1;
+                if texture_count > budgets.max_textures {
+                    return Err(limit(
+                        "MAX_SKIN_TEXTURES",
+                        budgets.max_textures as u64,
+                        texture_count as u64,
+                    ));
+                }
+                // the set key carries the directory prefix: same-named
+                // animations in different folders are different sets
+                if let Some(set) = animation_set_name(stem) {
+                    let frames = animation_frames
+                        .entry(format!("{}{set}", current.lowered_prefix))
+                        .or_insert(0);
+                    *frames += 1;
+                    if *frames > budgets.max_animation_frames {
+                        return Err(limit(
+                            "MAX_SKIN_ANIMATION_FRAMES",
+                            budgets.max_animation_frames as u64,
+                            *frames as u64,
+                        ));
+                    }
                 }
             }
-        }
-        if files.len() > budgets.max_files {
-            return Err(limit("MAX_SKIN_FILES", budgets.max_files as u64, files.len() as u64));
+
+            // two files differing only in case (anywhere in their path)
+            // collapse to one lookup name, and `read_dir`'s order is
+            // filesystem-defined -- without a tie-break the same folder could
+            // answer with a different file on a later run. the raw relative
+            // path decides, as `media`'s sample resolution decides its own
+            let raw_relative = format!("{}{}", current.raw_prefix, raw_name);
+            match files.entry(format!("{}{}", current.lowered_prefix, file_name)) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(entry.path());
+                }
+                std::collections::btree_map::Entry::Occupied(mut slot) => {
+                    let incumbent = slot
+                        .get()
+                        .strip_prefix(&dir)
+                        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_default();
+                    if raw_relative.as_str() < incumbent.as_str() {
+                        slot.insert(entry.path());
+                    }
+                }
+            }
+            if files.len() > budgets.max_files {
+                return Err(limit(
+                    "MAX_SKIN_FILES",
+                    budgets.max_files as u64,
+                    files.len() as u64,
+                ));
+            }
         }
     }
 
@@ -1001,6 +1100,108 @@ mod tests {
         write(&skin, "d.png", b"x");
         let error = scan_skin_dir_with_budgets(&skin, &budgets).expect_err("past the cap");
         assert!(matches!(&error, IpcError::ResourceLimit { cap, .. } if cap == "MAX_SKIN_TEXTURES"));
+    }
+
+    #[test]
+    fn a_nested_texture_is_keyed_by_its_relative_path() {
+        // the shape the fix exists for: `HitCirclePrefix: Assets/default/default`
+        // names digit glyphs in a subfolder, and the frontend chain asks for
+        // `assets/default/default-0` against exactly these keys
+        let root = temp("nested");
+        let skin = root.join("Prefixed");
+        let font = skin.join("Assets").join("Default");
+        std::fs::create_dir_all(&font).unwrap();
+        write(&skin, "skin.ini", b"[Fonts]\nHitCirclePrefix: Assets/Default/default\n");
+        write(&skin, "cursor.png", b"x");
+        std::fs::write(font.join("default-0@2x.png"), b"x").unwrap();
+        std::fs::write(font.join("gone.png"), blank_png()).unwrap();
+        // a dot-directory is skipped whole, as the skins root already skips its
+        // own working directories
+        let git = skin.join(".git").join("objects");
+        std::fs::create_dir_all(&git).unwrap();
+        std::fs::write(git.join("aa.png"), b"not a skin file").unwrap();
+
+        let manifest = load_skin(&SkinLocator::Folder {
+            path: skin.to_string_lossy().into_owned(),
+        })
+        .expect("loads");
+
+        let keys: Vec<&String> = manifest.files.keys().collect();
+        assert_eq!(
+            keys,
+            vec![
+                "assets/default/default-0@2x.png",
+                "assets/default/gone.png",
+                "cursor.png"
+            ]
+        );
+        // blank detection reaches a nested file under its path key
+        assert_eq!(manifest.blank, vec!["assets/default/gone.png".to_string()]);
+    }
+
+    #[test]
+    fn skin_dir_depth_cap_boundary() {
+        let root = temp("cap-depth");
+        let skin = root.join("Deep");
+        let within = skin.join("a").join("b");
+        std::fs::create_dir_all(&within).unwrap();
+        std::fs::write(within.join("x.png"), b"x").unwrap();
+        let budgets = SkinBudgets {
+            max_depth: 2,
+            ..SkinBudgets::default()
+        };
+        assert!(scan_skin_dir_with_budgets(&skin, &budgets).is_ok());
+
+        std::fs::create_dir_all(within.join("c")).unwrap();
+        let error = scan_skin_dir_with_budgets(&skin, &budgets).expect_err("past the cap");
+        assert!(matches!(&error, IpcError::ResourceLimit { cap, .. } if cap == "MAX_SKIN_DIR_DEPTH"));
+    }
+
+    #[test]
+    fn skin_dir_count_cap_boundary() {
+        let root = temp("cap-dirs");
+        let skin = root.join("Broad");
+        std::fs::create_dir_all(skin.join("a")).unwrap();
+        std::fs::create_dir_all(skin.join("b")).unwrap();
+        let budgets = SkinBudgets {
+            max_dirs: 2,
+            ..SkinBudgets::default()
+        };
+        assert!(scan_skin_dir_with_budgets(&skin, &budgets).is_ok());
+
+        std::fs::create_dir_all(skin.join("c")).unwrap();
+        let error = scan_skin_dir_with_budgets(&skin, &budgets).expect_err("past the cap");
+        assert!(matches!(&error, IpcError::ResourceLimit { cap, .. } if cap == "MAX_SKIN_DIRS"));
+    }
+
+    #[test]
+    fn a_symlink_is_never_followed() {
+        let root = temp("symlink");
+        let skin = root.join("Linked");
+        std::fs::create_dir_all(&skin).unwrap();
+        write(&skin, "cursor.png", b"x");
+        // a directory OUTSIDE the skin, reachable only through links inside it
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("evil.png"), b"x").unwrap();
+
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&outside, skin.join("linked")).and_then(|()| {
+            std::os::windows::fs::symlink_file(outside.join("evil.png"), skin.join("evil.png"))
+        });
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, skin.join("linked"))
+            .and_then(|()| std::os::unix::fs::symlink(outside.join("evil.png"), skin.join("evil.png")));
+        if linked.is_err() {
+            // creating symlinks needs developer mode on windows; without it
+            // there is nothing to exercise, and a silent pass beats a test
+            // that cannot run on most machines
+            return;
+        }
+
+        let scan = scan_skin_dir(&skin).expect("scans");
+        let keys: Vec<&String> = scan.files.keys().collect();
+        assert_eq!(keys, vec!["cursor.png"]);
     }
 
     #[test]

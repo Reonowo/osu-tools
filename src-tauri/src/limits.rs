@@ -20,6 +20,8 @@
 //! | [`MAX_SKIN_FILE_BYTES`] | 64 MiB | byte length of any single skin asset, checked from the directory entry's metadata before the file is opened | `skin::tests::skin_per_file_byte_cap_boundary` |
 //! | [`MAX_SKIN_TEXTURES`] | 10,000 | textures alone, charged separately from the file count because textures are the half that reaches the GPU and a skin of nothing but sprites would otherwise sit inside the file cap while exhausting texture memory | `skin::tests::skin_texture_count_cap_boundary` |
 //! | [`MAX_SKIN_ANIMATION_FRAMES`] | 1,000 | frames in ONE animation set -- `<element>-<n>`, or `<element><n>` for the separator-less families such as the slider ball's `sliderb0`..`sliderb9` -- charged per set rather than in total: the hazard is a single element declaring an enormous sequence that a drawable would try to hold at once, not a skin holding many short animations | `skin::tests::skin_animation_frame_cap_boundary` |
+//! | [`MAX_SKIN_DIR_DEPTH`] | 8 | how deep a skin's own subdirectories may nest below its root. the walk recurses because skin.ini prefix keys (`HitCirclePrefix: Assets/default/default`) name files at depth and both stable and lazer resolve them, but a skin is untrusted third-party input and the walk must be bounded; real prefixes sit one or two levels down. the `.osk` import checks the same cap against the member names it KEEPS, before extracting anything -- a member the extension filter drops never reaches the staged tree, so neither side refuses it | `skin::tests::skin_dir_depth_cap_boundary` (walk side), `osk::tests::a_member_nested_past_the_depth_cap_refuses_the_import` and `osk::tests::a_non_skin_file_nested_past_the_depth_cap_is_ignored_rather_than_refused` (archive side) |
+//! | [`MAX_SKIN_DIRS`] | 2,000 | subdirectories one skin walk may visit in total. the depth cap bounds nesting but not breadth: a folder of many thousand empty directories charges no file cap while making the scan arbitrarily slow, and a skin never legitimately holds more than a handful of asset folders. the `.osk` import charges the same cap against the directories its kept members would create, before extracting anything: `MAX_SKIN_FILES` members at `MAX_SKIN_DIR_DEPTH` name far more directories than the walk would agree to visit, and without it every one is created only for the load-side walk to refuse the result | `skin::tests::skin_dir_count_cap_boundary` (walk side) and `osk::tests::osk_dir_count_cap_boundary` (archive side) |
 //!
 //! a skin's `skin.ini` is bounded by `engine::limits::MAX_SKIN_INI_BYTES`
 //! (checked against the file's declared length before the read, then again
@@ -76,3 +78,14 @@ pub const MAX_SKIN_TEXTURES: usize = 10_000;
 /// holding many short animations, so the budget is per set. real animated
 /// elements run to a few dozen frames
 pub const MAX_SKIN_ANIMATION_FRAMES: usize = 1_000;
+
+/// how deep a skin's subdirectories may nest below its root. the walk follows
+/// subfolders because skin.ini prefix keys name files at depth, but a skin is
+/// untrusted input and the walk must be bounded; real prefixes sit one or two
+/// levels down
+pub const MAX_SKIN_DIR_DEPTH: usize = 8;
+
+/// how many subdirectories one skin walk may visit in total. bounds the
+/// breadth the depth cap cannot: empty directories charge no file cap while
+/// making the scan arbitrarily slow
+pub const MAX_SKIN_DIRS: usize = 2_000;
