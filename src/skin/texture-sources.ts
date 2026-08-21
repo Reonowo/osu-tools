@@ -311,8 +311,18 @@ export function expandNames(names: readonly string[]): string[] {
 	const expanded: string[] = [];
 	for (const name of names) {
 		// legacyskin.cs:566 -- an `@2x` written into the lookup name itself is
-		// stripped, because stable strips it and skins in the wild rely on that
-		const stripped = name.replaceAll("@2x", "");
+		// stripped, because stable strips it and skins in the wild rely on that.
+		//
+		// separators are standardised at the same seam lazer standardises them:
+		// `RealmBackedResourceStore.GetFilenames` (realmbackedresourcestore.cs:48-56)
+		// runs `ToStandardisedPath` over every candidate before indexing its
+		// lowercased file map. a skin.ini prefix is hand-written against stable,
+		// which is windows-native, so `HitCirclePrefix: Assets\Default\default`
+		// is as ordinary a spelling as the forward-slash one -- and the manifest
+		// keys this indexes are `/`-joined by the rust walk itself, never by the
+		// skin, so without this the backslash spelling silently resolves nothing
+		// and the last-path-piece widening below cannot split it either
+		const stripped = name.replaceAll("@2x", "").replaceAll("\\", "/");
 		for (const candidate of [stripped, stripped.split("/").pop() ?? stripped]) {
 			const lowered = candidate.toLowerCase();
 			if (lowered !== "" && !expanded.includes(lowered)) expanded.push(lowered);

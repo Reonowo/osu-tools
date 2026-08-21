@@ -152,6 +152,56 @@ describe("legacy skin texture resolution", () => {
 		expect(answer).toMatchObject({ answer: "found", value: { name: "hitcircle" } });
 	});
 
+	test("a path-qualified name resolves a path-keyed file, whole name before last piece", () => {
+		// the manifest keys files in subfolders by their relative path, which is
+		// what a skin.ini prefix (`HitCirclePrefix: Assets/default/default`)
+		// resolves through. the skin's own nested glyph must win over a flat
+		// same-named file, or the prefix would select art the skinner never
+		// pointed it at
+		const manifest = skin(paths("assets/default/default-0.png", "default-0.png"));
+		const answer = resolveTexture(
+			textureSources({ beatmap: null, skin: manifest, toUrl }),
+			textureRequest("Assets/default/default-0")
+		);
+		expect(answer).toMatchObject({
+			answer: "found",
+			value: {
+				name: "assets/default/default-0",
+				frames: ["asset://C:\\skin\\assets/default/default-0.png"]
+			}
+		});
+	});
+
+	test("a backslash-qualified name resolves the same file the forward-slash one does", () => {
+		// a skin.ini prefix is hand-written against stable, which is
+		// windows-native, so `HitCirclePrefix: Assets\Default\default` is an
+		// ordinary spelling -- while the manifest keys are `/`-joined by the rust
+		// walk. lazer standardises the separator on every lookup candidate
+		// (realmbackedresourcestore.cs:48-56); without that the digits of a
+		// backslash-prefixed skin silently resolve nothing
+		const manifest = skin(paths("assets/default/default-0.png"));
+		const answer = resolveTexture(
+			textureSources({ beatmap: null, skin: manifest, toUrl }),
+			textureRequest("Assets\\Default\\default-0")
+		);
+		expect(answer).toMatchObject({
+			answer: "found",
+			value: { name: "assets/default/default-0" }
+		});
+	});
+
+	test("a backslash-qualified name still falls back to its last path piece", () => {
+		// the widening has to survive the standardisation: a flat skin folder is
+		// the common case, and `split("/")` cannot cut a name still spelled with
+		// backslashes
+		const manifest = skin(paths("default-0.png"));
+		const answer = resolveTexture(
+			textureSources({ beatmap: null, skin: manifest, toUrl }),
+			textureRequest("Assets\\Default\\default-0")
+		);
+		expect(answer).toMatchObject({ answer: "found", value: { name: "default-0" } });
+	});
+
 	test("a texture lookup has no bank suffix and no universal fallback", () => {
 		// the two rules a reader coming from the sample half will look for.
 		// both belong to a hit sample's identity, not to an element name, and
