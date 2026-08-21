@@ -53,6 +53,16 @@ pub struct ImportBudgets {
     pub max_files: usize,
     pub max_bytes: u64,
     pub max_file_bytes: u64,
+    /// deepest member nesting the import accepts -- the walk-side
+    /// `MAX_SKIN_DIR_DEPTH`, checked against member names before extraction
+    pub max_depth: usize,
+    /// most directories the import may create -- the walk-side `MAX_SKIN_DIRS`,
+    /// counted from the kept member names before extraction. depth alone does
+    /// not bound the work: `max_files` members at `max_depth` name far more
+    /// directories than the walk will later agree to visit, and without this
+    /// the import creates every one of them only for `validate_skin_dir` to
+    /// refuse the result and delete them again
+    pub max_dirs: usize,
 }
 
 impl Default for ImportBudgets {
@@ -61,6 +71,8 @@ impl Default for ImportBudgets {
             max_files: limits::MAX_SKIN_FILES,
             max_bytes: limits::MAX_SKIN_BYTES,
             max_file_bytes: limits::MAX_SKIN_FILE_BYTES,
+            max_depth: limits::MAX_SKIN_DIR_DEPTH,
+            max_dirs: limits::MAX_SKIN_DIRS,
         }
     }
 }
@@ -72,31 +84,48 @@ pub fn import_osk_with_budgets(
 ) -> Result<SkinLocator, IpcError> {
     let mut archive = open_osz(archive_path)?;
 
-    // members worth keeping, flattened. osu! skins are flat by format -- every
-    // asset sits beside `skin.ini` -- so a member at depth is either an
-    // archive built with a wrapping folder (common) or the author's own
-    // organisation, which osu! itself does not read either. one leading
-    // component is stripped when EVERY member shares it; anything still nested
-    // after that is skipped rather than flattened, because flattening deeper
-    // paths would let two different files claim one name
+    // members worth keeping, with their relative paths preserved: skin.ini
+    // prefix keys (`HitCirclePrefix: Assets/default/default`) name files at
+    // depth, so a nested member is part of the skin rather than the author's
+    // stray organisation. one leading component is still stripped when EVERY
+    // member shares it, because a re-zipped archive wrapping the skin in its
+    // own folder is common and that folder is not part of any prefix
     let names: Vec<String> = archive.names().iter().map(|name| name.replace('\\', "/")).collect();
     let prefix = common_root_prefix(&names);
 
     let mut wanted: Vec<(usize, String)> = Vec::new();
+    // every directory the extraction below would create, deduplicated -- the
+    // breadth the depth cap does not bound
+    let mut dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut any_at_root = false;
     for (index, name) in names.iter().enumerate() {
         let relative = match &prefix {
             Some(prefix) => name.strip_prefix(prefix.as_str()).unwrap_or(name),
             None => name.as_str(),
         };
-        // one plain file name and nothing else. `contains('/')` alone is not
-        // enough: a windows drive-relative name like `c:evil.png` holds no
-        // separator, yet `staging.join(it)` DISCARDS the staging root and
-        // writes to the current directory of that drive. the archive-level
-        // check refuses such a name too, so this is the second of two
-        if relative.is_empty() || relative.ends_with('/') || relative.contains('/') {
+        if relative.is_empty() || relative.ends_with('/') {
             continue;
         }
-        if !is_single_plain_name(relative) {
+        // the resource-fork tree and finder metadata are the archiver's, not
+        // the skinner's. before nested members were kept, `__MACOSX/` fell out
+        // with everything else at depth; now it must be named
+        if is_packaging_artefact(relative) {
+            continue;
+        }
+        // EVERY path component must be one plain name. `split('/')` alone is
+        // not enough: a windows drive-relative component like `c:evil.png`
+        // holds no separator, yet `staging.join(it)` DISCARDS the staging root
+        // and writes to the current directory of that drive. the archive-level
+        // check refuses such a name too, so this is the second of two
+        let components: Vec<&str> = relative.split('/').collect();
+        if components
+            .iter()
+            .any(|component| !is_single_plain_name(component))
+        {
+            continue;
+        }
+        let depth = components.len() - 1;
+        if is_inside_dot_directory(relative) {
             continue;
         }
         let lowered = relative.to_ascii_lowercase();
@@ -120,18 +149,52 @@ pub fn import_osk_with_budgets(
                 wanted.len() as u64 + 1,
             ));
         }
+        // the two walk-side directory caps, charged against the member names
+        // before anything is written -- a refusal here and a refusal from
+        // `validate_skin_dir` below must be the same verdict, and this one
+        // costs no extraction.
+        //
+        // charged AFTER the extension filter, because the staged tree only ever
+        // holds what that filter kept: a source folder, a readme or a bundled
+        // tool nested past the cap contributes no directory to the staging and
+        // so is refused by neither side. checking before the filter would fail
+        // an otherwise fine skin over a file it was never going to extract
+        if depth > budgets.max_depth {
+            return Err(limit(
+                "MAX_SKIN_DIR_DEPTH",
+                budgets.max_depth as u64,
+                depth as u64,
+            ));
+        }
+        // every ancestor directory the write would create, counted the way the
+        // walk counts them: one per directory, deduplicated across members. the
+        // staged names are the LOWERCASED ones, so these prefixes are exactly
+        // the directories that will exist
+        for (boundary, _) in lowered.match_indices('/') {
+            let ancestor = &lowered[..boundary];
+            if dirs.contains(ancestor) {
+                continue;
+            }
+            dirs.insert(ancestor.to_string());
+            if dirs.len() > budgets.max_dirs {
+                return Err(limit("MAX_SKIN_DIRS", budgets.max_dirs as u64, dirs.len() as u64));
+            }
+        }
+        any_at_root |= depth == 0;
         wanted.push((index, lowered));
     }
 
-    // an archive that yields no skin file is REFUSED rather than imported
-    // empty. the swap below retires the existing copy of the same name before
-    // it renames the new one in, so proceeding here would destroy a working
-    // skin and replace it with a directory that resolves nothing -- while
-    // reporting success. reachable without malice: a re-packed archive nesting
-    // its files two levels deep has every member skipped by the flatten
-    if wanted.is_empty() {
+    // an archive that yields no ROOT-LEVEL skin file is REFUSED rather than
+    // imported. nested files are only reachable through a root `skin.ini`'s
+    // prefix keys, so a skin with nothing at its root resolves nothing -- and
+    // the swap below retires the existing copy of the same name before it
+    // renames the new one in, so proceeding here would destroy a working skin
+    // and replace it with a directory that resolves nothing while reporting
+    // success. reachable without malice: a re-packed archive nesting its files
+    // two levels deep has no member left at the root after the single strip
+    if !any_at_root {
         return Err(IpcError::BeatmapParse {
-            message: "osk: the archive holds no skin files".to_string(),
+            message: "osk: the archive holds no skin files at its root".to_string(),
         });
     }
 
@@ -250,10 +313,19 @@ fn extract_members(
         if written > budgets.max_bytes {
             return Err(limit("MAX_SKIN_BYTES", budgets.max_bytes, written));
         }
-        // every kept name was proven to be a single plain file name -- no
-        // separator AND no drive prefix -- so the join can only descend
+        // every component of every kept name was proven to be one plain name
+        // -- no parent, no root, no drive prefix -- so the join can only
+        // descend. checked for real rather than debug-asserted: this is
+        // third-party input and the write below is the one that matters
         let out_path = staging.join(name);
-        debug_assert!(out_path.starts_with(staging), "kept name escaped staging: {name:?}");
+        if !out_path.starts_with(staging) {
+            return Err(IpcError::Internal {
+                message: format!("osk: kept name escaped staging: {name:?}"),
+            });
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::write(out_path, &bytes)?;
     }
     Ok(())
@@ -292,6 +364,29 @@ fn is_packaging_artefact(name: &str) -> bool {
         || lowered.contains("/._")
 }
 
+/// whether any DIRECTORY component of a member is a dot-directory.
+///
+/// the load-side walk skips such a directory whole (`.git` is common in
+/// distributed skins), so the import treats its members as not the skin's:
+/// neither extracted, nor charged against the directory caps, nor counted as a
+/// root. without that the two sides disagree -- an archive carrying a deep
+/// `.cache/` would be refused over a tree the walk was going to ignore, and
+/// every file under it would be staged as dead weight.
+///
+/// the FILE name is deliberately not checked, because the walk does not check
+/// it either; `._` sidecars are named by [`is_packaging_artefact`] instead.
+///
+/// a bare `.` is NOT a dot-directory: it names no directory at all, and
+/// `osz::safe_relative_path` drops it as the no-op it is, so an archive written
+/// by a tool that joins member names on "." must keep loading
+fn is_inside_dot_directory(name: &str) -> bool {
+    name.rsplit_once('/').is_some_and(|(directories, _)| {
+        directories
+            .split('/')
+            .any(|part| part.starts_with('.') && part != "." && part != "..")
+    })
+}
+
 /// the single leading directory component every member shares, or `None`.
 ///
 /// `None` when the archive is flat, when its members share no root, or when a
@@ -303,13 +398,36 @@ fn common_root_prefix(names: &[String]) -> Option<String> {
     // beside the real folder, and treating that as an ambiguous two-root
     // archive would strip nothing -- which then skips every member, since they
     // are all still one level down, and refuses a plainly complete skin
-    let considered: Vec<&String> = names
+    let skin_members: Vec<&String> = names
         .iter()
         .filter(|name| !is_packaging_artefact(name))
         .collect();
 
+    // the wrapper first, whatever it is named: when every member shares one
+    // root, that root IS the wrapper, and whether it happens to be dot-prefixed
+    // is not this function's business -- a skin zipped from a hidden folder
+    // strips down to a perfectly ordinary skin, and the staged tree holds no
+    // dot-directory at all
+    if let Some(prefix) = single_root(skin_members.iter().copied()) {
+        return Some(prefix);
+    }
+    // only once the members DISAGREE is a dot-directory an intruder rather than
+    // the wrapper, and only then is it worth discounting: it is skipped whole
+    // during selection, as the load-side walk skips it, so an archiver's
+    // `.cache/` beside the skin's own folder must not be the second root that
+    // stops that folder from being stripped -- exactly as `__MACOSX/` must not
+    single_root(
+        skin_members
+            .into_iter()
+            .filter(|name| !is_inside_dot_directory(name)),
+    )
+}
+
+/// the one leading component every given name shares, or `None` when they
+/// disagree, when there are none, or when any of them sits at the archive root
+fn single_root<'a>(names: impl Iterator<Item = &'a String>) -> Option<String> {
     let mut prefix: Option<String> = None;
-    for name in considered {
+    for name in names {
         // a member with no separator sits at the archive root. that is either a
         // flat archive (nothing to strip) or one whose structure is ambiguous,
         // and in both cases stripping nothing is the answer that cannot lose a
@@ -515,10 +633,264 @@ Name: Dotted
     }
 
     #[test]
+    fn a_nested_member_imports_with_its_relative_path() {
+        // the skin.ini prefix shape: digit glyphs in a subfolder, resolvable
+        // only if the import preserves the path the prefix names
+        let root = temp("nested-members");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("nested.osk");
+        write_osz(
+            &osk,
+            &[
+                (
+                    "skin.ini",
+                    b"[Fonts]\nHitCirclePrefix: Assets/Default/default\n" as &[u8],
+                ),
+                ("Assets/Default/default-0.png", b"x"),
+                ("cursor.png", b"y"),
+            ],
+        );
+
+        let locator = import_osk(&osk, &skins).expect("imports");
+        let manifest = load_skin(&locator).expect("loads");
+        assert!(
+            manifest.files.contains_key("assets/default/default-0.png"),
+            "got keys {:?}",
+            manifest.files.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_wrapping_folder_strip_leaves_nested_paths_intact_below_it() {
+        let root = temp("wrapped-nested");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("wrapped-nested.osk");
+        write_osz(
+            &osk,
+            &[
+                ("My Skin/skin.ini", b"[General]\nName: Wrapped\n" as &[u8]),
+                ("My Skin/Assets/x.png", b"x"),
+                ("My Skin/cursor.png", b"y"),
+            ],
+        );
+
+        let locator = import_osk(&osk, &skins).expect("imports");
+        let manifest = load_skin(&locator).expect("loads");
+        assert_eq!(
+            manifest.files.keys().collect::<Vec<_>>(),
+            vec!["assets/x.png", "cursor.png"]
+        );
+    }
+
+    #[test]
+    fn a_member_nested_past_the_depth_cap_refuses_the_import() {
+        let root = temp("deep-members");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("deep.osk");
+        write_osz(
+            &osk,
+            &[
+                ("skin.ini", b"[General]\nName: Deep\n" as &[u8]),
+                ("a/b/x.png", b"x"),
+            ],
+        );
+
+        let budgets = ImportBudgets {
+            max_depth: 1,
+            ..ImportBudgets::default()
+        };
+        let error = import_osk_with_budgets(&osk, &skins, &budgets).expect_err("refused");
+        assert!(
+            matches!(&error, IpcError::ResourceLimit { cap, .. } if cap == "MAX_SKIN_DIR_DEPTH"),
+            "got {error:?}"
+        );
+        // refused during member selection, before staging exists -- nothing to
+        // clean up and nothing written
+        assert!(std::fs::read_dir(&skins).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_non_skin_file_nested_past_the_depth_cap_is_ignored_rather_than_refused() {
+        // the depth cap is charged after the extension filter, because the
+        // staged tree only holds what that filter kept: a source tree or a
+        // bundled tool buried in the archive contributes no directory to the
+        // staging, so `validate_skin_dir` would not refuse it either. the two
+        // verdicts have to agree
+        let root = temp("deep-non-skin");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("deep-non-skin.osk");
+        write_osz(
+            &osk,
+            &[
+                ("skin.ini", b"[General]\nName: Sourced\n" as &[u8]),
+                ("cursor.png", b"x"),
+                ("src/art/layers/psd/backup/notes.txt", b"not a skin file"),
+            ],
+        );
+
+        let budgets = ImportBudgets {
+            max_depth: 1,
+            ..ImportBudgets::default()
+        };
+        let locator = import_osk_with_budgets(&osk, &skins, &budgets).expect("imports");
+        let manifest = load_skin(&locator).expect("loads");
+        assert_eq!(manifest.name, "Sourced");
+        assert_eq!(manifest.files.keys().collect::<Vec<_>>(), vec!["cursor.png"]);
+    }
+
+    #[test]
+    fn a_dot_directory_is_skipped_whole_as_the_walk_skips_it() {
+        // the walk ignores a dot-directory entirely, so the import must not
+        // stage its files NOR charge them against the directory caps -- a deep
+        // `.cache/` would otherwise refuse an archive over a tree the skin
+        // never resolves through
+        let root = temp("dot-dir");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("dotted-dir.osk");
+        write_osz(
+            &osk,
+            &[
+                ("skin.ini", b"[General]\nName: Dotless\n" as &[u8]),
+                ("cursor.png", b"x"),
+                (".cache/a/b/c/d/icon.png", b"not the skin's"),
+            ],
+        );
+
+        let budgets = ImportBudgets {
+            max_depth: 1,
+            max_dirs: 1,
+            ..ImportBudgets::default()
+        };
+        let locator = import_osk_with_budgets(&osk, &skins, &budgets).expect("imports");
+        let manifest = load_skin(&locator).expect("loads");
+        assert_eq!(manifest.name, "Dotless");
+        assert_eq!(manifest.files.keys().collect::<Vec<_>>(), vec!["cursor.png"]);
+    }
+
+    #[test]
+    fn a_dot_prefixed_wrapping_folder_is_stripped_like_any_other() {
+        // the wrapper is whatever EVERY member shares, dot-prefixed or not:
+        // discounting it as an intruder would leave the archive with no root
+        // shared by anything, drop every member as nested inside a
+        // dot-directory, and refuse a skin that strips down to an ordinary one
+        let root = temp("dot-wrapper");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("dot-wrapper.osk");
+        write_osz(
+            &osk,
+            &[
+                (".HiddenSkin/skin.ini", b"[General]\nName: Hidden\n" as &[u8]),
+                (".HiddenSkin/cursor.png", b"x"),
+            ],
+        );
+
+        let locator = import_osk(&osk, &skins).expect("imports");
+        let manifest = load_skin(&locator).expect("loads");
+        assert_eq!(manifest.name, "Hidden");
+        assert_eq!(manifest.files.keys().collect::<Vec<_>>(), vec!["cursor.png"]);
+    }
+
+    #[test]
+    fn a_dot_directory_is_not_the_second_root_that_stops_the_strip() {
+        // the packaging-artefact case, reached through a dot-directory: an
+        // archiver's `.cache/` beside the skin's own wrapping folder must not
+        // read as an ambiguous two-root archive, or nothing is stripped, the
+        // real skin stays one level down, and a plainly complete skin is
+        // refused for holding no file at its root
+        let root = temp("dot-dir-root");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("dotted-root.osk");
+        write_osz(
+            &osk,
+            &[
+                ("My Skin/skin.ini", b"[General]\nName: Wrapped\n" as &[u8]),
+                ("My Skin/cursor.png", b"y"),
+                (".cache/junk.png", b"not the skin's"),
+            ],
+        );
+
+        let locator = import_osk(&osk, &skins).expect("imports");
+        let manifest = load_skin(&locator).expect("loads");
+        assert_eq!(manifest.name, "Wrapped");
+        assert_eq!(manifest.files.keys().collect::<Vec<_>>(), vec!["cursor.png"]);
+    }
+
+    #[test]
+    fn osk_dir_count_cap_boundary() {
+        // depth alone does not bound the extraction work: members well inside
+        // the depth and file caps can still name far more directories than the
+        // walk will agree to visit, and every one of them would be created
+        // before `validate_skin_dir` refused the result and deleted it again
+        let root = temp("osk-cap-dirs");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("broad.osk");
+        write_osz(
+            &osk,
+            &[
+                ("skin.ini", b"[General]\nName: Broad\n" as &[u8]),
+                ("a/x.png", b"x"),
+                ("b/y.png", b"y"),
+                ("c/z.png", b"z"),
+            ],
+        );
+
+        let within = ImportBudgets {
+            max_dirs: 3,
+            ..ImportBudgets::default()
+        };
+        assert!(import_osk_with_budgets(&osk, &skins, &within).is_ok());
+
+        let past = ImportBudgets {
+            max_dirs: 2,
+            ..ImportBudgets::default()
+        };
+        let error = import_osk_with_budgets(&osk, &skins, &past).expect_err("past the cap");
+        assert!(
+            matches!(&error, IpcError::ResourceLimit { cap, .. } if cap == "MAX_SKIN_DIRS"),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn nested_members_sharing_a_folder_charge_that_folder_once() {
+        // deduplicated across members, the way the walk counts: one directory,
+        // however many files sit in it
+        let root = temp("osk-shared-dir");
+        let skins = root.join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        let osk = root.join("shared.osk");
+        write_osz(
+            &osk,
+            &[
+                ("skin.ini", b"[General]\nName: Shared\n" as &[u8]),
+                ("assets/default-0.png", b"x"),
+                ("assets/default-1.png", b"y"),
+                ("assets/default-2.png", b"z"),
+            ],
+        );
+
+        let budgets = ImportBudgets {
+            max_dirs: 1,
+            ..ImportBudgets::default()
+        };
+        assert!(import_osk_with_budgets(&osk, &skins, &budgets).is_ok());
+    }
+
+    #[test]
     fn an_ambiguous_archive_structure_strips_nothing_rather_than_guessing() {
         // a member at the archive root beside a folder: stripping the folder
         // would be a guess, and the answer that cannot lose a file is to strip
-        // nothing and keep only what is already flat
+        // nothing. the nested member keeps its own path rather than being
+        // flattened into the root, where it could have collided with a file
+        // already there
         let root = temp("ambiguous");
         let skins = root.join("skins");
         std::fs::create_dir_all(&skins).unwrap();
@@ -535,9 +907,10 @@ Name: Dotted
         let locator = import_osk(&osk, &skins).expect("imports");
         let manifest = load_skin(&locator).expect("loads");
         assert_eq!(manifest.name, "Ambiguous");
-        // the nested member is skipped rather than flattened into the root,
-        // where it could have collided with a file already there
-        assert_eq!(manifest.files.keys().collect::<Vec<_>>(), vec!["cursor.png"]);
+        assert_eq!(
+            manifest.files.keys().collect::<Vec<_>>(),
+            vec!["cursor.png", "extras/spare-cursor.png"]
+        );
     }
 
     #[test]
@@ -552,7 +925,8 @@ Name: Dotted
         write_osz(
             &osk,
             &[
-                ("__MACOSX/._skin.ini", b"resource fork"),
+                ("__MACOSX/._skin.ini", b"resource fork" as &[u8]),
+                ("__MACOSX/cursor.png", b"not the skin's cursor"),
                 ("MySkin/skin.ini", b"[General]
 Name: MySkin
 "),
@@ -564,8 +938,10 @@ Name: MySkin
         let manifest = load_skin(&locator).expect("loads");
         assert_eq!(manifest.name, "MySkin");
         assert!(manifest.files.contains_key("cursor.png"));
-        // and the sidecar did not come along
+        // and the sidecar did not come along -- not as a root file, and now
+        // that nested members import, not as a `__macosx/` subfolder either
         assert!(!manifest.files.keys().any(|name| name.starts_with("._")));
+        assert!(!manifest.files.keys().any(|name| name.starts_with("__macosx/")));
     }
 
     #[test]
@@ -576,11 +952,12 @@ Name: MySkin
         let osk = root.join("two-roots.osk");
         write_osz(&osk, &[("a/cursor.png", b"x"), ("b/hitcircle.png", b"y")]);
 
-        // nothing shared a root, so nothing was stripped and nothing is flat --
-        // which leaves no skin file at all, and that is a refusal rather than
-        // an empty import: the swap would otherwise destroy a working skin of
-        // the same name and report success
-        let error = import_osk(&osk, &skins).expect_err("an archive with no usable member is refused");
+        // nothing shared a root, so nothing was stripped and no member sits at
+        // the archive root -- and nested files are only reachable through a
+        // root skin.ini's prefix keys, so this is a refusal rather than an
+        // import that resolves nothing: the swap would otherwise destroy a
+        // working skin of the same name and report success
+        let error = import_osk(&osk, &skins).expect_err("an archive with no root member is refused");
         assert!(
             matches!(&error, IpcError::BeatmapParse { message } if message.contains("no skin files")),
             "got {error:?}"
