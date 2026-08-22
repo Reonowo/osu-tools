@@ -481,6 +481,16 @@ export interface GameplaySettings {
 	/** comboeffects.cs:59 -- whether the play's FIRST combo break sounds even
 	 * when the combo lost was small. lazer defaults it on */
 	alwaysPlayFirstComboBreak: boolean;
+	/** osurulesetconfigmanager.cs:20, default on -- whether the body snakes in
+	 * over preempt/3 while approaching (snakingsliderbody.cs:84). off also
+	 * lifts drawableosuhitobject.cs:163's preempt/3 fade-in delay on each
+	 * span's first end circle, which exists only to wait for that snake */
+	snakingInSliders: boolean;
+	/** osurulesetconfigmanager.cs:21, default on -- whether the body retracts
+	 * behind the ball once the head is hit (snakingsliderbody.cs:91,95). off
+	 * also drops drawableslider.cs:360's short body fade at the slider's end,
+	 * whose whole job is to smooth that retract away */
+	snakingOutSliders: boolean;
 }
 
 /** mirrors skin.rs SkinSource */

@@ -490,7 +490,12 @@ describe("viewer preferences", () => {
 			osuStablePath: "D:\\osu!",
 			volume: 42,
 			audio: { musicVolume: 55, hitsoundVolume: 20, offsetMs: -30, ignoreBeatmapHitsounds: true },
-			gameplay: { positionalHitsoundLevel: 0.6, alwaysPlayFirstComboBreak: false },
+			gameplay: {
+				positionalHitsoundLevel: 0.6,
+				alwaysPlayFirstComboBreak: false,
+				snakingInSliders: false,
+				snakingOutSliders: true
+			},
 			overlays: { ...DEFAULT_OVERLAYS, cursorPath: true, keyOverlay: false, displayLength: 1400 },
 			recents: [],
 			editing: { ...DEFAULT_EDITING, snapToLattice: false },
@@ -726,13 +731,20 @@ describe("viewer preferences", () => {
 		store.getState().setGameplay("positionalHitsoundLevel", 0.8);
 		resolveSettings({
 			...baseSettings,
-			gameplay: { positionalHitsoundLevel: 0.1, alwaysPlayFirstComboBreak: false }
+			gameplay: {
+				positionalHitsoundLevel: 0.1,
+				alwaysPlayFirstComboBreak: false,
+				snakingInSliders: true,
+				snakingOutSliders: false
+			}
 		});
 		await hydrating;
 
 		expect(store.getState().gameplay).toEqual({
 			positionalHitsoundLevel: 0.8,
-			alwaysPlayFirstComboBreak: false
+			alwaysPlayFirstComboBreak: false,
+			snakingInSliders: true,
+			snakingOutSliders: false
 		});
 	});
 
