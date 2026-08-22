@@ -11,6 +11,14 @@ export function snapToLatticePoint(value: number, step: number): number {
 	return Math.round(value / step) * step;
 }
 
+/** the frames an operation applies to: the selection, or the frame-cursor
+ * frame when nothing is selected. the one rule behind every panel op and the
+ * smooth-selection keybind -- called inside the expand closure, so a queued
+ * op reads the selection as of dispatch */
+export function editTargets(selection: readonly number[], cursorIndex: number): readonly number[] {
+	return selection.length > 0 ? selection : [cursorIndex];
+}
+
 /** moves the given frames by (dx, dy), snapped onto the lattice when the
  * preference is on and one was inferred */
 export function nudgeOps(

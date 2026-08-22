@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Lattice } from "../lib/lattice";
-import { insertOps, nudgeOps, snapOps, snapToLatticePoint } from "./ops";
+import { editTargets, insertOps, nudgeOps, snapOps, snapToLatticePoint } from "./ops";
 import type { FrameDto } from "../lib/scene-types";
 
 // 1080p fullscreen: scale 2.25, step 4/9 -- TODO.md's case-study lattice
@@ -17,6 +17,16 @@ describe("snapToLatticePoint", () => {
 		// up to 226 (100.4444) -- the brief this test was transcribed from named
 		// the wrong nearest multiple, corrected here
 		expect(snapToLatticePoint(100.22, 4 / 9)).toBeCloseTo(100, 5);
+	});
+});
+
+describe("editTargets", () => {
+	test("a selection is its own targets", () => {
+		expect(editTargets([3, 7, 9], 5)).toEqual([3, 7, 9]);
+	});
+
+	test("an empty selection falls back to the frame-cursor frame", () => {
+		expect(editTargets([], 5)).toEqual([5]);
 	});
 });
 
