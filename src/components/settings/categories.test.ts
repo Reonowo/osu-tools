@@ -17,7 +17,7 @@ import { OVERLAY_TOGGLES, TIMELINE_TOGGLES } from "./AnalysisCategory";
 import { AUDIO_CHANNELS, AUDIO_TOGGLES, GAMEPLAY_TOGGLES } from "./AudioCategory";
 import { CATEGORY_PREFS, resolveOpenCategory, SETTINGS_CATEGORIES } from "./categories";
 import { EDITING_TOGGLES } from "./EditingCategory";
-import { EFFECT_TOGGLES } from "./GameplayCategory";
+import { EFFECT_TOGGLES, SLIDER_TOGGLES } from "./GameplayCategory";
 
 /** every key the four viewer-pref groups actually carry, read off the
  * DEFAULT_* objects rather than written out here: adding a pref to the store
@@ -55,6 +55,9 @@ const RENDERED_PREF_KEYS: string[] = [
 	// the tab they appear in (categories.ts)
 	...GAMEPLAY_TOGGLES.map(({ key }) => `gameplay.${key}`),
 	"gameplay.positionalHitsoundLevel",
+	// the gameplay category's sliders section renders two more prefs out of
+	// the same group (GameplayCategory.tsx)
+	...SLIDER_TOGGLES.map(({ key }) => `gameplay.${key}`),
 	...OVERLAY_TOGGLES.map(({ key }) => `overlays.${key}`),
 	"overlays.displayLength",
 	"overlays.playfieldGrid",

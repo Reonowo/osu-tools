@@ -80,6 +80,11 @@ export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]
 	],
 	gameplay: [
 		"effects.backgroundDim",
+		// the snaking toggles persist under `gameplay` (settings.rs
+		// GameplayPrefs) and render here, in their own sliders section --
+		// GameplayCategory.tsx carries the placement reasoning
+		"gameplay.snakingInSliders",
+		"gameplay.snakingOutSliders",
 		"effects.enabled",
 		"effects.hitAnimations",
 		"effects.hitEffects",

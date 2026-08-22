@@ -130,10 +130,13 @@ export const DEFAULT_AUDIO: AudioSettings = {
 	ignoreBeatmapHitsounds: false
 };
 
-/** mirrors settings.rs GameplayPrefs::default() -- lazer's own defaults */
+/** mirrors settings.rs GameplayPrefs::default() -- lazer's own defaults
+ * (osurulesetconfigmanager.cs:20-21 for the snakings) */
 export const DEFAULT_GAMEPLAY: GameplaySettings = {
 	positionalHitsoundLevel: 0.2,
-	alwaysPlayFirstComboBreak: true
+	alwaysPlayFirstComboBreak: true,
+	snakingInSliders: true,
+	snakingOutSliders: true
 };
 
 /** the positional level is a 0-1 ratio; a blank field centres everything

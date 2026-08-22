@@ -1,5 +1,6 @@
-// gameplay: what the replay LOOKS like -- the background dim, the effects
-// master and the rows it gates. nothing here makes a sound.
+// gameplay: what the replay LOOKS like -- the background dim, how sliders
+// draw themselves in and out, the effects master and the rows it gates.
+// nothing here makes a sound.
 //
 // the two hit-sample behaviours that used to sit here (the positional level
 // and always-play-first-combo-break) now live in the audio category, which
@@ -13,7 +14,7 @@ import { ToggleRow } from "@/components/settings/ToggleRow";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BACKGROUND_DIM_MAX, BACKGROUND_DIM_MIN } from "@/state/defaults";
-import { useViewerStore, type EffectSettings } from "@/state/store";
+import { useViewerStore, type EffectSettings, type GameplaySettings } from "@/state/store";
 
 // the master first, then the six it gates -- mirrors settings.rs EffectPrefs.
 // backgroundDim rides on the same group but is not one of these: it has its
@@ -56,6 +57,24 @@ export const EFFECT_TOGGLES: { key: keyof EffectSettings; label: string; descrip
 	}
 ];
 
+// lazer's own two snaking settings (osurulesetconfigmanager.cs:20-21),
+// labels verbatim from RulesetSettingsStrings. neither is gated by the
+// effects master -- they sit in their own section below, outside the
+// registry the master gates
+export const SLIDER_TOGGLES: { key: keyof GameplaySettings; label: string; description: string }[] = [
+	{
+		key: "snakingInSliders",
+		label: "snaking in sliders",
+		description:
+			"the body grows in from its start over the approach time, and each span's first end circle waits for that snake before fading in"
+	},
+	{
+		key: "snakingOutSliders",
+		label: "snaking out sliders",
+		description: "the body retracts behind the ball on the final span once the head is hit"
+	}
+];
+
 /** shown instead of a granular effect's own description while the master is
  * off: the row explains what is stopping it, not what it would do */
 const MASTER_OFF = "gameplay effects are off; this keeps its setting and applies again when they are switched back on";
@@ -63,6 +82,8 @@ const MASTER_OFF = "gameplay effects are off; this keeps its setting and applies
 export function GameplayCategory() {
 	const effects = useViewerStore((s) => s.effects);
 	const setEffect = useViewerStore((s) => s.setEffect);
+	const gameplay = useViewerStore((s) => s.gameplay);
+	const setGameplay = useViewerStore((s) => s.setGameplay);
 
 	return (
 		<div className="grid gap-4">
@@ -98,6 +119,21 @@ export function GameplayCategory() {
 						</span>
 					</span>
 				</label>
+			</section>
+
+			{/* between background and effects: an object-behaviour group like the
+			    background is, not one of the gated rows below */}
+			<section className="space-y-2">
+				<SectionLabel>sliders</SectionLabel>
+				{SLIDER_TOGGLES.map(({ key, label, description }) => (
+					<ToggleRow
+						key={key}
+						label={label}
+						description={description}
+						checked={gameplay[key] as boolean}
+						onCheckedChange={(v) => setGameplay(key, v as GameplaySettings[typeof key])}
+					/>
+				))}
 			</section>
 
 			<section className="space-y-2">
