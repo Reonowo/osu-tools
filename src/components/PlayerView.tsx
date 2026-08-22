@@ -221,6 +221,7 @@ export function PlayerView() {
 	const overlays = useViewerStore((s) => s.overlays);
 	const mode = useViewerStore((s) => s.mode);
 	const effects = useViewerStore((s) => s.effects);
+	const gameplay = useViewerStore((s) => s.gameplay);
 	const viewportZoom = useViewerStore((s) => s.viewportZoom);
 	const viewportPan = useViewerStore((s) => s.viewportPan);
 	const backgroundPath = useViewerStore((s) => s.scene?.backgroundPath ?? null);
@@ -239,8 +240,11 @@ export function PlayerView() {
 			const state = viewerStore.getState();
 			// effects before the scene: hitAnimations is baked into the object
 			// timelines, so setting it first means the very first build already
-			// uses the persisted value instead of rebuilding to reach it
+			// uses the persisted value instead of rebuilding to reach it.
+			// gameplay for the same reason -- its snaking toggles are baked into
+			// the slider timelines
 			renderer.setEffects(state.effects);
+			renderer.setGameplay(state.gameplay);
 			// the skin cannot be installed before the scene the way the effects
 			// can: its textures load asynchronously, so the first build draws the
 			// bundled default's procedural art and the install below rebuilds
@@ -421,7 +425,13 @@ export function PlayerView() {
 				hitsoundScheduler.setEnabled(hitsoundsAudible(state));
 			}
 			// the positional level and the combo-break rule are baked into the
-			// plan; the ignore-beatmap-hitsounds toggle and the SKIN both change
+			// plan, and they are the only two of the gameplay group that are:
+			// compared FIELD BY FIELD rather than by identity, because the
+			// snaking toggles share the group and are purely visual, and a
+			// re-plan flushes every sample already handed to the audio clock --
+			// a visual toggle flipped mid-playback would cut the sounds already
+			// ringing and swallow the ones due before the next frame.
+			// the ignore-beatmap-hitsounds toggle and the SKIN both change
 			// which source answers. a skin change therefore re-plans without
 			// reloading the replay and without touching the playhead -- the clock
 			// is not consulted here at all
@@ -431,7 +441,8 @@ export function PlayerView() {
 			// re-decode for nothing, and at startup could land mid-playback
 			const skinMoved = !sameSelection(state.skin, prev.skin);
 			if (
-				(state.gameplay !== prev.gameplay ||
+				(state.gameplay.positionalHitsoundLevel !== prev.gameplay.positionalHitsoundLevel ||
+					state.gameplay.alwaysPlayFirstComboBreak !== prev.gameplay.alwaysPlayFirstComboBreak ||
 					state.audio.ignoreBeatmapHitsounds !== prev.audio.ignoreBeatmapHitsounds ||
 					skinMoved) &&
 				state.scene !== null
@@ -489,6 +500,10 @@ export function PlayerView() {
 	useEffect(() => {
 		rendererRef.current?.setEffects(effects);
 	}, [effects]);
+
+	useEffect(() => {
+		rendererRef.current?.setGameplay(gameplay);
+	}, [gameplay]);
 
 	useEffect(() => {
 		rendererRef.current?.setViewport(viewportZoom, viewportPan);
