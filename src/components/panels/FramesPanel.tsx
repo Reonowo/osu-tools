@@ -13,25 +13,19 @@ import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PanelHeader } from "@/components/shell/SidePanel";
 import { frameEditGate } from "@/editor/gate";
-import { insertOps, nudgeOps, snapOps } from "@/editor/ops";
+import { editTargets, insertOps, nudgeOps, snapOps } from "@/editor/ops";
 import { smoothMoveOps } from "@/editor/smooth";
 import { countedLabel, movedFrameCount } from "@/editor/tool-commits";
 import { formatButtons, formatTime } from "@/lib/format";
 import { formatLatticeStep, isOnLattice } from "@/lib/lattice";
 import { frameCursor } from "@/playback/frame-cursor";
+import { keybindSuffix } from "@/playback/keybinds";
 import { playbackClock } from "@/playback/instance";
-import { useViewerStore, viewerStore, type EditorState } from "@/state/store";
+import { useViewerStore, viewerStore } from "@/state/store";
 import { SectionLabel } from "./SectionLabel";
 
 const ROW_COUNT = 9;
 const CENTER_ROW = 4;
-
-/** panel ops apply to the selection, or the frame-cursor frame when nothing
- * is selected -- evaluated inside the intent so a queued op reads the
- * selection as of dispatch */
-function opTargets(editor: EditorState): number[] {
-	return editor.frameSelection.length > 0 ? editor.frameSelection : [frameCursor.currentIndex()];
-}
 
 /** the frame index the top row shows with `centerIndex` selected: centred
  * where the replay has room on both sides, flush against whichever end it
@@ -110,6 +104,7 @@ export function FramesPanel() {
 	const setFeatherMs = useViewerStore((s) => s.setFeatherMs);
 	const smoothStrength = useViewerStore((s) => s.smoothStrength);
 	const setSmoothStrength = useViewerStore((s) => s.setSmoothStrength);
+	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
 	const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const frameCount = scene === null ? 0 : scene.frames.length;
 	const [dxDraft, setDxDraft] = useState("0");
@@ -124,7 +119,15 @@ export function FramesPanel() {
 			label: "nudge",
 			payload: {
 				kind: "intent",
-				expand: (frames, editor) => nudgeOps(frames, opTargets(editor), dx, dy, editor.lattice, snapPref)
+				expand: (frames, editor) =>
+					nudgeOps(
+						frames,
+						editTargets(editor.frameSelection, frameCursor.currentIndex()),
+						dx,
+						dy,
+						editor.lattice,
+						snapPref
+					)
 			}
 		});
 		setDxDraft("0");
@@ -292,7 +295,11 @@ export function FramesPanel() {
 											payload: {
 												kind: "intent",
 												expand: (frames, editor) =>
-													snapOps(frames, opTargets(editor), editor.lattice)
+													snapOps(
+														frames,
+														editTargets(editor.frameSelection, frameCursor.currentIndex()),
+														editor.lattice
+													)
 											}
 										})
 									}
@@ -326,7 +333,7 @@ export function FramesPanel() {
 												expand: (frames, editor) =>
 													smoothMoveOps(
 														frames,
-														opTargets(editor),
+														editTargets(editor.frameSelection, frameCursor.currentIndex()),
 														strength,
 														editor.lattice,
 														snapPref
@@ -341,7 +348,7 @@ export function FramesPanel() {
 							<TooltipContent side="left">
 								{gate !== null && !gate.editable
 									? gate.reason
-									: "smooth the selection (or the current frame) with the pinned gaussian kernel, blended by strength"}
+									: `smooth the selection (or the current frame) with the pinned gaussian kernel, blended by strength${keybindSuffix(keybinds, "smoothSelection")}`}
 							</TooltipContent>
 						</Tooltip>
 					</div>
