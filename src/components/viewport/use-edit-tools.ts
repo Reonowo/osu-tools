@@ -19,13 +19,16 @@ import {
 	type GestureEffects,
 	type GestureEnv
 } from "@/editor/gesture-controller";
+import { editTargets } from "@/editor/ops";
 import { pressDrag } from "@/editor/press-drag";
 import { gesturePreview, opsToAuthoritative, selectionToAuthoritative } from "@/editor/preview";
+import { smoothMoveOps } from "@/editor/smooth";
 import { countedLabel, deletedFrameCount, movedFrameCount } from "@/editor/tool-commits";
 import { countTimedAtOrBefore } from "@/lib/timeline";
 import { viewportPointToPlayfield, viewportTransform } from "@/renderer/playfield";
 import { captureArm } from "@/playback/capture-arm";
 import { focusModality } from "@/playback/focus-modality";
+import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { keybindRow, matchesKeybind } from "@/playback/keybinds";
 import { spacePan } from "@/playback/space-pan";
@@ -358,6 +361,38 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			commitErase(targets);
 		};
 
+		/** the smooth-selection keybind runs the frames panel's own smooth
+		 * button -- the selection, or the frame-cursor frame when nothing is
+		 * selected -- through the same intent pipeline, so a queued op reads the
+		 * selection as of dispatch. move-only, so unlike erase there is nothing
+		 * structural to preview: the landed delta draws as soon as it applies */
+		const smoothSelection = () => {
+			const state = viewerStore.getState();
+			const scene = state.scene;
+			if (scene === null || state.editor === null || scene.frames.length === 0) return;
+			if (!frameEditGate(scene).editable) return;
+			if (controller.live) return;
+			// frozen at press time, for the reason the button freezes its own:
+			// what the user sees as they fire, not whatever a queued intent reads
+			const strength = state.smoothStrength;
+			const snap = state.editing.snapToLattice;
+			state.setPlaying(false);
+			void state.commitEdit({
+				label: (dispatched) => countedLabel("smooth", movedFrameCount(dispatched)),
+				payload: {
+					kind: "intent",
+					expand: (frames, editor) =>
+						smoothMoveOps(
+							frames,
+							editTargets(editor.frameSelection, frameCursor.currentIndex()),
+							strength,
+							editor.lattice,
+							snap
+						)
+				}
+			});
+		};
+
 		// escape is two-stage: a live gesture dies (nothing commits), otherwise
 		// the selection clears. both live on one key
 		const onKeyDown = (e: KeyboardEvent) => {
@@ -390,6 +425,19 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 				// chord the webview would otherwise answer itself
 				e.preventDefault();
 				eraseSelection();
+				return;
+			}
+			if (matchesKeybind(e, keybindRow(state.effectiveKeybinds, "smoothSelection"))) {
+				// ahead of the repeat filter, for the reason the edit keys filter
+				// theirs there: a held rebinding stays suppressed rather than
+				// reaching the webview on every repeat after the first
+				e.preventDefault();
+				// one smooth per press. smoothing is move-only and leaves the
+				// selection standing, so each repeat would blend over the previous
+				// result -- a resting finger flattens the path outright, and buries
+				// the stroke it replaced under a stack of undo entries
+				if (e.repeat) return;
+				smoothSelection();
 				return;
 			}
 			if (e.key !== "Escape") return;
