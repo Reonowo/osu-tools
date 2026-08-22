@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { Container, RenderLayer, Texture, type Renderer } from "pixi.js";
 import { fromBytes } from "../../engine/color";
 import { deriveScene } from "../../lib/derive";
-import { DEFAULT_EFFECTS } from "../../state/defaults";
+import { DEFAULT_EFFECTS, DEFAULT_GAMEPLAY } from "../../state/defaults";
 import { testScene } from "../../test/scene";
 import { testSkinContext } from "@/test/skin";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
@@ -43,6 +43,7 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
 			playfieldGrid: 0
 		}),
 		getEffects: () => DEFAULT_EFFECTS,
+		getGameplay: () => DEFAULT_GAMEPLAY,
 		getEditChrome: () => null,
 		layers: {
 			followPoints: new Container(),

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Container, RenderLayer, Sprite, Texture, type Renderer } from "pixi.js";
 import { trackValueAt } from "../../engine/transforms";
 import type { EffectSettings } from "../../lib/scene-types";
-import { DEFAULT_EFFECTS, DEFAULT_OVERLAYS } from "../../state/defaults";
+import { DEFAULT_EFFECTS, DEFAULT_GAMEPLAY, DEFAULT_OVERLAYS } from "../../state/defaults";
 import { testScene } from "../../test/scene";
 import { NO_SKIN_CONFIG, skinFiles, testSkin, testSkinContext, testToUrl } from "@/test/skin";
 import { ALL_PIECES_ENABLED, resolvePieces } from "@/skin/pieces";
@@ -133,6 +133,7 @@ function stubContext(
 		renderer: {} as unknown as Renderer,
 		getOverlays: () => DEFAULT_OVERLAYS,
 		getEffects,
+		getGameplay: () => DEFAULT_GAMEPLAY,
 		getEditChrome: () => null,
 		layers: {
 			followPoints: new Container(),

@@ -20,11 +20,12 @@ import { HIT_FADE_OUT_TIME } from "../engine/game-constants";
 import type { BrushRing, ChromeShape, PreviewSnapshot } from "../editor/preview";
 import type { DerivedScene } from "../lib/derive";
 import type { LoadedScene, SkinManifest } from "../lib/scene-types";
-import type { EffectSettings, OverlaySettings } from "../state/store";
+import type { EffectSettings, GameplaySettings, OverlaySettings } from "../state/store";
 import { installGradSafeBatchShader } from "./batch-shader";
 import {
 	clampPlayfieldGridSpacing,
 	DEFAULT_EFFECTS,
+	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
 	effectiveEffects,
 	type PlayfieldGridSpacing
@@ -116,6 +117,12 @@ export interface RenderContext {
 	 * precomputed timelines, so it is read at drawable construction and
 	 * setEffects rebuilds the scene when it flips */
 	getEffects(): EffectSettings;
+	/** the gameplay preferences, read live like getOverlays. the snaking
+	 * toggles are the exception -- they feed the precomputed slider timelines
+	 * (the body range's grow-in/retract and the end circles' delayed fade-in),
+	 * so SliderDrawable reads them at construction and setGameplay rebuilds
+	 * the scene when either flips */
+	getGameplay(): GameplaySettings;
 	/** the edit-mode chrome sources, read live; null in watch mode */
 	getEditChrome(): EditChromeSources | null;
 	layers: {
@@ -284,6 +291,9 @@ export class GameplayRenderer {
 	private skinBundle: SkinBundle | null = null;
 	/** master already folded in; null until the first setEffects */
 	private effects: EffectSettings | null = null;
+	/** the gameplay prefs as stored; no master to fold. null until the first
+	 * setGameplay */
+	private gameplay: GameplaySettings | null = null;
 	/** null in watch mode; set by PlayerView on mode changes */
 	private editChromeSources: EditChromeSources | null = null;
 	private tracker: ActiveSetTracker | null = null;
@@ -433,6 +443,7 @@ export class GameplayRenderer {
 			renderer: this.app.renderer,
 			getOverlays: () => this.overlays ?? DEFAULT_OVERLAYS,
 			getEffects: () => this.effects ?? DEFAULT_EFFECTS,
+			getGameplay: () => this.gameplay ?? DEFAULT_GAMEPLAY,
 			getEditChrome: () => this.editChromeSources,
 			layers: this.layers
 		};
@@ -522,6 +533,22 @@ export class GameplayRenderer {
 		const resolved = effectiveEffects(effects);
 		const rebuild = this.effects !== null && resolved.hitAnimations !== this.effects.hitAnimations;
 		this.effects = resolved;
+		if (rebuild && this.ctx !== null) {
+			const { scene, derived } = this.ctx;
+			this.setScene(scene, derived);
+		}
+	}
+
+	/** setEffects' counterpart for the gameplay prefs: stored as-is, no master
+	 * to fold. only the two snaking toggles feed precomputed timelines, so
+	 * only their flips rebuild; the rest of the group is audio-side state this
+	 * class never reads */
+	setGameplay(gameplay: GameplaySettings): void {
+		const rebuild =
+			this.gameplay !== null &&
+			(gameplay.snakingInSliders !== this.gameplay.snakingInSliders ||
+				gameplay.snakingOutSliders !== this.gameplay.snakingOutSliders);
+		this.gameplay = gameplay;
 		if (rebuild && this.ctx !== null) {
 			const { scene, derived } = this.ctx;
 			this.setScene(scene, derived);

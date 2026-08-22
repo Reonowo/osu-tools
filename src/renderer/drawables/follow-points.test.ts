@@ -3,7 +3,7 @@ import { Container, RenderLayer, Texture, type Renderer } from "pixi.js";
 import { fromBytes } from "../../engine/color";
 import { deriveScene } from "../../lib/derive";
 import type { RenderObject } from "../../lib/scene-types";
-import { DEFAULT_EFFECTS, effectiveEffects } from "../../state/defaults";
+import { DEFAULT_EFFECTS, DEFAULT_GAMEPLAY, effectiveEffects } from "../../state/defaults";
 import { testScene } from "../../test/scene";
 import { testSkinContext } from "@/test/skin";
 import type { RenderContext, TextureBaker } from "../GameplayRenderer";
@@ -113,6 +113,7 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 			playfieldGrid: 0
 		}),
 		getEffects: () => effects,
+		getGameplay: () => DEFAULT_GAMEPLAY,
 		getEditChrome: () => null,
 		layers: {
 			followPoints: new Container(),
