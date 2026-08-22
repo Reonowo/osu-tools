@@ -241,6 +241,16 @@ pub struct GameplayPrefs {
     /// comboeffects.cs:59 -- whether the play's FIRST combo break sounds even
     /// when the combo lost was small. lazer defaults it on
     pub always_play_first_combo_break: bool,
+    /// osurulesetconfigmanager.cs:20 -- whether the body snakes in over
+    /// preempt/3 while approaching (snakingsliderbody.cs:84). off also lifts
+    /// drawableosuhitobject.cs:163's preempt/3 fade-in delay on each span's
+    /// first end circle, which exists only to wait for that snake
+    pub snaking_in_sliders: bool,
+    /// osurulesetconfigmanager.cs:21 -- whether the body retracts behind the
+    /// ball once the head is hit (snakingsliderbody.cs:91,95). off also drops
+    /// drawableslider.cs:360's short body fade at the slider's end, whose
+    /// whole job is to smooth that retract away
+    pub snaking_out_sliders: bool,
 }
 
 impl Default for GameplayPrefs {
@@ -248,6 +258,8 @@ impl Default for GameplayPrefs {
         GameplayPrefs {
             positional_hitsound_level: 0.2,
             always_play_first_combo_break: true,
+            snaking_in_sliders: true,
+            snaking_out_sliders: true,
         }
     }
 }
@@ -511,6 +523,8 @@ mod tests {
             gameplay: GameplayPrefs {
                 positional_hitsound_level: 0.5,
                 always_play_first_combo_break: false,
+                snaking_in_sliders: false,
+                snaking_out_sliders: true,
             },
             overlays: OverlayPrefs {
                 cursor_path: true,
@@ -601,6 +615,10 @@ mod tests {
             settings.editing.warn_on_overwrite,
             "the overwrite warning ships enabled"
         );
+        assert!(
+            settings.gameplay.snaking_in_sliders && settings.gameplay.snaking_out_sliders,
+            "both snakings ship enabled, lazer's own defaults"
+        );
         assert_eq!(
             settings.effects,
             EffectPrefs {
@@ -652,7 +670,12 @@ mod tests {
                     "offsetMs": -12.0,
                     "ignoreBeatmapHitsounds": true,
                 },
-                "gameplay": { "positionalHitsoundLevel": 0.5, "alwaysPlayFirstComboBreak": false },
+                "gameplay": {
+                    "positionalHitsoundLevel": 0.5,
+                    "alwaysPlayFirstComboBreak": false,
+                    "snakingInSliders": false,
+                    "snakingOutSliders": true,
+                },
                 "overlays": {
                     "cursorPath": true,
                     "clickMarkers": true,
@@ -701,7 +724,12 @@ mod tests {
                     "offsetMs": 0.0,
                     "ignoreBeatmapHitsounds": false,
                 },
-                "gameplay": { "positionalHitsoundLevel": 0.2, "alwaysPlayFirstComboBreak": true },
+                "gameplay": {
+                    "positionalHitsoundLevel": 0.2,
+                    "alwaysPlayFirstComboBreak": true,
+                    "snakingInSliders": true,
+                    "snakingOutSliders": true,
+                },
                 "overlays": {
                     "cursorPath": false,
                     "clickMarkers": false,

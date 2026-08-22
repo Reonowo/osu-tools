@@ -1427,6 +1427,8 @@ Name: Audible
             GameplayPrefs {
                 positional_hitsound_level: 9.0,
                 always_play_first_combo_break: false,
+                snaking_in_sliders: false,
+                snaking_out_sliders: false,
             },
             prefs,
             editing.clone(),
