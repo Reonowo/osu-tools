@@ -109,6 +109,13 @@ describe("the keybind table", () => {
 		}
 	});
 
+	test("smooth selection ships on the smooth tool's mnemonic, shifted", () => {
+		// shift keeps the s the tool already owns: one press apart, and two
+		// distinct identities, so the fold never sees a collision
+		expect(keybindRow(table(), "smoothSelection").owner).toBe("gesture");
+		expect(bindingsFor({}, "smoothSelection")).toEqual(["Shift+S"]);
+	});
+
 	test("lists every action, each in a group and reachable from the keyboard", () => {
 		// the surface cannot drift from the inventory: a keybind declared here
 		// gets a settings row and a help-overlay row for free, and one shipped
@@ -370,6 +377,24 @@ describe("capturing into a slot", () => {
 		expect(bindingsFor(overrides, "eraseSelection")).toEqual(["Backspace"]);
 	});
 
+	test("a chord capture takes only its own identity, not the bare letter", () => {
+		// shift+s is a different identity from the smooth tool's s, so arming
+		// restart with it unbinds exactly the row that held it
+		const { overrides, displaced } = applyCapture(
+			{},
+			table(),
+			"restart",
+			0,
+			captured({ key: "s", code: "KeyS", shiftKey: true }),
+			PLATFORM
+		);
+		expect(bindingsFor(overrides, "restart")).toEqual(["Shift+S"]);
+		expect(bindingsFor(overrides, "smoothSelection")).toEqual([]);
+		expect(displaced.map((entry) => entry.action)).toEqual(["smoothSelection"]);
+		// and the bare letter still arms the tool
+		expect(toolsArmedBy("S", table(overrides))).toEqual(["smooth"]);
+	});
+
 	test("an alternate lands beside the primary without displacing it", () => {
 		const { overrides } = applyCapture({}, table(), "restart", 1, captured({ key: "g", code: "KeyG" }), PLATFORM);
 		expect(bindingsFor(overrides, "restart")).toEqual(["Home", "G"]);
@@ -549,11 +574,35 @@ describe("ending a held binding", () => {
 
 describe("matchesKeybind", () => {
 	const erase = (overrides: KeybindOverrides = {}) => keybindRow(table(overrides), "eraseSelection");
+	const smooth = (overrides: KeybindOverrides = {}) => keybindRow(table(overrides), "smoothSelection");
 
 	test("the gesture-owned keys answer to both of their defaults", () => {
 		expect(matchesKeybind(press({ key: "Delete", code: "Delete" }), erase(), PLATFORM)).toBe(true);
 		expect(matchesKeybind(press({ key: "Backspace", code: "Backspace" }), erase(), PLATFORM)).toBe(true);
 		expect(matchesKeybind(press({ key: "q", code: "KeyQ" }), erase(), PLATFORM)).toBe(false);
+	});
+
+	test("smooth selection answers to the shifted letter, not the bare one", () => {
+		// either case arrives -- browsers report a shifted letter both ways --
+		// but the modifier must be down, or an unshifted s would smooth frames
+		expect(matchesKeybind(press({ key: "S", code: "KeyS", shiftKey: true }), smooth(), PLATFORM)).toBe(true);
+		expect(matchesKeybind(press({ key: "s", code: "KeyS", shiftKey: true }), smooth(), PLATFORM)).toBe(true);
+		expect(matchesKeybind(press({ key: "s", code: "KeyS" }), smooth(), PLATFORM)).toBe(false);
+	});
+
+	test("a rebound smooth-selection key is the chord that smooths, and the old one stops", () => {
+		const { overrides } = applyCapture(
+			{},
+			table(),
+			"smoothSelection",
+			0,
+			captured({ key: "q", code: "KeyQ" }),
+			PLATFORM
+		);
+		expect(matchesKeybind(press({ key: "q", code: "KeyQ" }), smooth(overrides), PLATFORM)).toBe(true);
+		expect(matchesKeybind(press({ key: "S", code: "KeyS", shiftKey: true }), smooth(overrides), PLATFORM)).toBe(
+			false
+		);
 	});
 
 	test("a rebound gesture key is the key that erases, and the old one stops", () => {
@@ -702,9 +751,9 @@ describe("resolveEditKeybind", () => {
 	});
 
 	test("leaves the gesture-owned keys to their own handlers", () => {
-		// listed in the table, registered in use-edit-tools: cancel and erase
-		// need gesture-local state this resolver cannot see
-		for (const key of ["Escape", "Delete", "Backspace"]) {
+		// listed in the table, registered in use-edit-tools: cancel, erase and
+		// smooth selection need gesture-local state this resolver cannot see
+		for (const key of ["Escape", "Delete", "Backspace", "Shift+S"]) {
 			expect(resolveEditKeybind(key, editing(), table(), PLATFORM)).toBeNull();
 		}
 	});

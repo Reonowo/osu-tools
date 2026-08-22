@@ -66,6 +66,7 @@ export type KeybindAction =
 	| "toggleSnap"
 	| "cancel"
 	| "eraseSelection"
+	| "smoothSelection"
 	| "openMenu"
 	| "showHelp";
 
@@ -404,6 +405,19 @@ export const KEYBINDS = {
 			{ hotkey: "Delete", codes: ["Delete"] },
 			{ hotkey: "Backspace", codes: ["Backspace"] }
 		]
+	},
+	// smooth selection is the frames panel's own smooth button from the
+	// keyboard -- the selection, or the frame-cursor frame when nothing is
+	// selected -- so its default keeps the tool's mnemonic one shift away
+	// rather than spending a second letter on it
+	smoothSelection: {
+		action: "smoothSelection",
+		group: "editing",
+		owner: "gesture",
+		by: "key",
+		label: "smooth the frame selection, or the current frame",
+		locked: null,
+		defaults: one("Shift+S", "KeyS")
 	},
 	// `Mod` rather than `Control`, unlike viewportReset above: this is the open
 	// accelerator every desktop app has, which means ctrl off the mac and cmd on
