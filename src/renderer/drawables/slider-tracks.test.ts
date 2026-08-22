@@ -22,39 +22,54 @@ const obj = { startTime: 1000, preempt: 600, fadeIn: 400, endTime: 2000 };
 
 describe("snakeRange (snakingsliderbody.cs:73-100)", () => {
 	const oneSpan = { spanCount: 1, snakeInDuration: 200 };
+	// both settings on -- lazer's defaults, and every other case below varies
+	// one flag at a time against this baseline
+	const on = [true, true] as const;
 
 	test("snakes in over preempt/3 from appear", () => {
-		expect(snakeRange(oneSpan, obj, 400, 0, false)).toEqual([0, 0]);
-		expect(snakeRange(oneSpan, obj, 500, 0, false)).toEqual([0, 0.5]);
-		expect(snakeRange(oneSpan, obj, 600, 0, false)).toEqual([0, 1]);
-		expect(snakeRange(oneSpan, obj, 1500, 0, false)).toEqual([0, 1]);
+		expect(snakeRange(oneSpan, obj, 400, 0, false, ...on)).toEqual([0, 0]);
+		expect(snakeRange(oneSpan, obj, 500, 0, false, ...on)).toEqual([0, 0.5]);
+		expect(snakeRange(oneSpan, obj, 600, 0, false, ...on)).toEqual([0, 1]);
+		expect(snakeRange(oneSpan, obj, 1500, 0, false, ...on)).toEqual([0, 1]);
 	});
 
 	test("single span snakes out from the start once the head is hit", () => {
-		expect(snakeRange(oneSpan, obj, 1500, 0.5, true)).toEqual([0.5, 1]);
+		expect(snakeRange(oneSpan, obj, 1500, 0.5, true, ...on)).toEqual([0.5, 1]);
 		// head not hit: completion forced to 0 upstream, so no snake-out
-		expect(snakeRange(oneSpan, obj, 1500, 0.5, false)).toEqual([0, 1]);
+		expect(snakeRange(oneSpan, obj, 1500, 0.5, false, ...on)).toEqual([0, 1]);
 	});
 
 	test("even span count snakes out from the end on the final (odd-index) span", () => {
 		const twoSpans = { spanCount: 2, snakeInDuration: 200 };
 		// completion 0.75 -> span 1 (final), spanProgress folds to 0.5
-		expect(snakeRange(twoSpans, obj, 1750, 0.75, true)).toEqual([0, 0.5]);
+		expect(snakeRange(twoSpans, obj, 1750, 0.75, true, ...on)).toEqual([0, 0.5]);
 	});
 
 	test("3-span slider: only the final span (even index) snakes out, middle spans stay untrimmed", () => {
 		const threeSpans = { spanCount: 3, snakeInDuration: 200 };
 		// completion 0.5 -> span 1 (middle, index 1 < spanCount-1=2): no trim,
 		// even though 1 is odd -- the span>=spanCount-1 gate must fire first
-		expect(snakeRange(threeSpans, obj, 1750, 0.5, true)).toEqual([0, 1]);
+		expect(snakeRange(threeSpans, obj, 1750, 0.5, true, ...on)).toEqual([0, 1]);
 		// completion 5/6 -> span 2 (final, even index): trims start from spanProgress
-		expect(snakeRange(threeSpans, obj, 1750, 5 / 6, true)).toEqual([0.5, 1]);
+		expect(snakeRange(threeSpans, obj, 1750, 5 / 6, true, ...on)).toEqual([0.5, 1]);
+	});
+
+	test("snaking in off answers the whole body from its appear time (:84)", () => {
+		expect(snakeRange(oneSpan, obj, 400, 0, false, false, true)).toEqual([0, 1]);
+		expect(snakeRange(oneSpan, obj, 500, 0, false, false, true)).toEqual([0, 1]);
+	});
+
+	test("snaking out off keeps the final span untrimmed (:91,95), either direction", () => {
+		const oneSpanOn = { spanCount: 1, snakeInDuration: 200 };
+		expect(snakeRange(oneSpanOn, obj, 1500, 0.5, true, true, false)).toEqual([0, 1]);
+		const twoSpans = { spanCount: 2, snakeInDuration: 200 };
+		expect(snakeRange(twoSpans, obj, 1750, 0.75, true, true, false)).toEqual([0, 1]);
 	});
 });
 
 describe("fades", () => {
 	test("body fades in over fadeIn from appear and out over 240 at the end", () => {
-		const tracks = sliderFadeTracks(obj, { endTime: 2000, aggregateMiss: false, headHitTime: 1000 });
+		const tracks = sliderFadeTracks(obj, { endTime: 2000, aggregateMiss: false, headHitTime: 1000 }, true);
 		expect(trackValueAt(tracks.bodyAlpha, 400, 0)).toBe(0);
 		expect(trackValueAt(tracks.bodyAlpha, 600, 0)).toBeCloseTo(0.5, 9);
 		// head hit + snaking out: the 40ms body fade wins at the end
@@ -64,12 +79,17 @@ describe("fades", () => {
 	});
 
 	test("no head hit: the body has no short end-fade of its own, only the container's 240ms fade", () => {
-		const tracks = sliderFadeTracks(obj, { endTime: 2000, aggregateMiss: false, headHitTime: null });
+		const tracks = sliderFadeTracks(obj, { endTime: 2000, aggregateMiss: false, headHitTime: null }, true);
 		// bodyAlpha never anchors anything at endTime, so it holds at its
 		// fade-in's "to" (1) indefinitely -- proves the 40ms push is gated on
 		// headHitTime, not unconditional
 		expect(trackValueAt(tracks.bodyAlpha, 2040, 0)).toBe(1);
 		expect(trackValueAt(tracks.bodyAlpha, 5000, 0)).toBe(1);
+	});
+
+	test("snaking out off drops the short end-fade too (drawableslider.cs:360)", () => {
+		const tracks = sliderFadeTracks(obj, { endTime: 2000, aggregateMiss: false, headHitTime: 1000 }, false);
+		expect(trackValueAt(tracks.bodyAlpha, 2040, 0)).toBe(1);
 	});
 });
 
@@ -383,7 +403,7 @@ describe("followCircleTracks (argonfollowcircle.cs:62-95)", () => {
 describe("repeatTracks (drawableosuhitobject.cs:155-172 applyrepeatfadein + drawablesliderrepeat.cs)", () => {
 	test("first-span arrow waits for the snake-in delay and fades in over 150ms linear", () => {
 		const nested = { time: 1500, preempt: 500, fadeIn: 400, spanIndex: 0 };
-		const tracks = repeatTracks(nested, 500, 200, "hit");
+		const tracks = repeatTracks(nested, 500, 200, "hit", true);
 		const appear = 1000; // 1500 - 500
 		expect(trackValueAt(tracks.alpha, appear, 0)).toBe(0);
 		expect(trackValueAt(tracks.alpha, appear + 200, 0)).toBe(0); // fade only starts after the delay
@@ -393,9 +413,17 @@ describe("repeatTracks (drawableosuhitobject.cs:155-172 applyrepeatfadein + draw
 		expect(trackValueAt(tracks.alpha, 1800, 0)).toBe(0);
 	});
 
+	test("snaking in off lifts the first-span delay too (:163 gates it on the snake)", () => {
+		const nested = { time: 1500, preempt: 500, fadeIn: 400, spanIndex: 0 };
+		const tracks = repeatTracks(nested, 500, 200, "hit", false);
+		const appear = 1000;
+		expect(trackValueAt(tracks.alpha, appear + 75, 0)).toBeCloseTo(0.5, 9); // fading immediately
+		expect(trackValueAt(tracks.alpha, appear + 150, 0)).toBe(1);
+	});
+
 	test("a later-span arrow is not delayed, caps its fade-in to spanDuration, and misses fade out linearly", () => {
 		const nested = { time: 3000, preempt: 500, fadeIn: 400, spanIndex: 1 };
-		const tracks = repeatTracks(nested, 100, 200, "miss");
+		const tracks = repeatTracks(nested, 100, 200, "miss", true);
 		const appear = 2500; // 3000 - 500
 		expect(trackValueAt(tracks.alpha, appear, 0)).toBe(0);
 		expect(trackValueAt(tracks.alpha, appear + 100, 0)).toBe(1); // capped fade-in duration is min(100,150)=100
@@ -405,7 +433,7 @@ describe("repeatTracks (drawableosuhitobject.cs:155-172 applyrepeatfadein + draw
 
 	test("result === null (notSimulated) behaves like a hit", () => {
 		const nested = { time: 1500, preempt: 500, fadeIn: 400, spanIndex: 0 };
-		expect(repeatTracks(nested, 500, 200, null)).toEqual(repeatTracks(nested, 500, 200, "hit"));
+		expect(repeatTracks(nested, 500, 200, null, true)).toEqual(repeatTracks(nested, 500, 200, "hit", true));
 	});
 });
 

@@ -22,28 +22,32 @@ export function completionProgress(obj: { startTime: number }, duration: number,
 	return Math.min(Math.max((t - obj.startTime) / duration, 0), 1);
 }
 
-/** skinning/snakingsliderbody.cs:73-100 (updateprogress) with both snaking
- * settings on (lazer default) */
+/** skinning/snakingsliderbody.cs:73-100 (updateprogress). `snakingIn` gates
+ * the preempt/3 grow-in (:84 -- off means the body answers fully drawn from
+ * its appear time); `snakingOut` gates the final-span retract behind the ball
+ * (:91,95) */
 export function snakeRange(
 	slider: { spanCount: number; snakeInDuration: number },
 	obj: { startTime: number; preempt: number },
 	t: number,
 	completion: number,
-	headHit: boolean
+	headHit: boolean,
+	snakingIn: boolean,
+	snakingOut: boolean
 ): [number, number] {
 	const effective = headHit ? completion : 0;
 	const span = spanAt(slider.spanCount, effective);
 	const spanProgress = progressAt(slider.spanCount, effective);
 
 	let start = 0;
-	let end = Math.min(Math.max((t - (obj.startTime - obj.preempt)) / slider.snakeInDuration, 0), 1);
+	let end = snakingIn ? Math.min(Math.max((t - (obj.startTime - obj.preempt)) / slider.snakeInDuration, 0), 1) : 1;
 
 	if (span >= slider.spanCount - 1) {
 		if (Math.min(span, slider.spanCount - 1) % 2 === 1) {
 			start = 0;
-			end = spanProgress;
+			end = snakingOut ? spanProgress : 1;
 		} else {
-			start = spanProgress;
+			start = snakingOut ? spanProgress : 0;
 		}
 	}
 	return start <= end ? [start, end] : [end, start];
@@ -51,14 +55,16 @@ export function snakeRange(
 
 export function sliderFadeTracks(
 	obj: { startTime: number; preempt: number; fadeIn: number },
-	result: { endTime: number; aggregateMiss: boolean; headHitTime: number | null }
+	result: { endTime: number; aggregateMiss: boolean; headHitTime: number | null },
+	snakingOut: boolean
 ): { bodyAlpha: Track[]; containerAlpha: Track[] } {
 	const appear = obj.startTime - obj.preempt;
 	const bodyAlpha: Track[] = [tween(appear, obj.fadeIn, 0, 1)];
 	const containerAlpha: Track[] = [jump(appear, 1), tween(result.endTime, SLIDER_FADE_OUT_TIME, 1, 0)];
-	// drawableslider.cs -- updatehitstatetransforms: short body fade only
-	// when the head was hit and snaking out is active
-	if (result.headHitTime !== null) bodyAlpha.push(tween(result.endTime, 40, 1, 0));
+	// drawableslider.cs:360 -- updatehitstatetransforms: short body fade only
+	// when the head was hit AND snaking out is on, since its whole job is to
+	// smooth that retract away
+	if (result.headHitTime !== null && snakingOut) bodyAlpha.push(tween(result.endTime, 40, 1, 0));
 	return { bodyAlpha, containerAlpha };
 }
 
@@ -189,14 +195,16 @@ export function repeatTracks(
 	nested: { time: number; preempt: number; fadeIn: number; spanIndex: number },
 	spanDuration: number,
 	snakeInDuration: number,
-	result: "hit" | "miss" | null
+	result: "hit" | "miss" | null,
+	snakingIn: boolean
 ): { alpha: Track[] } {
 	const appear = nested.time - nested.preempt;
 	// drawableosuhitobject.cs:155-172 (applyrepeatfadein) -- arrows fade over
-	// 150 (capped to spanduration past the first), first-span pieces wait for
-	// the snake-in
+	// 150 (capped to spanduration past the first), and first-span pieces wait
+	// for the snake-in (:163 -- the delay exists only to wait for it, so it
+	// applies only while snaking in is on)
 	const fadeDuration = nested.spanIndex > 0 ? Math.min(spanDuration, 150) : 150;
-	const delay = nested.spanIndex === 0 ? snakeInDuration : 0;
+	const delay = snakingIn && nested.spanIndex === 0 ? snakeInDuration : 0;
 	const animDuration = Math.min(300, spanDuration);
 	const resolved = result ?? "hit";
 	const alpha: Track[] = [tween(appear + delay, fadeDuration, 0, 1)];

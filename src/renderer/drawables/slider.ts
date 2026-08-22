@@ -77,6 +77,10 @@ export class SliderDrawable implements ObjectDrawable {
 	/** read once at construction, like the tracks it feeds: setEffects rebuilds
 	 * the object drawables when this flips */
 	private readonly hitAnimations: boolean;
+	/** same terms as hitAnimations: setGameplay rebuilds the drawables when
+	 * either flips */
+	private readonly snakingIn: boolean;
+	private readonly snakingOut: boolean;
 	private readonly body: SliderBodyRenderer;
 	private readonly head: CirclePiece;
 	private readonly headTracks: CircleTracks;
@@ -104,6 +108,9 @@ export class SliderDrawable implements ObjectDrawable {
 		this.planScale = ctx.scene.renderPlan.scale;
 		this.simulated = ctx.scene.simulation.status === "authoritative";
 		this.hitAnimations = ctx.getEffects().hitAnimations;
+		const gameplay = ctx.getGameplay();
+		this.snakingIn = gameplay.snakingInSliders;
+		this.snakingOut = gameplay.snakingOutSliders;
 		// the head's fork, taken off its own spec rather than off the skin's
 		// era: a beatmap can answer a texture lookup over an argon skin, and
 		// what draws a texture is the composited piece either way. it also
@@ -179,11 +186,15 @@ export class SliderDrawable implements ObjectDrawable {
 		// container + body fades; the aggregate event carries the end result
 		const aggregate = events.find((e) => e.kind.type === "sliderAggregate");
 		const aggregateKind = aggregate?.kind;
-		this.fades = st.sliderFadeTracks(obj, {
-			endTime: obj.endTime,
-			aggregateMiss: aggregateKind?.type === "sliderAggregate" && aggregateKind.grade === "miss",
-			headHitTime: this.headHit.miss ? null : this.headHit.time
-		});
+		this.fades = st.sliderFadeTracks(
+			obj,
+			{
+				endTime: obj.endTime,
+				aggregateMiss: aggregateKind?.type === "sliderAggregate" && aggregateKind.grade === "miss",
+				headHitTime: this.headHit.miss ? null : this.headHit.time
+			},
+			this.snakingOut
+		);
 
 		// nested pieces (positions arrive stacked; store head-relative)
 		for (const nested of slider.nested) {
@@ -210,7 +221,13 @@ export class SliderDrawable implements ObjectDrawable {
 			} else {
 				const arrow = this.legacy ? new LegacyReverseArrow(ctx, accent) : new ArgonReverseArrow(ctx, accent);
 				view.addChild(arrow.view);
-				const tracks = st.repeatTracks(nested, slider.spanDuration, slider.snakeInDuration, result);
+				const tracks = st.repeatTracks(
+					nested,
+					slider.spanDuration,
+					slider.snakeInDuration,
+					result,
+					this.snakingIn
+				);
 				this.pieces.push({
 					nested,
 					view,
@@ -270,11 +287,13 @@ export class SliderDrawable implements ObjectDrawable {
 	 * ("sliderendcircle", false)`: the dedicated end assets when the skin ships
 	 * them, its own hit circle when it does not, and NO combo number either way.
 	 *
-	 * the fade-in is delayed by a third of the preempt
-	 * (drawableosuhitobject.cs:163-172's `ApplyRepeatFadeIn`, on the snaking-in
-	 * branch this renderer is always on), which is expressed here by handing the
-	 * piece a shortened preempt rather than a separate track: the piece's own
-	 * appear time IS `startTime - preempt`
+	 * the fade-in carries drawableosuhitobject.cs:163-172's ApplyRepeatFadeIn
+	 * delay while snaking in is ON -- a third of the preempt waiting for the
+	 * snake to finish -- which is expressed here by handing the piece a
+	 * shortened preempt rather than a separate track: the piece's own appear
+	 * time IS `startTime - preempt`. with snaking in off there is nothing to
+	 * wait for (:163 gates the delay on it), so the full preempt stands and
+	 * the circle fades in from its own preempt like any other piece
 	 */
 	private tailPiece(
 		ctx: RenderContext,
@@ -297,8 +316,13 @@ export class SliderDrawable implements ObjectDrawable {
 			accent,
 			indexInCombo: obj.indexInCombo,
 			withOuterFill: false,
-			// the tail's own appear window: `- preempt/3` on the fade-in delay
-			obj: { startTime: obj.startTime, preempt: (obj.preempt * 2) / 3, fadeIn: tail.fadeIn },
+			// the tail's own appear window: `- preempt/3` on the fade-in delay,
+			// only on the snaking-in branch (see above)
+			obj: {
+				startTime: obj.startTime,
+				preempt: this.snakingIn ? (obj.preempt * 2) / 3 : obj.preempt,
+				fadeIn: tail.fadeIn
+			},
 			result,
 			hitAnimations: this.hitAnimations,
 			shared: this.headTracks
@@ -316,7 +340,7 @@ export class SliderDrawable implements ObjectDrawable {
 
 		const completion = st.completionProgress(this.obj, this.slider.duration, t);
 		const headHit = this.simulated ? !this.headHit.miss && t >= this.headHit.time : t >= this.obj.startTime;
-		const [p0, p1] = st.snakeRange(this.slider, this.obj, t, completion, headHit);
+		const [p0, p1] = st.snakeRange(this.slider, this.obj, t, completion, headHit, this.snakingIn, this.snakingOut);
 		this.body.setRange(p0, p1);
 		this.body.view.alpha = trackValueAt(this.fades.bodyAlpha, t, 0);
 		const dim = trackValueAt(this.headTracks.dim, t, 1);
