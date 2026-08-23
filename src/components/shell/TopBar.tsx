@@ -9,6 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatMods, formatTime } from "@/lib/format";
+import { keybindSuffix } from "@/playback/keybinds";
 import { useViewerStore, type ViewerMode } from "@/state/store";
 
 // osu!'s own logotype slant, reused for the identity tile and every mod chip;
@@ -43,6 +44,7 @@ export function TopBar({
 	const editor = useViewerStore((s) => s.editor);
 	const undoEdit = useViewerStore((s) => s.undoEdit);
 	const redoEdit = useViewerStore((s) => s.redoEdit);
+	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
 
 	// AppShell only mounts once App.tsx has a loaded scene, so these are
 	// always populated in practice -- the fallbacks just keep this component
@@ -146,6 +148,7 @@ export function TopBar({
 								</TooltipTrigger>
 								<TooltipContent>
 									{nextUndo !== null ? `undo ${nextUndo}` : "nothing to undo"}
+									{keybindSuffix(keybinds, "undo")}
 								</TooltipContent>
 							</Tooltip>
 							<Tooltip>
@@ -162,6 +165,7 @@ export function TopBar({
 								</TooltipTrigger>
 								<TooltipContent>
 									{nextRedo !== null ? `redo ${nextRedo}` : "nothing to redo"}
+									{keybindSuffix(keybinds, "redo")}
 								</TooltipContent>
 							</Tooltip>
 						</div>
