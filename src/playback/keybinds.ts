@@ -67,6 +67,8 @@ export type KeybindAction =
 	| "cancel"
 	| "eraseSelection"
 	| "smoothSelection"
+	| "undo"
+	| "redo"
 	| "openMenu"
 	| "showHelp";
 
@@ -418,6 +420,38 @@ export const KEYBINDS = {
 		label: "smooth the frame selection, or the current frame",
 		locked: null,
 		defaults: one("Shift+S", "KeyS")
+	},
+	// the top bar's two history buttons from the keyboard. `Mod` rather than
+	// `Control`, for openMenu's reason: this is an accelerator every desktop
+	// app ships, which means ctrl off the mac and cmd on it, and `Mod` is the
+	// token that resolves per platform.
+	//
+	// matched on the printed character like every other letter row, which on a
+	// qwertz layout puts undo and redo on each other's physical keys -- correct,
+	// and what every native app there does: the user presses the keycap that
+	// prints z. a layout that prints neither is the ordinary docs/adr/0002
+	// rebind.
+	//
+	// redo ships on the windows convention rather than the mac one, so it is
+	// Y on both platforms; the alternate slot is free for a Mod+Shift+Z beside
+	// it if the mac spelling is ever wanted too
+	undo: {
+		action: "undo",
+		group: "editing",
+		owner: "global",
+		by: "key",
+		label: "undo the last edit",
+		locked: null,
+		defaults: one("Mod+Z", "KeyZ")
+	},
+	redo: {
+		action: "redo",
+		group: "editing",
+		owner: "global",
+		by: "key",
+		label: "redo the undone edit",
+		locked: null,
+		defaults: one("Mod+Y", "KeyY")
 	},
 	// `Mod` rather than `Control`, unlike viewportReset above: this is the open
 	// accelerator every desktop app has, which means ctrl off the mac and cmd on

@@ -7,6 +7,7 @@ import {
 	defaultKeybinds,
 	EDIT_ACTIONS,
 	foldKeybinds,
+	formatBindings,
 	KEYBIND_ENTRIES,
 	KEYBINDS,
 	keybindIdentities,
@@ -114,6 +115,28 @@ describe("the keybind table", () => {
 		// distinct identities, so the fold never sees a collision
 		expect(keybindRow(table(), "smoothSelection").owner).toBe("gesture");
 		expect(bindingsFor({}, "smoothSelection")).toEqual(["Shift+S"]);
+	});
+
+	test("ships the history steps on the accelerator every desktop app has", () => {
+		// `Mod`, so the chord is ctrl off the mac and cmd on it -- the same token
+		// the open accelerator spells, and the reason neither row hardcodes one
+		expect(bindingsFor({}, "undo")).toEqual(["Mod+Z"]);
+		expect(bindingsFor({}, "redo")).toEqual(["Mod+Y"]);
+		expect(formatBindings(keybindRow(table(), "undo").bindings, PLATFORM)).toBe("Ctrl+Z");
+		expect(formatBindings(keybindRow(foldKeybinds({}, "mac"), "undo").bindings, "mac")).toBe("Cmd+Z");
+		for (const action of ["undo", "redo"] as const) {
+			const row = keybindRow(table(), action);
+			// registered through the global point, and matched on the printed
+			// character like every other letter row: a qwertz keyboard swaps the
+			// two physical keys, which is what the keycaps there say to do
+			expect(row.owner).toBe("global");
+			expect(row.by).toBe("key");
+			expect(row.group).toBe("editing");
+		}
+		// and not filed among the actions the edit resolver answers for: the
+		// history steps read the document's own availability, not the tool gate
+		expect(EDIT_ACTIONS).not.toContain("undo");
+		expect(resolveEditKeybind("Mod+Z", editing(), table(), PLATFORM)).toBeNull();
 	});
 
 	test("lists every action, each in a group and reachable from the keyboard", () => {
