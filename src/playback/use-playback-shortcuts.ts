@@ -147,6 +147,22 @@ function applyEditKeybind(resolution: EditKeybindResolution) {
 	state.setEditing("snapToLattice", !state.editing.snapToLattice);
 }
 
+/** the step one history key asks the store for, or null when it asks for
+ * nothing -- an unedited scene, a document the gate never let anyone touch, or
+ * the end of the stack in that direction. read here rather than pressed and
+ * hoped for, because a press the app does not act on must claim neither the
+ * event nor the focus a click left behind (the tool keys' rule, below).
+ *
+ * the store re-checks the same flag at dispatch, which is the authoritative
+ * gate: a held key can outrun the queue and read a stale `canUndo`, and the
+ * drain drops the surplus rather than undoing past the baseline */
+function historyStep(action: "undo" | "redo"): (() => void) | null {
+	const state = viewerStore.getState();
+	const available = action === "undo" ? state.editor?.canUndo : state.editor?.canRedo;
+	if (available !== true) return null;
+	return action === "undo" ? () => void state.undoEdit() : () => void state.redoEdit();
+}
+
 /** a stored binding as the library's registration type. its Hotkey union
  * enumerates the key names of the layouts it knows, which a rebinding is not
  * bound by: a cyrillic `М` is a perfectly good hotkey string at runtime, and
@@ -224,6 +240,33 @@ function registrationsFor(row: EffectiveKeybind, key: string): UseHotkeyDefiniti
 			return [{ hotkey, callback: (e) => guarded(e, () => nudgeMasterVolume(VOLUME_STEP)) }];
 		case "volumeDown":
 			return [{ hotkey, callback: (e) => guarded(e, () => nudgeMasterVolume(-VOLUME_STEP)) }];
+		case "undo":
+		case "redo": {
+			const action = row.action;
+			return [
+				{
+					hotkey,
+					callback: (e) => {
+						// not guarded(), for the reason spelled out under the tool keys
+						// below: these decline routinely -- most scenes have nothing to
+						// undo -- and a declined press must leave a clicked control's
+						// focus where it was. resolve first, claim only once it lands
+						if (!viewerClaims(e)) return;
+						const step = historyStep(action);
+						if (step === null) return;
+						dropClickResidue(e);
+						// claimed, so the webview's own ctrl+Z never also sees it. a
+						// text field keeps its native undo regardless: viewerClaims
+						// hands the keyboard back before this line is reached
+						e.preventDefault();
+						// key repeat is kept, unlike the tool keys': holding the chord
+						// walks the history stack, which is the motion the history
+						// panel's follow-the-cursor scrolling was built for
+						step();
+					}
+				}
+			];
+		}
 		default:
 			// the tool keys and the snap toggle. registered here rather than in
 			// use-edit-tools so they inherit the focus modality rules, the
