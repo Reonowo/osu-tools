@@ -94,7 +94,8 @@ export function OverviewStrip() {
 			showSeverityTicks
 				? (derived?.severityTicks ?? []).map((m) => ({
 						left: fractionFor(bounds, m.time) * 100,
-						grade: m.grade
+						grade: m.grade,
+						drop: m.drop
 					}))
 				: [],
 		[derived, bounds.minTime, bounds.maxTime, showSeverityTicks]
@@ -142,9 +143,15 @@ export function OverviewStrip() {
 			/>
 			{/* 2: played tint, rAF-driven */}
 			<div ref={playedRef} className="absolute inset-y-0 left-0 bg-primary/5" />
-			{/* 3: severity ticks, static per scene */}
+			{/* 3: severity ticks, static per scene. the drop variant is an extra
+			element on the tick, never a second mark class: a square cap centred
+			on the tick's top end, inheriting the tick's own background so colour
+			stays grade identity. only ok/meh ticks can carry it (derive.ts), so
+			the cap never needs a miss position */}
 			{severityTicks.map((tick, i) => (
-				<div key={i} className={TICK_CLASS[tick.grade]} style={{ left: `${tick.left}%` }} />
+				<div key={i} className={TICK_CLASS[tick.grade]} style={{ left: `${tick.left}%` }}>
+					{tick.drop && <div className="absolute -left-[0.75px] -top-[1.5px] h-[3px] w-[3px] bg-inherit" />}
+				</div>
 			))}
 			{/* 4: progress rail, fill is rAF-driven */}
 			<div className="absolute inset-x-0 bottom-0 h-0.5 bg-border">
