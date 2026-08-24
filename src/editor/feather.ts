@@ -3,7 +3,7 @@
 // frame's weight is a smoothstep over its time distance to the *nearest*
 // selected frame, inside the window -- which reproduces the edge falloff for
 // contiguous selections and blends the gaps of disjoint ones. feather
-// belongs to the move tool alone; the panel's Δ nudge stays exact
+// belongs to the move tool alone; the panel's Δ offset stays exact
 
 import type { Lattice } from "../lib/lattice";
 import type { EditOp, FrameDto } from "../lib/scene-types";

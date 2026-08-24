@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Lattice } from "../lib/lattice";
-import { editTargets, insertOps, nudgeOps, snapOps, snapToLatticePoint } from "./ops";
+import { editTargets, insertOps, offsetOps, snapOps, snapToLatticePoint } from "./ops";
 import type { FrameDto } from "../lib/scene-types";
 
 // 1080p fullscreen: scale 2.25, step 4/9 -- TODO.md's case-study lattice
@@ -30,11 +30,11 @@ describe("editTargets", () => {
 	});
 });
 
-describe("nudgeOps", () => {
+describe("offsetOps", () => {
 	const frames = [frame(0, 100, 100), frame(16, 200, 200)];
 
 	test("moves by the delta, snapped when the preference is on", () => {
-		const ops = nudgeOps(frames, [1], 1, 0, lattice, true);
+		const ops = offsetOps(frames, [1], 1, 0, lattice, true);
 		expect(ops).not.toBeNull();
 		const move = ops![0];
 		if (move.kind !== "moveFrames") throw new Error("expected moveFrames");
@@ -44,19 +44,19 @@ describe("nudgeOps", () => {
 	});
 
 	test("raw deltas when snapping is off or no lattice was inferred", () => {
-		const ops = nudgeOps(frames, [0], 2.5, -1, lattice, false);
+		const ops = offsetOps(frames, [0], 2.5, -1, lattice, false);
 		if (ops![0].kind !== "moveFrames") throw new Error("expected moveFrames");
 		expect(ops![0].moves[0].x).toBe(102.5);
 		expect(ops![0].moves[0].y).toBe(99);
-		expect(nudgeOps(frames, [0], 2.5, -1, null, true)![0]).toMatchObject({ kind: "moveFrames" });
+		expect(offsetOps(frames, [0], 2.5, -1, null, true)![0]).toMatchObject({ kind: "moveFrames" });
 	});
 
-	test("a zero nudge is an identity", () => {
-		expect(nudgeOps(frames, [0, 1], 0, 0, null, false)).toBeNull();
+	test("a zero offset is an identity", () => {
+		expect(offsetOps(frames, [0, 1], 0, 0, null, false)).toBeNull();
 	});
 
 	test("out-of-range indices are skipped", () => {
-		expect(nudgeOps(frames, [7], 1, 1, null, false)).toBeNull();
+		expect(offsetOps(frames, [7], 1, 1, null, false)).toBeNull();
 	});
 });
 

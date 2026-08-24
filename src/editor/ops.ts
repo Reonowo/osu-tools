@@ -20,8 +20,10 @@ export function editTargets(selection: readonly number[], cursorIndex: number): 
 }
 
 /** moves the given frames by (dx, dy), snapped onto the lattice when the
- * preference is on and one was inferred */
-export function nudgeOps(
+ * preference is on and one was inferred. offset is the position-space delta
+ * (the glossary's canonical name); the keypress panel's nudge is the
+ * press-space edge step and deliberately keeps its own name */
+export function offsetOps(
 	frames: readonly FrameDto[],
 	indices: readonly number[],
 	dx: number,

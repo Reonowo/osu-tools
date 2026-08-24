@@ -168,7 +168,7 @@ export function ToolPalette() {
 				</TooltipTrigger>
 				<TooltipContent side="right">
 					snap to lattice {snapKeys === null ? "" : `(${snapKeys}) `}
-					{snapToLattice ? "on" : "off"} — applies to nudge and drag commits; synthesized frames always snap
+					{snapToLattice ? "on" : "off"} — applies to offset and drag commits; synthesized frames always snap
 					when a lattice exists
 					{blocked !== null ? ` — ${blocked}` : ""}
 				</TooltipContent>

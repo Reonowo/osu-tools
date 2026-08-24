@@ -13,15 +13,17 @@ import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PanelHeader } from "@/components/shell/SidePanel";
 import { frameEditGate } from "@/editor/gate";
-import { editTargets, insertOps, nudgeOps, snapOps } from "@/editor/ops";
+import { editTargets, insertOps, offsetOps } from "@/editor/ops";
+import { snapSelectionToLattice } from "@/editor/selection-commits";
 import { smoothMoveOps } from "@/editor/smooth";
 import { countedLabel, movedFrameCount } from "@/editor/tool-commits";
 import { formatButtons, formatTime } from "@/lib/format";
-import { formatLatticeStep, isOnLattice } from "@/lib/lattice";
+import { formatLatticeStep, isOnLattice, NO_LATTICE_REASON } from "@/lib/lattice";
 import { frameCursor } from "@/playback/frame-cursor";
 import { keybindSuffix } from "@/playback/keybinds";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore, viewerStore } from "@/state/store";
+import { framesReveal } from "./frames-reveal";
 import { SectionLabel } from "./SectionLabel";
 
 const ROW_COUNT = 9;
@@ -106,21 +108,34 @@ export function FramesPanel() {
 	const setSmoothStrength = useViewerStore((s) => s.setSmoothStrength);
 	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
 	const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
+	const dxInputRef = useRef<HTMLInputElement | null>(null);
 	const frameCount = scene === null ? 0 : scene.frames.length;
 	const [dxDraft, setDxDraft] = useState("0");
 	const [dyDraft, setDyDraft] = useState("0");
 	const [featherDraft, setFeatherDraft] = useState(String(featherMs));
 
-	function commitNudge() {
+	// the context menu's offset… item lands focus here: the panel attaches its
+	// Δx field to the reveal latch for as long as it is mounted, and a request
+	// made while another tab showed fires on this mount (frames-reveal.ts)
+	useEffect(
+		() =>
+			framesReveal.attach(() => {
+				dxInputRef.current?.focus();
+				dxInputRef.current?.select();
+			}),
+		[]
+	);
+
+	function commitOffset() {
 		const dx = Number(dxDraft);
 		const dy = Number(dyDraft);
 		if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return;
 		void commitEdit({
-			label: "nudge",
+			label: "offset",
 			payload: {
 				kind: "intent",
 				expand: (frames, editor) =>
-					nudgeOps(
+					offsetOps(
 						frames,
 						editTargets(editor.frameSelection, frameCursor.currentIndex()),
 						dx,
@@ -210,10 +225,10 @@ export function FramesPanel() {
 
 	// shared with both branches below -- only the wrapper differs, gated by
 	// whether the row needs a tooltip explaining why it's disabled
-	const nudgeInsertButtons = (
+	const offsetInsertButtons = (
 		<>
-			<Button variant="outline" size="sm" className="flex-1" disabled={!canFrameEdit} onClick={commitNudge}>
-				nudge
+			<Button variant="outline" size="sm" className="flex-1" disabled={!canFrameEdit} onClick={commitOffset}>
+				offset
 			</Button>
 			<Button
 				variant="outline"
@@ -274,7 +289,7 @@ export function FramesPanel() {
 								{formatLatticeStep(lattice)} (scale {lattice.scale}).
 							</>
 						) : (
-							"no input lattice could be inferred from these frames"
+							NO_LATTICE_REASON
 						)}
 					</p>
 				</div>
@@ -289,20 +304,9 @@ export function FramesPanel() {
 									size="sm"
 									className="w-full"
 									disabled={!canFrameEdit || lattice === null}
-									onClick={() =>
-										void commitEdit({
-											label: "snap to lattice",
-											payload: {
-												kind: "intent",
-												expand: (frames, editor) =>
-													snapOps(
-														frames,
-														editTargets(editor.frameSelection, frameCursor.currentIndex()),
-														editor.lattice
-													)
-											}
-										})
-									}
+									// the shared dispatch the context menu's snap item also
+									// fires, so the two routes to one operation cannot drift
+									onClick={snapSelectionToLattice}
 								>
 									snap to lattice
 								</Button>
@@ -311,7 +315,7 @@ export function FramesPanel() {
 								{gate !== null && !gate.editable
 									? gate.reason
 									: lattice === null
-										? "no input lattice could be inferred from these frames"
+										? NO_LATTICE_REASON
 										: "move the selection (or the current frame) onto the inferred lattice"}
 							</TooltipContent>
 						</Tooltip>
@@ -367,12 +371,13 @@ export function FramesPanel() {
 						<label className="block text-[10px] text-[#8a8a93]">
 							Δx
 							<Input
+								ref={dxInputRef}
 								disabled={!canFrameEdit}
 								type="number"
 								value={dxDraft}
 								onChange={(e) => setDxDraft(e.target.value)}
 								onKeyDown={(e) => {
-									if (e.key === "Enter") commitNudge();
+									if (e.key === "Enter") commitOffset();
 								}}
 								// Input's own base carries a *separate* md:text-sm alongside its
 								// unprefixed text-base -- overriding only the unprefixed class
@@ -389,7 +394,7 @@ export function FramesPanel() {
 								value={dyDraft}
 								onChange={(e) => setDyDraft(e.target.value)}
 								onKeyDown={(e) => {
-									if (e.key === "Enter") commitNudge();
+									if (e.key === "Enter") commitOffset();
 								}}
 								// Input's own base carries a *separate* md:text-sm alongside its
 								// unprefixed text-base -- overriding only the unprefixed class
@@ -424,16 +429,16 @@ export function FramesPanel() {
 							/>
 							<TooltipContent side="left">
 								the time window past a moved selection's edges over which the move tool blends into the
-								surrounding path — 0 is a hard edge. the Δ nudge stays exact.
+								surrounding path — 0 is a hard edge. the Δ offset stays exact.
 							</TooltipContent>
 						</Tooltip>
 					</div>
 					{canFrameEdit ? (
-						<div className="mt-1.5 flex gap-1.5">{nudgeInsertButtons}</div>
+						<div className="mt-1.5 flex gap-1.5">{offsetInsertButtons}</div>
 					) : (
 						<Tooltip>
 							<TooltipTrigger render={<div className="mt-1.5 flex gap-1.5" />}>
-								{nudgeInsertButtons}
+								{offsetInsertButtons}
 							</TooltipTrigger>
 							<TooltipContent side="left">{gate?.reason}</TooltipContent>
 						</Tooltip>
