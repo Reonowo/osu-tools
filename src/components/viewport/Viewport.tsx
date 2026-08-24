@@ -21,6 +21,7 @@ import {
 import { useViewerStore, viewerStore } from "@/state/store";
 import { CoordinateReadout, ToolPalette } from "./ToolPalette";
 import { useEditTools } from "./use-edit-tools";
+import { ViewportContextMenu } from "./ViewportContextMenu";
 import { WatchHud } from "./WatchHud";
 import { ZoomControls } from "./ZoomControls";
 
@@ -164,6 +165,12 @@ export function Viewport() {
 	return (
 		<div ref={containerRef} className="relative min-w-0 flex-1 overflow-hidden bg-surface-viewport">
 			<PlayerView />
+			{/* above the playfield, below the chrome (later siblings paint on
+			top), so the chrome keeps its own right-clicks -- and mounted as an
+			edit-only sibling rather than wrapping the container, which would
+			remount PlayerView's canvas on every mode switch. its events bubble
+			to this container, so the gestures and pan see nothing new */}
+			{mode === "edit" && <ViewportContextMenu containerRef={containerRef} />}
 			<WatchHud />
 			<ZoomControls onStep={stepZoom} />
 			{mode === "edit" && (
