@@ -27,7 +27,8 @@ const circle: RenderObject = {
 const entry: ObjectLaneEntry = {
 	grade: "great",
 	tether: { key: "K1", fromTime: 1000, toTime: 1004, pressFrameIndex: 12 },
-	nestedMarks: []
+	nestedMarks: [],
+	tickDrops: []
 };
 
 const objects: SlicedObject[] = [{ index: 0, object: circle, entry }];

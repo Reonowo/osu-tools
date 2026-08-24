@@ -6,7 +6,7 @@
 // the row's height must stay in lockstep with DetailLanes' OBJECT_ROW_PX,
 // which the extended tether's y offsets are measured against
 
-import type { ObjectLaneEntry } from "@/lib/derive";
+import { dropSummary, type ObjectLaneEntry } from "@/lib/derive";
 import type { Grade, RenderObject } from "@/lib/scene-types";
 import { aimTime } from "@/lib/analysis";
 import { windowFraction, type TimeWindow } from "@/lib/timeline-view";
@@ -22,25 +22,60 @@ const GRADE_HEX: Record<Grade, string> = {
 };
 const UNGRADED_HEX = "#8a8a93";
 
-/** the hover readout: type, grade, and the exact hit error. a miss states
- * the absent hit error without claiming the object was never pressed -- the
+/** the hover readout: type, grade, the exact hit error, and on a below-great
+ * slider the cause segment naming its dropped elements. a miss states the
+ * absent hit error without claiming the object was never pressed -- the
  * event stream cannot reliably tell a press-caused miss from a timeout */
 function objectTitle(object: RenderObject, entry: ObjectLaneEntry): string {
 	const type = object.kind.type;
 	if (entry.grade === null) return type;
+	const drops = dropSummary(object, entry);
+	const cause = drops === null ? "" : ` · ${drops}`;
 	if (entry.tether !== null) {
 		const error = entry.tether.toTime - entry.tether.fromTime;
 		const value = Number.isInteger(error) ? `${error}` : error.toFixed(1);
-		return `${type} · ${entry.grade} · ${error >= 0 ? "+" : ""}${value} ms`;
+		return `${type} · ${entry.grade} · ${error >= 0 ? "+" : ""}${value} ms${cause}`;
 	}
 	if (entry.grade === "miss") return `${type} · miss · no hit error`;
-	return `${type} · ${entry.grade}`;
+	return `${type} · ${entry.grade}${cause}`;
 }
 
 export interface SlicedObject {
 	index: number;
 	object: RenderObject;
 	entry: ObjectLaneEntry;
+}
+
+/** the per-element chrome inside a slider's span: the head/repeat/tail marks
+ * in the aggregate's colour -- miss-red where the element dropped -- plus a
+ * mark of the same geometry for each dropped tick, at the time the simulation
+ * judged the drop (derive.ts's tickDrops). hit ticks stay undrawn: the lane
+ * marks the loss, not the inventory */
+function NestedMarks({ object, entry, colour }: { object: RenderObject; entry: ObjectLaneEntry; colour: string }) {
+	const objectSpan = object.endTime - object.startTime;
+	const leftOf = (time: number) => {
+		const fraction = objectSpan > 0 ? (time - object.startTime) / objectSpan : 0;
+		return `${fraction * 100}%`;
+	};
+	const markClass = "absolute inset-y-[3px] -ml-px w-[2px] rounded-[1px]";
+	return (
+		<>
+			{entry.nestedMarks.map((mark, i) => (
+				<div
+					key={i}
+					className={markClass}
+					style={{ left: leftOf(mark.time), background: mark.dropped ? GRADE_HEX.miss : colour }}
+				/>
+			))}
+			{entry.tickDrops.map((time, i) => (
+				<div
+					key={`tick-${i}`}
+					className={markClass}
+					style={{ left: leftOf(time), background: GRADE_HEX.miss }}
+				/>
+			))}
+		</>
+	);
 }
 
 /** circles are marks, sliders and spinners spans with head/repeat/tail marks
@@ -154,19 +189,7 @@ export function ObjectLane({
 									: { background: `${colour}66` }
 							}
 						/>
-						{!spinner &&
-							showNestedMarks &&
-							entry.nestedMarks.map((time, i) => {
-								const objectSpan = object.endTime - object.startTime;
-								const fraction = objectSpan > 0 ? (time - object.startTime) / objectSpan : 0;
-								return (
-									<div
-										key={i}
-										className="absolute inset-y-[3px] -ml-px w-[2px] rounded-[1px]"
-										style={{ left: `${fraction * 100}%`, background: colour }}
-									/>
-								);
-							})}
+						{!spinner && showNestedMarks && <NestedMarks object={object} entry={entry} colour={colour} />}
 					</div>
 				);
 			})}
