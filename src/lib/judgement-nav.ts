@@ -33,6 +33,10 @@ export interface SeverityTick {
 	 * cannot identify an object reliably: a miss's event sits at its deadline,
 	 * hundreds of milliseconds past anything the object itself is at */
 	objectIndex: number;
+	/** true when the object is a slider and the grade is ok/meh -- drop-caused
+	 * by construction, so the strip draws its distinguishing shape. a fully
+	 * missed slider stays plain per the partially-hit exception */
+	drop: boolean;
 }
 
 /** one navigable judgement: the object it belongs to and the time a jump lands */

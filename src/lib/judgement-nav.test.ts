@@ -49,7 +49,8 @@ const spinnerKind = (duration: number): RenderKind => ({
 const tick = (objectIndex: number, time: number, grade: SeverityGrade): SeverityTick => ({
 	objectIndex,
 	time,
-	grade
+	grade,
+	drop: false
 });
 
 const landings = (targets: readonly { landingTime: number }[]) => targets.map((target) => target.landingTime);
