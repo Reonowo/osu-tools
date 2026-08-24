@@ -6,7 +6,7 @@ import type { PhysicalKey } from "../engine/buttons";
 import { buttonEdges, pressEdges, type ButtonEdges, type Press } from "../engine/interpolation";
 import { analyseScene, judgedTime, type ReplayAnalysis } from "./analysis";
 import { severityTargets, type SeverityTargets, type SeverityTick } from "./judgement-nav";
-import type { Grade, JudgementEventDto, LoadedScene } from "./scene-types";
+import type { Grade, JudgementEventDto, LoadedScene, RenderNested, RenderObject, RenderSlider } from "./scene-types";
 
 /** the tether: the bond from an object to its judging press. exists exactly
  * where a hit error exists (analysis.ts's judgedTime, the shared predicate),
@@ -27,15 +27,24 @@ export interface Tether {
 	pressFrameIndex: number;
 }
 
+/** one head/repeat/tail mark: drawn geometry time + whether its element dropped */
+export interface NestedMark {
+	time: number;
+	dropped: boolean;
+}
+
 /** one object lane entry, index-aligned with renderPlan.objects -- extent
  * and kind stay readable off the render object itself */
 export interface ObjectLaneEntry {
 	/** null when the simulation is not authoritative */
 	grade: Grade | null;
 	tether: Tether | null;
-	/** sliders only: head/repeat/tail nested mark times, ticks already
-	 * filtered out; empty for circles and spinners */
-	nestedMarks: number[];
+	/** sliders only: head/repeat/tail marks at their drawn geometry times,
+	 * ticks already filtered out; empty for circles and spinners */
+	nestedMarks: NestedMark[];
+	/** judgement event times of dropped ticks, ascending -- the lane's extra
+	 * miss-red marks, populated only where the aggregate lands ok/meh */
+	tickDrops: number[];
 }
 
 export interface DerivedScene {
@@ -201,6 +210,43 @@ function judgingPressResolver(presses: readonly Press[]): (time: number) => Pres
 	};
 }
 
+/** the nested elements the lane marks -- head/repeat/tail, ticks excluded --
+ * shared between building the marks and applying drop state to them, so the
+ * two sides can never disagree on index alignment */
+function markedNested(slider: RenderSlider): RenderNested[] {
+	return slider.nested.filter((n) => n.kind !== "tick");
+}
+
+function markDropped(entry: ObjectLaneEntry, marked: readonly RenderNested[], matches: (n: RenderNested) => boolean) {
+	const index = marked.findIndex(matches);
+	const mark = entry.nestedMarks[index];
+	if (mark !== undefined) mark.dropped = true;
+}
+
+/** the hover readout's cause segment for a below-great slider -- `dropped
+ * tail`, `dropped 2 ticks + tail` -- worded from the entry's drop state, or
+ * null where no cause belongs (not a slider, aggregate outside ok/meh, or
+ * nothing recorded dropped). elements list head-to-tail; ticks count from
+ * tickDrops, the others from the marks aligned with the object's own
+ * head/repeat/tail nested elements */
+export function dropSummary(object: RenderObject, entry: ObjectLaneEntry): string | null {
+	if (object.kind.type !== "slider") return null;
+	if (entry.grade !== "ok" && entry.grade !== "meh") return null;
+	const marked = markedNested(object.kind);
+	const droppedOf = (kind: RenderNested["kind"]) =>
+		marked.filter((n, i) => n.kind === kind && entry.nestedMarks[i]?.dropped === true).length;
+	const counted = (count: number, name: string) => (count === 1 ? name : `${count} ${name}s`);
+	const parts: string[] = [];
+	if (droppedOf("head") > 0) parts.push("head");
+	const repeats = droppedOf("repeat");
+	if (repeats > 0) parts.push(counted(repeats, "repeat"));
+	const ticks = entry.tickDrops.length;
+	if (ticks > 0) parts.push(counted(ticks, "tick"));
+	if (droppedOf("tail") > 0) parts.push("tail");
+	if (parts.length === 0) return null;
+	return `dropped ${parts.join(" + ")}`;
+}
+
 export function deriveScene(scene: LoadedScene): DerivedScene {
 	const objects = scene.renderPlan.objects;
 	const firstAppear = objects.length > 0 ? objects[0].startTime - objects[0].preempt : 0;
@@ -214,7 +260,10 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		grade: null,
 		tether: null,
 		nestedMarks:
-			object.kind.type === "slider" ? object.kind.nested.filter((n) => n.kind !== "tick").map((n) => n.time) : []
+			object.kind.type === "slider"
+				? markedNested(object.kind).map((n) => ({ time: n.time, dropped: false }))
+				: [],
+		tickDrops: []
 	}));
 	const severityTicks: SeverityTick[] = [];
 	// a late judgement extends its drawable's fade past the object's endTime
@@ -238,7 +287,18 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 				// navigating to a mark needs the object it belongs to, and this push
 				// is the one place both are already in hand
 				if (kind.grade !== "great") {
-					severityTicks.push({ time: event.time, grade: kind.grade, objectIndex: event.objectIndex });
+					severityTicks.push({
+						time: event.time,
+						grade: kind.grade,
+						objectIndex: event.objectIndex,
+						// exact under the legacy simulation path, the only one today:
+						// the slider aggregate is a pure element-count fold, so every
+						// below-great slider is drop-caused, and aggregate miss means
+						// zero elements collected (the plain tick already says it all).
+						// a lazer-native rules profile would break that equivalence,
+						// and this one site would then consult the drop lists instead
+						drop: kind.type === "sliderAggregate" && kind.grade !== "miss"
+					});
 				}
 				if (entry !== undefined) entry.grade = kind.grade;
 			}
@@ -258,6 +318,44 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 					};
 				}
 			}
+		}
+		// dropped-element marks, applied only where the aggregate lands ok/meh:
+		// that is exactly the population the aggregate under-informs. aggregate
+		// great means nothing dropped, and aggregate miss means zero elements
+		// collected -- a fully-missed slider's span colour and plain miss tick
+		// already say everything, so it gets no per-element marks
+		for (let index = 0; index < objectLane.length; index++) {
+			const entry = objectLane[index];
+			const kind = objects[index].kind;
+			if (kind.type !== "slider" || (entry.grade !== "ok" && entry.grade !== "meh")) continue;
+			const marked = markedNested(kind);
+			for (const event of judgementsByObject[index]) {
+				const judged = event.kind;
+				if (judged.type === "sliderHead" && !judged.hit) {
+					markDropped(entry, marked, (n) => n.kind === "head");
+				} else if (judged.type === "sliderRepeat" && !judged.hit) {
+					// the event's repeatIndex and the render plan's spanIndex agree
+					// by construction: the repeat ending span N is repeat N on both
+					// sides (stable_points.rs:199, render_plan.rs's passthrough)
+					const repeatIndex = judged.repeatIndex;
+					markDropped(entry, marked, (n) => n.kind === "repeat" && n.spanIndex === repeatIndex);
+				} else if (judged.type === "sliderTail" && !judged.hit) {
+					// matched by kind, never moved to the event's own time: the
+					// simulation judges the tail at the legacy last tick ~36ms
+					// early, and a mark sliding left of the span's end would read
+					// as a bug rather than as the drop it marks
+					markDropped(entry, marked, (n) => n.kind === "tail");
+				} else if (judged.type === "sliderTick" && !judged.hit) {
+					// the event's own time, deliberately never matched against the
+					// render plan's tick list: tick judgements carry no identity,
+					// and nearest-time matching across the two generators is the
+					// recorded ~140ms stable-vs-lazer hazard (hitsound-plan.ts's
+					// nearestNested). reverses cheaply if tick judgements ever
+					// gain identity on the wire
+					entry.tickDrops.push(event.time);
+				}
+			}
+			entry.tickDrops.sort((a, b) => a - b);
 		}
 	}
 

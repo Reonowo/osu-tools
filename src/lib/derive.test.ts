@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { testScene } from "../test/scene";
-import type { JudgementEventDto, LoadedScene, RenderNested, RenderObject } from "./scene-types";
-import { deriveScene } from "./derive";
+import type { Grade, JudgementEventDto, LoadedScene, RenderNested, RenderObject } from "./scene-types";
+import { deriveScene, dropSummary, type ObjectLaneEntry } from "./derive";
 
 describe("deriveScene", () => {
 	test("bounds cover lead-in, frames, preempt, and fade-out tails", () => {
@@ -73,7 +73,7 @@ describe("deriveScene", () => {
 	test("judgements group by object and severity ticks keep non-great grades", () => {
 		const d = deriveScene(testScene());
 		expect(d.judgementsByObject[0]).toHaveLength(1);
-		expect(d.severityTicks).toEqual([{ time: 980, grade: "ok", objectIndex: 0 }]);
+		expect(d.severityTicks).toEqual([{ time: 980, grade: "ok", objectIndex: 0, drop: false }]);
 	});
 
 	test("notSimulated scenes derive empty judgement data", () => {
@@ -101,11 +101,16 @@ function circle(startTime: number): RenderObject {
 	};
 }
 
-function nested(kind: RenderNested["kind"], time: number): RenderNested {
-	return { kind, spanIndex: 0, time, position: [0, 0], pathProgress: 0, preempt: 600, fadeIn: 400, samples: [] };
+function nested(kind: RenderNested["kind"], time: number, spanIndex = 0): RenderNested {
+	return { kind, spanIndex, time, position: [0, 0], pathProgress: 0, preempt: 600, fadeIn: 400, samples: [] };
 }
 
 function slider(startTime: number, endTime: number, nestedParts: RenderNested[]): RenderObject {
+	// the span shape follows the nested list so a repeat-bearing literal stays
+	// a slider the engine could emit: n repeats mean n + 1 spans, and the tail
+	// always rides the last one
+	const repeatCount = nestedParts.filter((n) => n.kind === "repeat").length;
+	const spanCount = repeatCount + 1;
 	return {
 		...circle(startTime),
 		endTime,
@@ -115,13 +120,13 @@ function slider(startTime: number, endTime: number, nestedParts: RenderNested[])
 			cumulativeLengths: [0, 10],
 			distance: 10,
 			segmentEnds: [1],
-			repeatCount: 0,
-			spanCount: 1,
-			spanDuration: endTime - startTime,
+			repeatCount,
+			spanCount,
+			spanDuration: (endTime - startTime) / spanCount,
 			duration: endTime - startTime,
 			endPosition: [10, 0],
 			snakeInDuration: 100,
-			nested: nestedParts
+			nested: nestedParts.map((n) => (n.kind === "tail" ? { ...n, spanIndex: spanCount - 1 } : n))
 		}
 	};
 }
@@ -282,7 +287,12 @@ describe("deriveScene object lane", () => {
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
 			)
 		);
-		expect(d.objectLane[0].nestedMarks).toEqual([1000, 1500, 2000]);
+		expect(d.objectLane[0].nestedMarks).toEqual([
+			{ time: 1000, dropped: false },
+			{ time: 1500, dropped: false },
+			{ time: 2000, dropped: false }
+		]);
+		expect(d.objectLane[0].tickDrops).toEqual([]);
 	});
 
 	test("circles and spinners carry no nested marks", () => {
@@ -291,6 +301,8 @@ describe("deriveScene object lane", () => {
 		);
 		expect(d.objectLane[0].nestedMarks).toEqual([]);
 		expect(d.objectLane[1].nestedMarks).toEqual([]);
+		expect(d.objectLane[0].tickDrops).toEqual([]);
+		expect(d.objectLane[1].tickDrops).toEqual([]);
 	});
 
 	test("a notSimulated scene derives objects with null grades and no tethers", () => {
@@ -335,9 +347,42 @@ describe("deriveScene object lane", () => {
 			)
 		);
 		expect(d.severityTicks).toEqual([
-			{ time: 1005, grade: "meh", objectIndex: 0 },
-			{ time: 2500, grade: "ok", objectIndex: 1 },
-			{ time: 4000, grade: "miss", objectIndex: 2 }
+			{ time: 1005, grade: "meh", objectIndex: 0, drop: false },
+			{ time: 2500, grade: "ok", objectIndex: 1, drop: true },
+			{ time: 4000, grade: "miss", objectIndex: 2, drop: false }
+		]);
+	});
+
+	test("the drop flag is true exactly for ok/meh sliders -- circles, spinners and missed sliders stay plain", () => {
+		// every below-great slider is drop-caused under the legacy simulation
+		// path (the aggregate is a pure element-count fold), while a fully
+		// missed slider keeps the plain miss tick per the partially-hit
+		// exception
+		const d = deriveScene(
+			laneScene(
+				[
+					circle(1000),
+					slider(2000, 2500, [nested("head", 2000), nested("tail", 2500)]),
+					slider(3000, 3500, [nested("head", 3000), nested("tail", 3500)]),
+					slider(4000, 4500, [nested("head", 4000), nested("tail", 4500)]),
+					spinner(5000, 6000)
+				],
+				[
+					event(1005, 0, { type: "circle", grade: "ok" }),
+					event(2500, 1, { type: "sliderAggregate", grade: "ok" }),
+					event(3500, 2, { type: "sliderAggregate", grade: "meh" }),
+					event(4900, 3, { type: "sliderAggregate", grade: "miss" }),
+					event(6000, 4, { type: "spinnerFinal", grade: "meh" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.severityTicks.map((tick) => [tick.objectIndex, tick.drop])).toEqual([
+			[0, false],
+			[1, true],
+			[2, true],
+			[3, false],
+			[4, false]
 		]);
 	});
 
@@ -403,6 +448,234 @@ describe("deriveScene object lane", () => {
 		const tethered = d.objectLane.filter((entry) => entry.tether !== null);
 		expect(tethered).toHaveLength(d.analysis.errors.length);
 		expect(tethered).toHaveLength(2);
+	});
+});
+
+describe("deriveScene drop marks", () => {
+	test("a dropped head, repeat, and tail each flip exactly their own mark, at its geometry time", () => {
+		const d = deriveScene(
+			laneScene(
+				[
+					slider(1000, 1500, [nested("head", 1000), nested("tick", 1250), nested("tail", 1500)]),
+					slider(2000, 2500, [nested("head", 2000), nested("repeat", 2250), nested("tail", 2500)]),
+					slider(3000, 3500, [nested("head", 3000), nested("tail", 3500)])
+				],
+				[
+					event(1100, 0, { type: "sliderHead", hit: false }),
+					event(1250, 0, { type: "sliderTick", hit: true }),
+					event(1464, 0, { type: "sliderTail", hit: true }),
+					event(1500, 0, { type: "sliderAggregate", grade: "ok" }),
+					event(2010, 1, { type: "sliderHead", hit: true }),
+					event(2250, 1, { type: "sliderRepeat", hit: false, repeatIndex: 0 }),
+					event(2464, 1, { type: "sliderTail", hit: true }),
+					event(2500, 1, { type: "sliderAggregate", grade: "ok" }),
+					event(3010, 2, { type: "sliderHead", hit: true }),
+					event(3464, 2, { type: "sliderTail", hit: false }),
+					// the true fold value: 1 of 2 elements is exactly 0.5, and a
+					// two-element slider can never land meh
+					event(3500, 2, { type: "sliderAggregate", grade: "ok" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.objectLane[0].nestedMarks).toEqual([
+			{ time: 1000, dropped: true },
+			{ time: 1500, dropped: false }
+		]);
+		expect(d.objectLane[1].nestedMarks).toEqual([
+			{ time: 2000, dropped: false },
+			{ time: 2250, dropped: true },
+			{ time: 2500, dropped: false }
+		]);
+		// the tail's mark keeps the drawn end time: the event sits at the
+		// legacy last tick (3464 = 3500 - 36) and the mark must not slide there
+		expect(d.objectLane[2].nestedMarks).toEqual([
+			{ time: 3000, dropped: false },
+			{ time: 3500, dropped: true }
+		]);
+		expect(d.objectLane.map((entry) => entry.tickDrops)).toEqual([[], [], []]);
+	});
+
+	test("repeats match by index: two repeats, only the dropped second one's mark flips", () => {
+		const d = deriveScene(
+			laneScene(
+				[
+					slider(1000, 3000, [
+						nested("head", 1000),
+						nested("repeat", 1666, 0),
+						nested("repeat", 2333, 1),
+						nested("tail", 3000)
+					])
+				],
+				[
+					event(1010, 0, { type: "sliderHead", hit: true }),
+					event(1666, 0, { type: "sliderRepeat", hit: true, repeatIndex: 0 }),
+					event(2333, 0, { type: "sliderRepeat", hit: false, repeatIndex: 1 }),
+					event(2964, 0, { type: "sliderTail", hit: true }),
+					event(3000, 0, { type: "sliderAggregate", grade: "ok" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		// a kind-only match would flip the first repeat's mark instead
+		expect(d.objectLane[0].nestedMarks).toEqual([
+			{ time: 1000, dropped: false },
+			{ time: 1666, dropped: false },
+			{ time: 2333, dropped: true },
+			{ time: 3000, dropped: false }
+		]);
+	});
+
+	test("dropped ticks land in tickDrops at their event's own times, ascending; hit ticks appear nowhere", () => {
+		const d = deriveScene(
+			laneScene(
+				[
+					slider(1000, 2000, [
+						nested("head", 1000),
+						nested("tick", 1250),
+						nested("tick", 1500),
+						nested("tick", 1750),
+						nested("tail", 2000)
+					])
+				],
+				[
+					event(1010, 0, { type: "sliderHead", hit: true }),
+					// deliberately not the render plan's tick times: the mark sits
+					// where the simulation judged the drop
+					event(1252, 0, { type: "sliderTick", hit: false }),
+					event(1500, 0, { type: "sliderTick", hit: true }),
+					event(1751, 0, { type: "sliderTick", hit: false }),
+					// the dropped tail keeps the aggregate a genuine meh: 2 of 5
+					// elements folds to 0.4
+					event(1964, 0, { type: "sliderTail", hit: false }),
+					event(2000, 0, { type: "sliderAggregate", grade: "meh" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.objectLane[0].tickDrops).toEqual([1252, 1751]);
+		// the hit tick at 1500 appears nowhere; only the tail's own mark flips
+		expect(d.objectLane[0].nestedMarks).toEqual([
+			{ time: 1000, dropped: false },
+			{ time: 2000, dropped: true }
+		]);
+	});
+
+	test("tickDrops stay ascending even when the event stream arrives out of order", () => {
+		// the simulation emits in time order, so this stream is synthetic --
+		// it pins that ascending is this derivation's own guarantee rather
+		// than a property borrowed from the input
+		const d = deriveScene(
+			laneScene(
+				[
+					slider(1000, 2000, [
+						nested("head", 1000),
+						nested("tick", 1250),
+						nested("tick", 1750),
+						nested("tail", 2000)
+					])
+				],
+				[
+					event(1751, 0, { type: "sliderTick", hit: false }),
+					event(1252, 0, { type: "sliderTick", hit: false }),
+					event(2000, 0, { type: "sliderAggregate", grade: "meh" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.objectLane[0].tickDrops).toEqual([1252, 1751]);
+	});
+
+	test("a great aggregate applies no drop state, whatever the element events claim", () => {
+		const d = deriveScene(
+			laneScene(
+				[slider(1000, 2000, [nested("head", 1000), nested("tick", 1500), nested("tail", 2000)])],
+				[
+					event(1010, 0, { type: "sliderHead", hit: true }),
+					event(1500, 0, { type: "sliderTick", hit: false }),
+					event(1964, 0, { type: "sliderTail", hit: false }),
+					event(2000, 0, { type: "sliderAggregate", grade: "great" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.objectLane[0].nestedMarks.every((mark) => !mark.dropped)).toBe(true);
+		expect(d.objectLane[0].tickDrops).toEqual([]);
+	});
+
+	test("a fully-missed slider gets no per-element marks -- the partially-hit exception", () => {
+		const d = deriveScene(
+			laneScene(
+				[slider(1000, 2000, [nested("head", 1000), nested("tick", 1500), nested("tail", 2000)])],
+				[
+					event(1150, 0, { type: "sliderHead", hit: false }),
+					event(1500, 0, { type: "sliderTick", hit: false }),
+					event(1964, 0, { type: "sliderTail", hit: false }),
+					event(2000, 0, { type: "sliderAggregate", grade: "miss" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.objectLane[0].nestedMarks.every((mark) => !mark.dropped)).toBe(true);
+		expect(d.objectLane[0].tickDrops).toEqual([]);
+	});
+});
+
+describe("dropSummary", () => {
+	const object = slider(1000, 2000, [
+		nested("head", 1000),
+		nested("tick", 1250),
+		nested("tick", 1500),
+		nested("repeat", 1600, 0),
+		nested("repeat", 1800, 1),
+		nested("tail", 2000)
+	]);
+	// marked order after the tick exclusion: head, repeat 0, repeat 1, tail
+	function entryWith(
+		dropped: [boolean, boolean, boolean, boolean],
+		tickDrops: number[] = [],
+		grade: Grade = "ok"
+	): ObjectLaneEntry {
+		return {
+			grade,
+			tether: null,
+			nestedMarks: [
+				{ time: 1000, dropped: dropped[0] },
+				{ time: 1600, dropped: dropped[1] },
+				{ time: 1800, dropped: dropped[2] },
+				{ time: 2000, dropped: dropped[3] }
+			],
+			tickDrops
+		};
+	}
+
+	test("names a single dropped element bare", () => {
+		expect(dropSummary(object, entryWith([false, false, false, true]))).toBe("dropped tail");
+		expect(dropSummary(object, entryWith([true, false, false, false]))).toBe("dropped head");
+		expect(dropSummary(object, entryWith([false, true, false, false]))).toBe("dropped repeat");
+		expect(dropSummary(object, entryWith([false, false, false, false], [1252]))).toBe("dropped tick");
+	});
+
+	test("counts and pluralises multiples, joined head-to-tail", () => {
+		expect(dropSummary(object, entryWith([false, false, false, true], [1252, 1502]))).toBe(
+			"dropped 2 ticks + tail"
+		);
+		expect(dropSummary(object, entryWith([true, false, false, false], [1252, 1502]))).toBe(
+			"dropped head + 2 ticks"
+		);
+		expect(dropSummary(object, entryWith([false, true, true, false]))).toBe("dropped 2 repeats");
+		expect(dropSummary(object, entryWith([true, true, true, true], [1252]))).toBe(
+			"dropped head + 2 repeats + tick + tail"
+		);
+	});
+
+	test("answers null where no cause segment belongs", () => {
+		// a below-great slider with no recorded drops, a great one, a fully
+		// missed one, and a non-slider
+		expect(dropSummary(object, entryWith([false, false, false, false]))).toBeNull();
+		expect(dropSummary(object, entryWith([false, false, false, true], [], "great"))).toBeNull();
+		expect(dropSummary(object, entryWith([false, false, false, true], [], "miss"))).toBeNull();
+		expect(dropSummary(circle(1000), { grade: "ok", tether: null, nestedMarks: [], tickDrops: [] })).toBeNull();
 	});
 });
 
