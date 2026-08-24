@@ -460,7 +460,16 @@ export function DetailLanes() {
 	const applyDragFx = (fx: PressDragEffects) => {
 		const state = viewerStore.getState();
 		if (fx.pause) state.setPlaying(false);
-		if (fx.select !== undefined) state.setPressSelection(fx.select);
+		// the lane's select must not land invisibly any more than the object
+		// lane's: the selected-span highlight and the extended tether both gate
+		// on the keys tab, so a press on a span raises it exactly as a click on
+		// a tethered object does. (right-click stays hands-off deliberately --
+		// its menu is the feedback, and "open in keys panel" is the explicit
+		// route there)
+		if (fx.select !== undefined) {
+			state.setPressSelection(fx.select);
+			state.setPanelTab("keys");
+		}
 		if (fx.clearSelection) state.setPressSelection(null);
 		if (fx.preview !== undefined) setDragPreview(fx.preview);
 		if (fx.commit !== undefined) commitDrag(fx.commit);
