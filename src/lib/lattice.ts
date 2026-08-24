@@ -45,6 +45,11 @@ const SAMPLE_LIMIT = 4000;
 const MIN_CONFORMANCE = 0.9;
 const MIN_FRAMES = 32;
 
+/** why lattice operations are unavailable when inference found nothing --
+ * the one wording every surface prints (the frames panel's tooltip and
+ * footer, the context menu's snap item), kept here so they cannot drift */
+export const NO_LATTICE_REASON = "no input lattice could be inferred from these frames";
+
 export function isOnLattice(value: number, step: number): boolean {
 	const multiples = value / step;
 	return Math.abs(multiples - Math.round(multiples)) <= TOLERANCE;
