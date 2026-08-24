@@ -117,7 +117,7 @@ export interface KeybindEntry {
 	/** the binding in the voice a keybind list would print it in */
 	label: string;
 	/** the reason a row cannot be rebound, or null. only cancel is locked:
-	 * Escape is claimed by four listeners, one of them the dialog primitive's
+	 * Escape is claimed by five listeners, one of them the dialog primitive's
 	 * own native handling that no override could ever reach */
 	locked: string | null;
 	/** primary first, alternate second */
@@ -381,12 +381,15 @@ export const KEYBINDS = {
 		locked: null,
 		defaults: one("X", "KeyX")
 	},
-	// one keybind, four registrations: use-edit-tools kills a live cursor-path
+	// one keybind, five registrations: use-edit-tools kills a live cursor-path
 	// gesture or clears the selections, DetailLanes attaches its own listener
-	// for the duration of a press drag, and the dialog primitive closes on it
-	// natively. only the first three could ever read an override, so a rebound
-	// cancel would leave the app's meaning of "cancel" and the dialog's
-	// permanently disagreeing -- the row is listed and locked
+	// for the duration of a press drag, the context menu claims the press in
+	// capture for as long as it is open (components/EditContextMenu.tsx, so
+	// closing the menu never also cancels a gesture or clears a selection),
+	// and the dialog primitive closes on it natively. only the first four
+	// could ever read an override, so a rebound cancel would leave the app's
+	// meaning of "cancel" and the dialog's permanently disagreeing -- the row
+	// is listed and locked
 	cancel: {
 		action: "cancel",
 		group: "editing",
