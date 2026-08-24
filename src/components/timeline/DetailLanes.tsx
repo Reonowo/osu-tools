@@ -26,6 +26,7 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent
 } from "react";
+import { EditContextMenu } from "@/components/EditContextMenu";
 import { frameEditGate } from "@/editor/gate";
 import { CLICK_SLOP_SCREEN_PX } from "@/editor/gesture-controller";
 import { pressRunCommit } from "@/editor/press-commits";
@@ -36,6 +37,7 @@ import { pressLabel } from "@/editor/tool-commits";
 import { physicalButton, PHYSICAL_BUTTONS, type PhysicalKey } from "@/engine/buttons";
 import { holdSpansFlat, sliceSpansFlat } from "@/engine/interpolation";
 import { velocityTraceWindow, type VelocitySample } from "@/lib/analysis";
+import { holdLaneContextMenu, type EditMenuItem } from "@/lib/context-menu";
 import type { ObjectLaneEntry } from "@/lib/derive";
 import { formatTime } from "@/lib/format";
 import type { FrameDto, RenderObject } from "@/lib/scene-types";
@@ -606,6 +608,43 @@ export function DetailLanes() {
 		if (run !== null) frameCursor.select(run.startIndex);
 	};
 
+	// the hold lanes' right-click, resolved through the same lane-and-time
+	// inversion the drag hit-testing uses and the same pure press-run lookup,
+	// frozen at the contextmenu instant. only a [data-hold-lane] row answers:
+	// the ruler, the object lane, the velocity row and the gutters open
+	// nothing at all. the decision itself is lib/context-menu.ts's
+	const resolveLaneMenu = (e: ReactMouseEvent<HTMLDivElement>): EditMenuItem[] | null => {
+		const state = viewerStore.getState();
+		if (state.mode !== "edit" || state.scene === null || state.editor === null) return null;
+		// a live press drag owns the pointer, as a live gesture does in the
+		// viewport: its frozen edit and a menu's frozen context cannot both stand
+		if (pressDrag.live) return null;
+		// so does a released drag whose commit is still in flight: the preview
+		// stands in for spans the authoritative frames still hold, and a menu
+		// resolved from those frames would disagree with the pixels
+		if (dragPreview !== null) return null;
+		const key = laneKeyForEvent(e.target);
+		if (key === null) return null;
+		const toTime = laneInversion();
+		if (toTime === null) return null;
+		const atMs = toTime(e);
+		const run = pressRunAt(state.scene.frames, key, atMs);
+		const plan = holdLaneContextMenu({
+			laneKey: key,
+			atMs,
+			runStartIndex: run?.startIndex ?? null,
+			gate: frameEditGate(state.scene),
+			keybinds: state.effectiveKeybinds
+		});
+		if (plan === null) return null;
+		// the span becomes the press selection -- without the pause the
+		// left-click select-and-drag entry performs, and without the gate: on
+		// a non-editable scene selection still works while the mutating items
+		// carry the reason. selecting never seeks
+		if (plan.select !== null && plan.select.kind === "press") state.setPressSelection(plan.select.selection);
+		return plan.items;
+	};
+
 	// neighbourhood-relative, so every one of these is written once per slice
 	// and never touched again -- the layer's transform is what moves them
 	const percentOf = (t: number) => `${windowFraction(neighbourhood, t) * 100}%`;
@@ -636,16 +675,23 @@ export function DetailLanes() {
 			events to this box; presses do something only inside a [data-hold-lane]
 			row and clicks only inside a [data-object-index] mark, so the ruler and
 			velocity rows stay untouched and the object lane never disturbs press
-			dragging */}
-			<div
-				ref={track.attach}
-				onPointerDown={onLanePointerDown}
-				onPointerMove={onLanePointerMove}
-				onPointerUp={onLanePointerUp}
-				onPointerCancel={onLanePointerCancel}
-				onClick={onLaneClick}
-				onDoubleClick={onLaneDoubleClick}
-				className="relative min-w-0 flex-1 overflow-hidden pb-1"
+			dragging. the box doubles as the context menu's trigger through the
+			render prop, so right-click resolves against the exact element the
+			drag hit-testing measures */}
+			<EditContextMenu
+				resolve={resolveLaneMenu}
+				render={
+					<div
+						ref={track.attach}
+						onPointerDown={onLanePointerDown}
+						onPointerMove={onLanePointerMove}
+						onPointerUp={onLanePointerUp}
+						onPointerCancel={onLanePointerCancel}
+						onClick={onLaneClick}
+						onDoubleClick={onLaneDoubleClick}
+						className="relative min-w-0 flex-1 overflow-hidden pb-1"
+					/>
+				}
 			>
 				{/* the lane layer, out of flow so it can be wider than the track --
 				the gutter column beside it is what gives this row its height */}
@@ -796,7 +842,7 @@ export function DetailLanes() {
 				</div>
 
 				<Playhead ref={playheadRef} />
-			</div>
+			</EditContextMenu>
 		</div>
 	);
 }
