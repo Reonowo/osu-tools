@@ -7,7 +7,8 @@
 
 import { useEffect, type RefObject } from "react";
 import { toast } from "sonner";
-import { expandErase, remapEraseTargets, type EraseTarget } from "@/editor/erase";
+import { candidateWindow, selectionToDisplayed } from "@/editor/candidate-window";
+import { type EraseTarget } from "@/editor/erase";
 import { frameEditGate } from "@/editor/gate";
 import { gestureLive } from "@/editor/gesture-live";
 import {
@@ -19,16 +20,13 @@ import {
 	type GestureEffects,
 	type GestureEnv
 } from "@/editor/gesture-controller";
-import { editTargets } from "@/editor/ops";
 import { pressDrag } from "@/editor/press-drag";
 import { gesturePreview, opsToAuthoritative, selectionToAuthoritative } from "@/editor/preview";
-import { smoothMoveOps } from "@/editor/smooth";
-import { countedLabel, deletedFrameCount, movedFrameCount } from "@/editor/tool-commits";
-import { countTimedAtOrBefore } from "@/lib/timeline";
+import { commitEraseTargets, eraseSelection, smoothSelection } from "@/editor/selection-commits";
+import { countedLabel, movedFrameCount } from "@/editor/tool-commits";
 import { viewportPointToPlayfield, viewportTransform } from "@/renderer/playfield";
 import { captureArm } from "@/playback/capture-arm";
 import { focusModality } from "@/playback/focus-modality";
-import { frameCursor } from "@/playback/frame-cursor";
 import { playbackClock } from "@/playback/instance";
 import { keybindRow, matchesKeybind } from "@/playback/keybinds";
 import { spacePan } from "@/playback/space-pan";
@@ -135,7 +133,7 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 								})
 								.filter((target): target is EraseTarget => target !== null);
 				gesturePreview.setLive(opsToAuthoritative(commit.ops, gesture.source));
-				commitErase(targets);
+				commitEraseTargets(targets);
 				return;
 			}
 			const ops = opsToAuthoritative(commit.ops, gesture.source);
@@ -149,49 +147,6 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			void state.commitEdit({
 				label: (dispatched) => countedLabel(opName, movedFrameCount(dispatched)),
 				payload: { kind: "ops", ops },
-				onSettled: (outcome) => gesturePreview.settle(id, outcome)
-			});
-		};
-
-		/** the one erase pipeline, shared by the brush and the erase-selection
-		 * keybind (Delete/Backspace by default, whatever the user bound since):
-		 * the live preview is already showing the expansion; freeze it, queue
-		 * the intent, and let the dispatch-time re-expansion regenerate the
-		 * entry (or reject with a toast and discard -- the snap-back) */
-		const commitErase = (initialTargets: EraseTarget[]) => {
-			if (initialTargets.length === 0) {
-				gesturePreview.setLive(null);
-				return;
-			}
-			// carried through landed splices by the remap hook, so the
-			// dispatch-time expansion names the frames the sweep actually meant
-			let targets = initialTargets;
-			const id = gesturePreview.freezeLive();
-			void viewerStore.getState().commitEdit({
-				label: (dispatched) => countedLabel("erase", deletedFrameCount(dispatched)),
-				payload: {
-					kind: "intent",
-					remap: (changes) => {
-						targets = remapEraseTargets(targets, changes);
-						return targets.length > 0;
-					},
-					expand: (frames, editor) => {
-						const expansion = expandErase(frames, targets, editor.lattice);
-						if ("rejected" in expansion) {
-							gesturePreview.update(id, null);
-							toast.error("erase rejected", { description: expansion.rejected });
-							return null;
-						}
-						if (expansion.ops.length === 0) {
-							gesturePreview.update(id, null);
-							return null;
-						}
-						// regenerated from the dispatch payload: what is on screen
-						// when this crosses ipc is byte-equal to what is sent
-						gesturePreview.update(id, expansion.ops);
-						return expansion.ops;
-					}
-				},
 				onSettled: (outcome) => gesturePreview.settle(id, outcome)
 			});
 		};
@@ -230,31 +185,13 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			const { frames, source } = gesturePreview.displayed(scene.frames);
 			// the candidate window is exactly the analysis overlay's trailing
 			// window behind the playhead: what is drawn is what is grabbable.
-			// frozen here, with playback free to keep running underneath --
-			// binary-searched in place, so a huge replay pays no per-frame
-			// arrays for a pointer-down
+			// frozen here, with playback free to keep running underneath -- the
+			// shared derivation (editor/candidate-window.ts) is also what the
+			// viewport context menu freezes, so right-click and left-click agree
+			// on what is reachable
 			const displayLength = effectiveOverlays(state.overlays, state.mode).displayLength;
-			const t = playbackClock.currentTime();
-			const lo = countTimedAtOrBefore(frames, t - displayLength);
-			const hi = countTimedAtOrBefore(frames, t);
-			const candidates: number[] = [];
-			for (let i = lo; i < hi; i++) {
-				// a pending boundary insert has no authoritative identity yet and
-				// cannot be selected or edited until its delta lands
-				if (source === null || source[i] !== null) candidates.push(i);
-			}
-			let selection: number[];
-			if (source === null) {
-				selection = editor.frameSelection;
-			} else {
-				const authToDisplayed = new Map<number, number>();
-				source.forEach((auth, displayed) => {
-					if (auth !== null) authToDisplayed.set(auth, displayed);
-				});
-				selection = editor.frameSelection
-					.map((auth) => authToDisplayed.get(auth))
-					.filter((index): index is number => index !== undefined);
-			}
+			const candidates = candidateWindow(frames, source, playbackClock.currentTime(), displayLength);
+			const selection = selectionToDisplayed(editor.frameSelection, source);
 
 			const hitRadius = HIT_THRESHOLD_SCREEN_PX / scale;
 			const env: GestureEnv = {
@@ -336,61 +273,6 @@ export function useEditTools(containerRef: RefObject<HTMLDivElement | null>) {
 			applyEffects(controller.cancel());
 			clearGestureChrome();
 			endGesture(e);
-		};
-
-		/** the erase-selection keybind erases the current frame selection with
-		 * any tool active -- the same operation, the same label, the same intent
-		 * pipeline as the brush */
-		const eraseSelection = () => {
-			const state = viewerStore.getState();
-			const { scene, editor } = state;
-			if (scene === null || editor === null || editor.frameSelection.length === 0) return;
-			if (!frameEditGate(scene).editable) return;
-			if (controller.live) return;
-			const targets = editor.frameSelection
-				.filter((index) => scene.frames[index] !== undefined)
-				.map((index) => ({ index, time: scene.frames[index].time }));
-			const expansion = expandErase(scene.frames, targets, editor.lattice);
-			if ("rejected" in expansion) {
-				toast.error("erase rejected", { description: expansion.rejected });
-				return;
-			}
-			if (expansion.ops.length === 0) return;
-			state.setPlaying(false);
-			gesturePreview.setLive(expansion.ops);
-			commitErase(targets);
-		};
-
-		/** the smooth-selection keybind runs the frames panel's own smooth
-		 * button -- the selection, or the frame-cursor frame when nothing is
-		 * selected -- through the same intent pipeline, so a queued op reads the
-		 * selection as of dispatch. move-only, so unlike erase there is nothing
-		 * structural to preview: the landed delta draws as soon as it applies */
-		const smoothSelection = () => {
-			const state = viewerStore.getState();
-			const scene = state.scene;
-			if (scene === null || state.editor === null || scene.frames.length === 0) return;
-			if (!frameEditGate(scene).editable) return;
-			if (controller.live) return;
-			// frozen at press time, for the reason the button freezes its own:
-			// what the user sees as they fire, not whatever a queued intent reads
-			const strength = state.smoothStrength;
-			const snap = state.editing.snapToLattice;
-			state.setPlaying(false);
-			void state.commitEdit({
-				label: (dispatched) => countedLabel("smooth", movedFrameCount(dispatched)),
-				payload: {
-					kind: "intent",
-					expand: (frames, editor) =>
-						smoothMoveOps(
-							frames,
-							editTargets(editor.frameSelection, frameCursor.currentIndex()),
-							strength,
-							editor.lattice,
-							snap
-						)
-				}
-			});
 		};
 
 		// escape is two-stage: a live gesture dies (nothing commits), otherwise
