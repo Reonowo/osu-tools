@@ -164,6 +164,17 @@ describe("controlOwnsKeydown", () => {
 		expect(clickFocused(dialogButton, "Escape")).toBe(true);
 	});
 
+	test("an open menu owns everything, so walking it cannot also drive playback", () => {
+		// the context menu's items: the arrows walk them, enter and space
+		// confirm -- space toggling playback or an arrow seeking on the same
+		// keystroke would give the menu a side effect per key
+		const menuItem = el("div", { role: "menuitem" }, el("div", { role: "menu" }));
+		expect(clickFocused(menuItem, " ")).toBe(true);
+		expect(clickFocused(menuItem, "ArrowDown")).toBe(true);
+		expect(clickFocused(menuItem, "ArrowLeft")).toBe(true);
+		expect(keyboardFocused(menuItem, "e")).toBe(true);
+	});
+
 	test("the passthrough opt-out wins under either modality", () => {
 		// the frames panel's rows: stepping with `,` `.` while walking the rows
 		// is what the rows are for, tab-focused or clicked
@@ -222,6 +233,12 @@ describe("withinNativeWheelUi", () => {
 	test("keeps native wheel inside popovers and scroll areas", () => {
 		expect(withinNativeWheelUi(el("p", {}, el("div", { "data-slot": "popover-content" })))).toBe(true);
 		expect(withinNativeWheelUi(el("div", {}, el("div", { "data-slot": "scroll-area-viewport" })))).toBe(true);
+	});
+
+	test("keeps native wheel inside an open menu, which sits at the pointer", () => {
+		// the context menu opens under the wheel by construction; a wheel tick
+		// right after right-click must not scrub the replay from the menu
+		expect(withinNativeWheelUi(el("span", {}, el("div", { role: "menu" })))).toBe(true);
 	});
 
 	test("keeps native wheel inside explicitly marked ui like the info panel", () => {

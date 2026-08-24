@@ -58,13 +58,17 @@ const NAV_OWNING_SLOTS = new Set(["toggle-group"]);
 /** text entry and modal surfaces own every key under any focus modality: a
  * click into a text field is still typing, and a dialog's keys never leak to
  * the viewer behind it. inputs are text-like except the sliders' hidden
- * range input, which owns only its nav keys (below) */
+ * range input, which owns only its nav keys (below). an open menu popup is a
+ * modal surface too: the arrows walk it, enter and space confirm, characters
+ * typeahead -- letting any of those also seek, toggle playback or arm a tool
+ * would give the menu a side effect per keystroke */
 function ownsEveryKey(element: GuardElement): boolean {
 	if (element.tagName === "TEXTAREA" || element.tagName === "SELECT") return true;
 	if (element.tagName === "INPUT" && element.getAttribute("type") !== "range") return true;
 	const editable = element.getAttribute("contenteditable");
 	if (editable !== null && editable !== "false") return true;
-	return element.getAttribute("role") === "dialog";
+	const role = element.getAttribute("role");
+	return role === "dialog" || role === "menu";
 }
 
 function ownsNavKeys(element: GuardElement, role: string | null): boolean {
@@ -167,10 +171,13 @@ export function withinViewportChrome(target: unknown): boolean {
 
 /** true when the event target sits inside scrollable ui (settings dialog,
  * info panel, popovers) where the wheel keeps its native scroll behaviour
- * instead of frame-stepping */
+ * instead of frame-stepping. a menu popup joins the dialogs: the context
+ * menu sits at the pointer, so a wheel straight after right-click would
+ * otherwise scrub the replay from the menu's own surface */
 export function withinNativeWheelUi(target: unknown): boolean {
 	for (let element = asGuardElement(target); element !== null; element = element.parentElement) {
-		if (element.getAttribute("role") === "dialog") return true;
+		const role = element.getAttribute("role");
+		if (role === "dialog" || role === "menu") return true;
 		if (element.getAttribute("data-native-wheel") !== null) return true;
 		const slot = element.getAttribute("data-slot");
 		if (slot !== null && NATIVE_WHEEL_SLOTS.has(slot)) return true;
