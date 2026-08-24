@@ -85,11 +85,23 @@ export default function App() {
 		function onKeyDown(e: KeyboardEvent) {
 			if (asksPageZoomReset(e)) e.preventDefault();
 		}
+		// the webview's native context menu (Reload, Inspect...) is browser
+		// chrome no desktop app shows; suppressed app-wide for the reason the
+		// page zoom is -- start screen, dialogs and every surface alike. the
+		// default only: no stopPropagation and no target filtering, so the
+		// in-app context menu's trigger keeps receiving the same event
+		// (cancelling an already-cancelled default is harmless, so the two
+		// compose without coordination)
+		function onContextMenu(e: MouseEvent) {
+			e.preventDefault();
+		}
 		window.addEventListener("wheel", onWheel, { passive: false });
 		window.addEventListener("keydown", onKeyDown);
+		window.addEventListener("contextmenu", onContextMenu);
 		return () => {
 			window.removeEventListener("wheel", onWheel);
 			window.removeEventListener("keydown", onKeyDown);
+			window.removeEventListener("contextmenu", onContextMenu);
 		};
 	}, []);
 
