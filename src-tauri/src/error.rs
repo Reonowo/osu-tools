@@ -63,6 +63,26 @@ pub enum IpcError {
     ExportOverflow {
         field: String,
     },
+    /// video export asked for before the renderer backend is installed --
+    /// the signal the frontend turns into the consent-and-install flow
+    RendererNotInstalled,
+    /// assembling the render's inputs failed: the beatmap could not be
+    /// staged, the scene is a consented mismatch the renderer's md5 lookup
+    /// cannot resolve, or the job dir could not be prepared
+    StagingFailed {
+        message: String,
+    },
+    /// the render itself failed; `detail` carries the backend's last
+    /// stdout/stderr lines, because danser's real errors arrive as `panic:`
+    /// lines or "Beatmap not found" under exit code 0
+    RenderFailed {
+        detail: String,
+    },
+    /// the user cancelled the running export; the job dir is already cleaned
+    Cancelled,
+    /// a second video operation (export or renderer install) while one is
+    /// already running -- one at a time, enforced at the command layer
+    ExportBusy,
 }
 
 impl From<EngineError> for IpcError {
@@ -245,6 +265,36 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v, serde_json::json!({ "kind": "exportOverflow", "field": "maxCombo" }));
+    }
+
+    #[test]
+    fn video_error_kinds_serialize_camel_case() {
+        assert_eq!(
+            serde_json::to_value(IpcError::RendererNotInstalled).unwrap(),
+            json!({ "kind": "rendererNotInstalled" })
+        );
+        assert_eq!(
+            serde_json::to_value(IpcError::StagingFailed {
+                message: "why".into()
+            })
+            .unwrap(),
+            json!({ "kind": "stagingFailed", "message": "why" })
+        );
+        assert_eq!(
+            serde_json::to_value(IpcError::RenderFailed {
+                detail: "panic: x".into()
+            })
+            .unwrap(),
+            json!({ "kind": "renderFailed", "detail": "panic: x" })
+        );
+        assert_eq!(
+            serde_json::to_value(IpcError::Cancelled).unwrap(),
+            json!({ "kind": "cancelled" })
+        );
+        assert_eq!(
+            serde_json::to_value(IpcError::ExportBusy).unwrap(),
+            json!({ "kind": "exportBusy" })
+        );
     }
 
     #[test]
