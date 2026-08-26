@@ -326,7 +326,12 @@ export type IpcError =
 	| { kind: "staleSession" }
 	| { kind: "notEditable"; reason: string }
 	| { kind: "fileExists"; path: string }
-	| { kind: "exportOverflow"; field: string };
+	| { kind: "exportOverflow"; field: string }
+	| { kind: "rendererNotInstalled" }
+	| { kind: "stagingFailed"; message: string }
+	| { kind: "renderFailed"; detail: string }
+	| { kind: "cancelled" }
+	| { kind: "exportBusy" };
 
 /** mirrors settings.rs OverlayPrefs */
 export interface OverlaySettings {
@@ -609,4 +614,88 @@ export interface Settings {
 	 * beatmap association is: opening a recent replay must never silently change
 	 * the app's whole appearance */
 	skin: SkinLocator;
+	/** the renderer-agnostic video export core; the per-backend half lives in
+	 * rendererOptions beside it */
+	video: VideoSettings;
+	/** opaque per-backend blobs keyed by renderer id, persisted like keybind
+	 * overrides: the blob dies with its backend on a swap, the typed core
+	 * survives. one conventional key inside each blob is generic --
+	 * `probedEncoder`, the cached encoder-probe winner */
+	rendererOptions: RendererOptionsMap;
+}
+
+/** mirrors settings.rs VideoResolution: the closed preset set, serialized as
+ * the `WIDTHxHEIGHT` string the dialog shows */
+export type VideoResolution = "1280x720" | "1920x1080" | "2560x1440" | "3840x2160";
+
+/** mirrors settings.rs SkinPolicy: whose skin the rendered video wears */
+export type VideoSkinPolicy = "followApp" | "rendererDefault";
+
+/** mirrors settings.rs VideoExportPrefs */
+export interface VideoSettings {
+	resolution: VideoResolution;
+	/** 30 or 60; a plain number since json can keep no such promise --
+	 * sanitize() is the validation */
+	fps: number;
+	/** `"auto"` (the probed winner decides, backend-side) or an explicit id */
+	encoder: string;
+	skinPolicy: VideoSkinPolicy;
+	/** where the save dialog starts; the last directory a video landed in */
+	lastVideoDir: string | null;
+}
+
+/** mirrors settings.rs RendererOptionsMap: backend id -> that backend's
+ * opaque settings blob. this file declares no blob vocabulary on purpose:
+ * the renderer-specific keys live only in lib/danser-section.ts, and the one
+ * generic key (the probe cache) is lib/video-export-flow.ts's
+ * PROBED_ENCODER_KEY */
+export type RendererOptionsMap = Record<string, Record<string, unknown>>;
+
+/** mirrors video::LicenseNote: one entry of the consent dialog's expando */
+export interface RendererLicenseNote {
+	name: string;
+	detail: string;
+}
+
+/** mirrors video::RendererMetadata: everything the consent dialog renders,
+ * supplied by the backend so nothing renderer-specific is hardcoded here */
+export interface RendererMetadata {
+	id: string;
+	name: string;
+	version: string;
+	downloadBytes: number;
+	source: string;
+	notice: string;
+	licenses: RendererLicenseNote[];
+}
+
+/** mirrors video::RendererStatus */
+export interface VideoRendererStatus {
+	installed: boolean;
+	metadata: RendererMetadata;
+	/** the backend's own log file when it keeps one -- the failure panel's
+	 * "show the renderer log" affordance */
+	logPath: string | null;
+}
+
+/** mirrors video::VideoStage. an export job's stream is staging -> rendering
+ * -> moving; `installing` is the install operation's own stage on the same
+ * channel */
+export type VideoStage = "staging" | "rendering" | "moving" | "installing";
+
+/** mirrors video::VideoProgress, the shared progress event channel's
+ * payload. percent exists only in the rendering and installing stages;
+ * speed/eta ride verbatim from the backend's own progress line */
+export interface VideoProgressEvent {
+	jobId: string;
+	stage: VideoStage;
+	percent?: number;
+	speed?: string;
+	eta?: string;
+}
+
+/** mirrors video::VideoExportResult */
+export interface VideoExportResult {
+	path: string;
+	bytes: number;
 }

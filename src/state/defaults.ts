@@ -10,7 +10,8 @@ import type {
 	EffectSettings,
 	OverlaySettings,
 	SkinLocator,
-	TimelineSettings
+	TimelineSettings,
+	VideoSettings
 } from "../lib/scene-types";
 
 /** osurulesetconfigmanager.cs:27-31 */
@@ -217,3 +218,12 @@ export function clampDetailSpan(spanMs: number): number {
  * the app's own look is a selectable ROW rather than a "nothing selected"
  * state, which is what makes "no skin" and "Argon" one concept rather than two */
 export const DEFAULT_SKIN: SkinLocator = { kind: "bundled" };
+
+/** mirrors settings.rs `VideoExportPrefs::default()` */
+export const DEFAULT_VIDEO: VideoSettings = {
+	resolution: "1920x1080",
+	fps: 60,
+	encoder: "auto",
+	skinPolicy: "followApp",
+	lastVideoDir: null
+};

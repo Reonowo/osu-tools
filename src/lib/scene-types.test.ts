@@ -6,7 +6,8 @@ import {
 	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
 	DEFAULT_SKIN,
-	DEFAULT_TIMELINE
+	DEFAULT_TIMELINE,
+	DEFAULT_VIDEO
 } from "../state/defaults";
 import type {
 	EffectSettings,
@@ -16,7 +17,8 @@ import type {
 	OverlaySettings,
 	RenderKind,
 	Settings,
-	SimulationDto
+	SimulationDto,
+	VideoSettings
 } from "./scene-types";
 import { isIpcError } from "./ipc";
 
@@ -107,7 +109,12 @@ describe("scene contract mirror", () => {
 			{ kind: "io", message: "denied" },
 			{ kind: "internal", message: "x" },
 			{ kind: "fileExists", path: "C:\\out.osr" },
-			{ kind: "exportOverflow", field: "maxCombo" }
+			{ kind: "exportOverflow", field: "maxCombo" },
+			{ kind: "rendererNotInstalled" },
+			{ kind: "stagingFailed", message: "no beatmap" },
+			{ kind: "renderFailed", detail: "panic: x" },
+			{ kind: "cancelled" },
+			{ kind: "exportBusy" }
 		];
 		for (const e of errors) expect(isIpcError(e)).toBe(true);
 		expect(isIpcError(new Error("nope"))).toBe(false);
@@ -169,11 +176,34 @@ describe("scene contract mirror", () => {
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
 			keybinds: { selectTool: [{ hotkey: "К", codes: ["KeyV"] }], eraseTool: [] },
-			skin: DEFAULT_SKIN
+			skin: DEFAULT_SKIN,
+			video: DEFAULT_VIDEO,
+			rendererOptions: { danser: { probedEncoder: "h264_nvenc", settings: { Recording: {} } } }
 		};
 		expect(settings.keybinds.selectTool?.[0].codes).toEqual(["KeyV"]);
 		expect(settings.keybinds.eraseTool).toEqual([]);
 		expect(settings.keybinds.moveTool).toBeUndefined();
+	});
+
+	test("the video prefs accept the rust-serialized shape", () => {
+		// keys copied from settings.rs's settings_serialize_with_camel_case_keys;
+		// fps is a plain number rather than a literal union, since json can keep
+		// no such promise -- sanitize() is the validation
+		const video: VideoSettings = {
+			resolution: "2560x1440",
+			fps: 30,
+			encoder: "h264_nvenc",
+			skinPolicy: "rendererDefault",
+			lastVideoDir: "D:\\videos"
+		};
+		expect(video.resolution).toBe("2560x1440");
+		expect(DEFAULT_VIDEO).toEqual({
+			resolution: "1920x1080",
+			fps: 60,
+			encoder: "auto",
+			skinPolicy: "followApp",
+			lastVideoDir: null
+		});
 	});
 
 	test("warnings carry their payload fields", () => {

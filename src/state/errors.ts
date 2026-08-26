@@ -71,5 +71,23 @@ export function describeIpcError(e: IpcError): { title: string; detail: string; 
 				detail: `${e.field} exceeds its on-disk width; the file can't claim it honestly`,
 				recovery: null
 			};
+		case "rendererNotInstalled":
+			return {
+				title: "video renderer not installed",
+				detail: "the renderer hasn't been downloaded yet; the export dialog offers the install",
+				recovery: null
+			};
+		case "stagingFailed":
+			return { title: "couldn't prepare the render", detail: e.message, recovery: null };
+		case "renderFailed":
+			return { title: "the render failed", detail: e.detail, recovery: null };
+		case "cancelled":
+			return { title: "export cancelled", detail: "the render was stopped and cleaned up", recovery: null };
+		case "exportBusy":
+			return {
+				title: "an export is already running",
+				detail: "one video operation runs at a time; wait for it or cancel it first",
+				recovery: null
+			};
 	}
 }
