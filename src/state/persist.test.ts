@@ -12,13 +12,15 @@ import type {
 	TimelineSettings
 } from "../lib/scene-types";
 import { testScene } from "../test/scene";
+import { fakeRendererStatus } from "@/test/video";
 import {
 	DEFAULT_AUDIO,
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
-	DEFAULT_TIMELINE
+	DEFAULT_TIMELINE,
+	DEFAULT_VIDEO
 } from "./defaults";
 import { installPrefsPersistence, type Scheduler } from "./persist";
 import { createViewerStore, type IpcDeps } from "./store";
@@ -75,7 +77,9 @@ const baseSettings: Settings = {
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
 	keybinds: {},
-	skin: { kind: "bundled" }
+	skin: { kind: "bundled" },
+	video: DEFAULT_VIDEO,
+	rendererOptions: {}
 };
 
 const identityDelta: EditDelta = {
@@ -122,7 +126,13 @@ function deps(): IpcDeps {
 		redo: async () => identityDelta,
 		revertAll: async () => identityDelta,
 		resync: async () => identityDelta,
-		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null })
+		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null }),
+		exportVideo: async () => ({ path: "", bytes: 0 }),
+		cancelVideoExport: async () => {},
+		getVideoRendererStatus: async () => fakeRendererStatus(),
+		installVideoRenderer: async () => ({ ...fakeRendererStatus(), installed: true }),
+		setVideoPrefs: async (video, rendererOptions) => ({ ...baseSettings, video, rendererOptions }),
+		redetectVideoEncoder: async () => baseSettings
 	};
 }
 

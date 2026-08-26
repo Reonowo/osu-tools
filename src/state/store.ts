@@ -8,12 +8,18 @@ import { pressRunAt, pressRunFromIndex, type PressSelection } from "../editor/pr
 import { applyFrameChanges, isFullFrames, remapQueuedOps, remapSelection } from "../editor/splice";
 import {
 	invokeApplyEdit,
+	invokeCancelVideoExport,
 	invokeClearRecents,
 	invokeGetSkin,
+	invokeGetVideoRendererStatus,
 	invokeImportSkin,
+	invokeInstallVideoRenderer,
 	invokeListSkins,
+	invokeRedetectVideoEncoder,
 	invokeSetSkin,
+	invokeSetVideoPrefs,
 	invokeExportReplay,
+	invokeExportVideo,
 	invokeGetSettings,
 	invokeLoadReplay,
 	invokeLoadReplayWithBeatmap,
@@ -40,11 +46,15 @@ import type {
 	KeybindOverrides,
 	LoadedScene,
 	OverlaySettings,
+	RendererOptionsMap,
 	Settings,
 	SkinEntry,
 	SkinLocator,
 	SkinManifest,
-	TimelineSettings
+	TimelineSettings,
+	VideoExportResult,
+	VideoRendererStatus,
+	VideoSettings
 } from "../lib/scene-types";
 import { deriveScene, type DerivedScene } from "../lib/derive";
 import { widenBounds, type TimeBounds } from "../lib/timeline";
@@ -114,6 +124,12 @@ export interface IpcDeps {
 	revertAll(epoch: number): Promise<EditDelta>;
 	resync(epoch: number): Promise<EditDelta>;
 	exportReplay(epoch: number, destPath: string, overwrite: boolean): Promise<ExportResult>;
+	exportVideo(epoch: number, destPath: string): Promise<VideoExportResult>;
+	cancelVideoExport(jobId: string): Promise<void>;
+	getVideoRendererStatus(): Promise<VideoRendererStatus>;
+	installVideoRenderer(): Promise<VideoRendererStatus>;
+	setVideoPrefs(video: VideoSettings, rendererOptions: RendererOptionsMap): Promise<Settings>;
+	redetectVideoEncoder(): Promise<Settings>;
 }
 
 export interface EditorState {
@@ -406,6 +422,21 @@ export interface ViewerState {
 	 * routing through lastError -- export failures render inside the dialog,
 	 * never as vanishing toasts */
 	exportReplay(destPath: string, overwrite: boolean): Promise<ExportResult>;
+	/** renders the current document to destPath through the video seam --
+	 * the same drain-then-pin choreography as exportReplay, and the same
+	 * throw-typed posture: the dialog renders failures in place */
+	exportVideo(destPath: string): Promise<VideoExportResult>;
+	cancelVideoExport(jobId: string): Promise<void>;
+	/** install state + consent metadata, passed through untouched: the dialog
+	 * renders whatever backend the seam holds */
+	getVideoRendererStatus(): Promise<VideoRendererStatus>;
+	installVideoRenderer(): Promise<VideoRendererStatus>;
+	/** persists the video prefs + blobs and republishes settings; failures
+	 * surface through the toast flow (control writes are fire-and-forget) */
+	saveVideoPrefs(video: VideoSettings, rendererOptions: RendererOptionsMap): Promise<void>;
+	/** re-runs the encoder probe and republishes the settings carrying its
+	 * winner */
+	redetectVideoEncoder(): Promise<void>;
 }
 
 export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreApi<ViewerState> {
@@ -663,6 +694,14 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 		// to a racing write, so a stale resolution must recognize itself and
 		// no-op instead of overwriting -- or cancelling -- a newer publication
 		let settingsRefreshSeq = 0;
+		// the video prefs get their own sequence for the same reason the skin
+		// does: they are written by dragged controls that issue many overlapping
+		// writes, and ordering those against each other is a separate question
+		// from invalidating a refresh. two counters, because "which write is
+		// newest" and "which write's answer is on screen" diverge the moment
+		// one of them fails
+		let videoPrefsSeq = 0;
+		let videoPrefsPublishedSeq = 0;
 		// the skin gets its OWN sequence: resolving a locator touches the disk
 		// and finishes on its own schedule, so borrowing the settings counter
 		// would let any unrelated settings publication -- a dialog open, a load's
@@ -721,6 +760,33 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 		function publishSettings(settings: Settings) {
 			settingsRefreshSeq += 1;
 			set({ settings });
+		}
+
+		/** the session both exports dispatch against, pinned before the wait:
+		 * the destination the user picked and the expectation they were shown
+		 * belong to it, so a scene installed while we drain makes the request
+		 * stale rather than silently retargeting a different replay. an export
+		 * has to describe the document the user is looking at, so it waits the
+		 * edit queue out first -- dispatching straight past it would hand the
+		 * backend a document those edits had not reached yet, and the backend
+		 * would answer consistently for that older state, silently omitting
+		 * the pending edit while still reporting success. looping rather than
+		 * awaiting once: a join can resolve early against a pump that was
+		 * already settling. shared by exportReplay and exportVideo so the two
+		 * cannot drift on the stale-session rules */
+		async function drainedExportEpoch(): Promise<number> {
+			const requested = get().editor;
+			if (requested === null) {
+				throw { kind: "staleSession" } satisfies IpcError;
+			}
+			const epochTag = requested.epoch;
+			while (!queueIsQuiet()) {
+				await pumpEdits();
+			}
+			if (get().editor?.epoch !== epochTag) {
+				throw { kind: "staleSession" } satisfies IpcError;
+			}
+			return epochTag;
 		}
 
 		/** the overrides and the table they fold to, written together: the two
@@ -1355,31 +1421,95 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				set({ editor: { ...editor, pressSelection: selection } });
 			},
 			setArmedKey: (key) => set({ armedKey: key }),
-			exportReplay: async (destPath, overwrite) => {
-				// the session the user asked to export, pinned before the wait:
-				// the destination they picked and the path expectation they were
-				// shown both belong to it, so a scene installed while we drain
-				// makes this request stale rather than silently retargeting the
-				// write at a different replay
-				const requested = get().editor;
-				if (requested === null) {
-					throw { kind: "staleSession" } satisfies IpcError;
+			exportReplay: async (destPath, overwrite) =>
+				deps.exportReplay(await drainedExportEpoch(), destPath, overwrite),
+			exportVideo: async (destPath) => deps.exportVideo(await drainedExportEpoch(), destPath),
+			cancelVideoExport: (jobId) => deps.cancelVideoExport(jobId),
+			getVideoRendererStatus: () => deps.getVideoRendererStatus(),
+			installVideoRenderer: async () => {
+				const status = await deps.installVideoRenderer();
+				// the install cached the encoder probe's winner backend-side, so
+				// the published settings are one write behind until this refresh
+				const refreshSeq = ++settingsRefreshSeq;
+				try {
+					const settings = await deps.getSettings();
+					if (refreshSeq === settingsRefreshSeq) set({ settings });
+				} catch {
+					// the install itself succeeded; a failed refresh only delays
+					// the probe cache reaching the dialog
 				}
-				const epochTag = requested.epoch;
-				// export has to describe the document the user is looking at, so
-				// it waits the edit queue out first. dispatching straight past it
-				// would hand the backend a document those edits had not reached
-				// yet -- and the backend would answer consistently for that older
-				// state, so the write would silently omit the pending edit and
-				// still report success. looping rather than awaiting once: a join
-				// can resolve early against a pump that was already settling
-				while (!queueIsQuiet()) {
-					await pumpEdits();
+				return status;
+			},
+			saveVideoPrefs: async (video, rendererOptions) => {
+				// every control sends a whole snapshot, and a slider drag sends
+				// one per step, so these responses race each other -- an older
+				// one publishing over a newer would rewind the control under the
+				// cursor. the guard is "highest seq PUBLISHED wins" rather than
+				// "must be the newest issued": the newest write can fail, and
+				// gating on it would then suppress an older write that did
+				// land, leaving the store behind the backend for the session
+				const writeSeq = ++videoPrefsSeq;
+				// the snapshot every control branches from is this store's, so it
+				// has to move NOW rather than when the answer lands. two different
+				// controls changed inside one round-trip would otherwise both read
+				// the pre-write state, and the later write would carry the earlier
+				// one's field at its old value -- silently reverting a setting the
+				// user just chose. the seq guard below orders the ANSWERS; only
+				// this keeps the next write's snapshot current
+				const beforeWrite = get().settings;
+				set((state) => ({
+					settings: state.settings === null ? null : { ...state.settings, video, rendererOptions }
+				}));
+				try {
+					const settings = await deps.setVideoPrefs(video, rendererOptions);
+					if (writeSeq > videoPrefsPublishedSeq) {
+						videoPrefsPublishedSeq = writeSeq;
+						publishSettings(settings);
+					}
+				} catch (e) {
+					// the optimistic move above has to come back, or a write that
+					// never landed would leave the control showing a value the
+					// backend does not hold for the rest of the session. only when
+					// this is still the newest write issued: a newer one has
+					// already branched from the optimistic state and rolling back
+					// underneath it would revert ITS field instead
+					if (writeSeq === videoPrefsSeq && beforeWrite !== null) {
+						// only the two fields this write owns, and only while each is
+						// still the exact value this request installed. a skin swap
+						// publishes a whole fresh Settings and an encoder re-detect
+						// republishes rendererOptions with a new probedEncoder --
+						// either landing while this request was pending means the
+						// field is no longer ours to restore, and putting the old
+						// one back would not just hide the newer value but feed it
+						// to the NEXT whole-snapshot write, persisting the stale map
+						// over what the backend already stored
+						set((state) => {
+							if (state.settings === null) return {};
+							return {
+								settings: {
+									...state.settings,
+									video: state.settings.video === video ? beforeWrite.video : state.settings.video,
+									rendererOptions:
+										state.settings.rendererOptions === rendererOptions
+											? beforeWrite.rendererOptions
+											: state.settings.rendererOptions
+								}
+							};
+						});
+					}
+					// fire-and-forget control writes surface through the toast
+					// flow, the saveStablePath posture
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					set({ lastError: { error, osrPath: "" } });
 				}
-				if (get().editor?.epoch !== epochTag) {
-					throw { kind: "staleSession" } satisfies IpcError;
+			},
+			redetectVideoEncoder: async () => {
+				try {
+					publishSettings(await deps.redetectVideoEncoder());
+				} catch (e) {
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					set({ lastError: { error, osrPath: "" } });
 				}
-				return deps.exportReplay(epochTag, destPath, overwrite);
 			}
 		};
 	});
@@ -1402,7 +1532,13 @@ export const viewerStore = createViewerStore(
 		redo: invokeRedo,
 		revertAll: invokeRevertAll,
 		resync: invokeResync,
-		exportReplay: invokeExportReplay
+		exportReplay: invokeExportReplay,
+		exportVideo: invokeExportVideo,
+		cancelVideoExport: invokeCancelVideoExport,
+		getVideoRendererStatus: invokeGetVideoRendererStatus,
+		installVideoRenderer: invokeInstallVideoRenderer,
+		setVideoPrefs: invokeSetVideoPrefs,
+		redetectVideoEncoder: invokeRedetectVideoEncoder
 	},
 	{
 		// every landed splice keeps the gesture preview's pending entries in the

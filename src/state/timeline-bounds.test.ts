@@ -19,6 +19,7 @@ import type { EditDelta, EditOp, FrameDto, IndexedFrame, LoadedScene, Settings }
 import { audioExtendedBounds } from "../lib/timeline";
 import { timeToPixels, windowAround } from "../lib/timeline-view";
 import { testScene } from "../test/scene";
+import { fakeRendererStatus } from "@/test/video";
 import {
 	DEFAULT_AUDIO,
 	DEFAULT_EDITING,
@@ -26,7 +27,8 @@ import {
 	DEFAULT_GAMEPLAY,
 	DEFAULT_OVERLAYS,
 	DEFAULT_SKIN,
-	DEFAULT_TIMELINE
+	DEFAULT_TIMELINE,
+	DEFAULT_VIDEO
 } from "./defaults";
 import { createViewerStore, type IpcDeps, type ViewerState } from "./store";
 import type { StoreApi } from "zustand";
@@ -168,7 +170,9 @@ const settings: Settings = {
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
 	keybinds: {},
-	skin: DEFAULT_SKIN
+	skin: DEFAULT_SKIN,
+	video: DEFAULT_VIDEO,
+	rendererOptions: {}
 };
 
 // the DetailLanes draw math, verbatim: paused clock at 9200 -- parked where
@@ -238,7 +242,13 @@ async function openTestScene(): Promise<Store> {
 		resync: async () => {
 			throw new Error("unused");
 		},
-		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null })
+		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null }),
+		exportVideo: async () => ({ path: "", bytes: 0 }),
+		cancelVideoExport: async () => {},
+		getVideoRendererStatus: async () => fakeRendererStatus(),
+		installVideoRenderer: async () => ({ ...fakeRendererStatus(), installed: true }),
+		setVideoPrefs: async () => settings,
+		redetectVideoEncoder: async () => settings
 	};
 	const store = createViewerStore(deps);
 	await store.getState().openReplay("C:\\r.osr");

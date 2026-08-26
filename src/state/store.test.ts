@@ -17,6 +17,7 @@ import type {
 } from "../lib/scene-types";
 import { defaultKeybinds } from "../playback/keybinds";
 import { testScene } from "../test/scene";
+import { fakeRendererStatus } from "@/test/video";
 import { VIEWPORT_ZOOM_MAX, VIEWPORT_ZOOM_MIN } from "../renderer/playfield";
 import {
 	DEFAULT_AUDIO,
@@ -27,6 +28,7 @@ import {
 	DEFAULT_OVERLAYS,
 	DEFAULT_SKIN,
 	DEFAULT_TIMELINE,
+	DEFAULT_VIDEO,
 	DETAIL_SPAN_MAX,
 	DETAIL_SPAN_MIN,
 	effectiveEffects
@@ -84,7 +86,9 @@ const baseSettings: Settings = {
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
 	keybinds: {},
-	skin: DEFAULT_SKIN
+	skin: DEFAULT_SKIN,
+	video: DEFAULT_VIDEO,
+	rendererOptions: {}
 };
 
 const sampleRecent: RecentReplay = {
@@ -132,6 +136,12 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 		revertAll: async () => identityDelta,
 		resync: async () => identityDelta,
 		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null }),
+		exportVideo: async () => ({ path: "", bytes: 0 }),
+		cancelVideoExport: async () => {},
+		getVideoRendererStatus: async () => fakeRendererStatus(),
+		installVideoRenderer: async () => ({ ...fakeRendererStatus(), installed: true }),
+		setVideoPrefs: async (video, rendererOptions) => ({ ...baseSettings, video, rendererOptions }),
+		redetectVideoEncoder: async () => baseSettings,
 		...overrides
 	};
 }
@@ -502,7 +512,9 @@ describe("viewer preferences", () => {
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
 			keybinds: {},
-			skin: DEFAULT_SKIN
+			skin: DEFAULT_SKIN,
+			video: DEFAULT_VIDEO,
+			rendererOptions: {}
 		};
 		const store = createViewerStore(deps({ getSettings: async () => stored }));
 
@@ -3556,5 +3568,132 @@ describe("the persisted selection after a fallback", () => {
 
 		expect(store.getState().skin?.locator).toEqual({ kind: "bundled" });
 		expect(store.getState().settings?.skin).toEqual(requested);
+	});
+});
+
+describe("racing video preference writes", () => {
+	/** a deps set whose setVideoPrefs resolves only when the test says to */
+	function gatedVideoDeps() {
+		const gates: Array<{
+			resolve: (settings: Settings) => void;
+			reject: (e: IpcError) => void;
+		}> = [];
+		return {
+			gates,
+			deps: deps({
+				setVideoPrefs: (video, rendererOptions) =>
+					new Promise<Settings>((resolve, reject) => {
+						gates.push({
+							resolve: () => resolve({ ...baseSettings, video, rendererOptions }),
+							reject
+						});
+					})
+			})
+		};
+	}
+
+	test("an older write's answer never lands over a newer one's", async () => {
+		// the drag: one write per slider step, resolving out of order
+		const { gates, deps: gated } = gatedVideoDeps();
+		const store = createViewerStore(gated);
+
+		const first = store.getState().saveVideoPrefs({ ...DEFAULT_VIDEO, fps: 30 }, {});
+		const second = store.getState().saveVideoPrefs({ ...DEFAULT_VIDEO, fps: 60 }, {});
+		expect(gates).toHaveLength(2);
+
+		// the newer write answers first, then the older one
+		gates[1].resolve({} as Settings);
+		await second;
+		gates[0].resolve({} as Settings);
+		await first;
+
+		expect(store.getState().settings?.video.fps).toBe(60);
+	});
+
+	test("a failed newest write leaves the older landed one on screen", async () => {
+		// the regression the plain newest-issued guard introduced: suppressing
+		// the older answer for being stale, then losing the newer one to a
+		// failure, left the store behind the backend for the whole session
+		const { gates, deps: gated } = gatedVideoDeps();
+		const store = createViewerStore(gated);
+
+		const first = store.getState().saveVideoPrefs({ ...DEFAULT_VIDEO, fps: 30 }, {});
+		const second = store.getState().saveVideoPrefs({ ...DEFAULT_VIDEO, fps: 60 }, {});
+
+		gates[0].resolve({} as Settings);
+		await first;
+		gates[1].reject({ kind: "internal", message: "the write failed" });
+		await second;
+
+		// the backend kept the first write, so the store must show it
+		expect(store.getState().settings?.video.fps).toBe(30);
+		expect(store.getState().lastError?.error.kind).toBe("internal");
+	});
+
+	test("a failed write's rollback keeps a probe that published while it was pending", async () => {
+		// the rollback owns `video` and `rendererOptions`, but only while each is
+		// still the value it installed: a re-detect landing mid-request
+		// republishes rendererOptions with a new probedEncoder, and restoring the
+		// old map over it would not just hide the newer value -- it would feed
+		// the stale map to the NEXT whole-snapshot write and persist it
+		const gate: { reject?: (e: IpcError) => void } = {};
+		const probed = { danser: { probedEncoder: "h264_nvenc" } };
+		const store = createViewerStore(
+			deps({
+				setVideoPrefs: () =>
+					new Promise<Settings>((_resolve, reject) => {
+						gate.reject = reject;
+					}),
+				redetectVideoEncoder: async () => ({ ...baseSettings, rendererOptions: probed })
+			})
+		);
+		await store.getState().loadSettings();
+
+		const pending = store.getState().saveVideoPrefs({ ...DEFAULT_VIDEO, fps: 30 }, {});
+		// the probe answers while the preference write is still in flight
+		await store.getState().redetectVideoEncoder();
+		expect(store.getState().settings?.rendererOptions).toEqual(probed);
+
+		gate.reject?.({ kind: "internal", message: "the write failed" });
+		await pending;
+
+		expect(store.getState().settings?.rendererOptions).toEqual(probed);
+		expect(store.getState().lastError?.error.kind).toBe("internal");
+	});
+
+	test("a later control's write carries an earlier one's change rather than reverting it", async () => {
+		// every control sends a WHOLE snapshot branched from this store, so two
+		// of them changed inside one round-trip both read the pre-write state
+		// unless the store moves optimistically -- and the later write then
+		// carries the earlier one's field at its old value, silently undoing a
+		// setting the user just chose
+		const sent: Settings["video"][] = [];
+		const gates: Array<() => void> = [];
+		const store = createViewerStore(
+			deps({
+				setVideoPrefs: (video, rendererOptions) =>
+					new Promise<Settings>((resolve) => {
+						sent.push(video);
+						gates.push(() => resolve({ ...baseSettings, video, rendererOptions }));
+					})
+			})
+		);
+		await store.getState().loadSettings();
+		const videoNow = () => store.getState().settings?.video ?? DEFAULT_VIDEO;
+
+		// the resolution control, then the frame-rate control, each reading the
+		// store the way the dialog does, before either answer has landed
+		const first = store.getState().saveVideoPrefs({ ...videoNow(), resolution: "2560x1440" }, {});
+		const second = store.getState().saveVideoPrefs({ ...videoNow(), fps: 30 }, {});
+
+		expect(sent).toHaveLength(2);
+		expect(sent[1].fps).toBe(30);
+		expect(sent[1].resolution).toBe("2560x1440");
+
+		gates[0]();
+		gates[1]();
+		await Promise.all([first, second]);
+		expect(store.getState().settings?.video.resolution).toBe("2560x1440");
+		expect(store.getState().settings?.video.fps).toBe(30);
 	});
 });

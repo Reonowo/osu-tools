@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import type { EditDelta, Settings } from "../../lib/scene-types";
 import { testScene } from "../../test/scene";
+import { fakeRendererStatus } from "@/test/video";
 import {
 	DEFAULT_AUDIO,
 	DEFAULT_EDITING,
@@ -17,7 +18,7 @@ import {
 import { createViewerStore, type IpcDeps } from "../../state/store";
 import { railTabClick } from "./TabRail";
 import type { SkinManifest } from "@/lib/scene-types";
-import { DEFAULT_SKIN } from "@/state/defaults";
+import { DEFAULT_SKIN, DEFAULT_VIDEO } from "@/state/defaults";
 
 /** the manifest a store test's ipc stub answers with: the app's own look,
  * which is what a fresh install resolves to */
@@ -69,7 +70,9 @@ const baseSettings: Settings = {
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
 	keybinds: {},
-	skin: { kind: "bundled" }
+	skin: { kind: "bundled" },
+	video: DEFAULT_VIDEO,
+	rendererOptions: {}
 };
 
 const identityDelta: EditDelta = {
@@ -114,7 +117,13 @@ function deps(): IpcDeps {
 		redo: async () => identityDelta,
 		revertAll: async () => identityDelta,
 		resync: async () => identityDelta,
-		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null })
+		exportReplay: async () => ({ path: "", bytes: 0, regenerated: null }),
+		exportVideo: async () => ({ path: "", bytes: 0 }),
+		cancelVideoExport: async () => {},
+		getVideoRendererStatus: async () => fakeRendererStatus(),
+		installVideoRenderer: async () => ({ ...fakeRendererStatus(), installed: true }),
+		setVideoPrefs: async () => baseSettings,
+		redetectVideoEncoder: async () => baseSettings
 	};
 }
 
