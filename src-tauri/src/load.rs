@@ -46,6 +46,10 @@ pub struct SessionState {
     /// the stable-faithful score-derivation inputs, captured once at load
     /// from the decoded beatmap (raw hp/od/cs, object count, drain length)
     pub score_context: ScoreContext,
+    /// what a video export stages from, captured here because the load is
+    /// the one moment every path below is already resolved -- for an `.osz`
+    /// scene they point into the extraction lease this session holds alive
+    pub export_source: crate::video::staging::ExportSourceRecord,
 }
 
 // the tests format `Result<LoadOutcome, IpcError>` in panic messages;
@@ -117,6 +121,11 @@ pub(crate) struct BeatmapSource {
     /// or the `.osz` itself. `BeatmapOrigin` is built from it, so it must be a
     /// path that still exists once the cache lease is gone
     pub origin_path: PathBuf,
+    /// the `.osu` as a readable file on disk -- the picked or resolved file
+    /// itself, or for an `.osz` the extracted member inside the lease dir.
+    /// distinct from `origin_path` precisely there, and what the video
+    /// export's staging copies from
+    pub osu_disk_path: PathBuf,
 }
 
 /// the judged-count identity vs the map's object count, from the header's
@@ -229,6 +238,19 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     let simulatable = matches!(simulation, SimulationDto::Authoritative { .. });
     let cached_simulation = simulation.clone();
 
+    // the export-source record, captured while every resolved path is in
+    // hand -- the pipeline used to drop them here. uniform across all three
+    // beatmap sources by construction: whatever `source.dir` resolved from
+    // is what a video export stages from
+    let export_source = crate::video::staging::ExportSourceRecord {
+        osu_path: source.osu_disk_path.clone(),
+        audio_path: audio_path.clone(),
+        background_path: background_path.clone(),
+        sample_files: sample_files.values().cloned().collect(),
+        texture_files: texture_files.values().cloned().collect(),
+        md5: source.md5.clone(),
+    };
+
     let scene = assemble_scene(
         &source.map,
         &source.md5,
@@ -257,6 +279,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
             redo_labels: Vec::new(),
             simulation: cached_simulation,
             score_context,
+            export_source,
         },
         origin: BeatmapOrigin {
             dir: source
@@ -287,6 +310,7 @@ fn osu_file_source(
         lease: None,
         mismatch,
         origin_path: osu_path.to_path_buf(),
+        osu_disk_path: osu_path.to_path_buf(),
     })
 }
 
@@ -345,6 +369,7 @@ fn osz_source(
         lease: Some(extracted.lease),
         mismatch,
         origin_path: osz_path.to_path_buf(),
+        osu_disk_path: extracted.osu_path,
     })
 }
 
@@ -1058,6 +1083,76 @@ mod tests {
             outcome.scene.warnings[0],
             Warning::BeatmapMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn every_beatmap_source_captures_a_complete_export_source_record() {
+        let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("samples-banks-v14.osu")).unwrap();
+        let md5 = format!("{:x}", md5::compute(&osu_bytes));
+
+        // a picked .osu: every record path resolves beside the file
+        let dir = tempfile::tempdir().unwrap();
+        let osu_path = dir.path().join("map.osu");
+        std::fs::write(&osu_path, &osu_bytes).unwrap();
+        std::fs::write(dir.path().join("audio.mp3"), b"mp3").unwrap();
+        std::fs::write(dir.path().join("soft-hitnormal.wav"), b"wav").unwrap();
+        std::fs::write(dir.path().join("hitcircle.png"), b"png").unwrap();
+        let osr_path = dir.path().join("replay.osr");
+        std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
+
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        let record = &outcome.session.export_source;
+        assert_eq!(record.md5, md5);
+        assert_eq!(record.osu_path, osu_path);
+        assert!(record.audio_path.is_some());
+        assert!(record
+            .sample_files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "soft-hitnormal.wav")));
+        assert!(record
+            .texture_files
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "hitcircle.png")));
+
+        // a picked .osz: the record points into the live extraction lease,
+        // which is exactly why staging copies synchronously at job start
+        let dir = tempfile::tempdir().unwrap();
+        let osz_path = dir.path().join("set.osz");
+        crate::testutil::write_osz(
+            &osz_path,
+            &[
+                ("map.osu", osu_bytes.as_slice()),
+                ("audio.mp3", b"mp3".as_slice()),
+                ("soft-hitnormal.wav", b"wav".as_slice()),
+            ],
+        );
+        let osr_path = dir.path().join("replay.osr");
+        std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
+        let outcome = load_with_beatmap(&osr_path, &osz_path, false, &dir.path().join("cache")).unwrap();
+        // the raw lease path for the extractor's own join, the canonical one
+        // for media paths that went through resolve_media_path
+        let lease_dir = outcome.session.lease.as_ref().unwrap().dir().to_path_buf();
+        let canonical_lease = dunce::canonicalize(&lease_dir).unwrap();
+        let record = &outcome.session.export_source;
+        assert!(record.osu_path.starts_with(&lease_dir), "{:?}", record.osu_path);
+        assert!(record.osu_path.is_file(), "the extracted member is readable");
+        assert!(record.audio_path.as_ref().unwrap().starts_with(&canonical_lease));
+        assert!(record.sample_files.iter().all(|p| p.starts_with(&canonical_lease)));
+
+        // the stable lookup: the install's own file, media beside it
+        let root = tempfile::tempdir().unwrap();
+        let md5 = crate::testutil::fake_install(root.path(), "1 fixture", "map.osu", &osu_bytes);
+        std::fs::write(root.path().join("Songs").join("1 fixture").join("audio.mp3"), b"mp3").unwrap();
+        let osr_path = root.path().join("replay.osr");
+        std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
+        let outcome = auto_lookup(&osr_path, Some(root.path()), &[], &root.path().join("cache")).unwrap();
+        let record = &outcome.session.export_source;
+        assert_eq!(
+            record.osu_path,
+            root.path().join("Songs").join("1 fixture").join("map.osu")
+        );
+        assert!(record.audio_path.is_some());
+        assert_eq!(record.md5, md5);
     }
 
     #[test]
