@@ -3,6 +3,7 @@ import { toast, Toaster } from "sonner";
 import { AppShell } from "@/components/shell/AppShell";
 import { DiscardDialog } from "@/components/DiscardDialog";
 import { ExportDialog } from "@/components/ExportDialog";
+import { VideoExportDialog } from "@/components/VideoExportDialog";
 import { HelpOverlay } from "@/components/HelpOverlay";
 import { MismatchDialog } from "@/components/MismatchDialog";
 import { resolveOpenCategory, type SettingsCategory } from "@/components/settings/categories";
@@ -28,6 +29,7 @@ export default function App() {
 	// change. a ref rather than state since only the next open reads it
 	const lastCategory = useRef<SettingsCategory | null>(null);
 	const [exportOpen, setExportOpen] = useState(false);
+	const [videoExportOpen, setVideoExportOpen] = useState(false);
 	const scene = useViewerStore((s) => s.scene);
 	const lastError = useViewerStore((s) => s.lastError);
 
@@ -148,7 +150,11 @@ export default function App() {
 			{scene === null ? (
 				<StartScreen onOpenSettings={openSettings} />
 			) : (
-				<AppShell onOpenSettings={openSettings} onOpenExport={() => setExportOpen(true)} />
+				<AppShell
+					onOpenSettings={openSettings}
+					onOpenExportReplay={() => setExportOpen(true)}
+					onOpenExportVideo={() => setVideoExportOpen(true)}
+				/>
 			)}
 			<MismatchDialog />
 			{/* app-rooted for the reason MismatchDialog is: it has to cover drop,
@@ -161,6 +167,7 @@ export default function App() {
 				onClose={() => setSettingsCategory(null)}
 			/>
 			<ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
+			<VideoExportDialog open={videoExportOpen} onOpenChange={setVideoExportOpen} />
 			{/* select-text: error toasts are diagnostic copy opt-ins (index.css) */}
 			<Toaster theme="dark" position="bottom-right" richColors toastOptions={{ className: "select-text" }} />
 		</TooltipProvider>

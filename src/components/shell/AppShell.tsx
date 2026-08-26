@@ -15,10 +15,12 @@ import { TopBar } from "./TopBar";
 
 export function AppShell({
 	onOpenSettings,
-	onOpenExport
+	onOpenExportReplay,
+	onOpenExportVideo
 }: {
 	onOpenSettings: (category?: SettingsCategory) => void;
-	onOpenExport: () => void;
+	onOpenExportReplay: () => void;
+	onOpenExportVideo: () => void;
 }) {
 	const panelOpen = useViewerStore((s) => s.panelOpen);
 
@@ -29,7 +31,11 @@ export function AppShell({
 
 	return (
 		<div className="grid h-screen w-screen grid-rows-[48px_minmax(0,1fr)_auto_26px] overflow-hidden bg-surface-viewport font-sans text-[#e4e4e7]">
-			<TopBar onOpenSettings={onOpenSettings} onOpenExport={onOpenExport} />
+			<TopBar
+				onOpenSettings={onOpenSettings}
+				onOpenExportReplay={onOpenExportReplay}
+				onOpenExportVideo={onOpenExportVideo}
+			/>
 			<div className="flex min-h-0 min-w-0">
 				<Viewport />
 				{panelOpen && <SidePanel />}

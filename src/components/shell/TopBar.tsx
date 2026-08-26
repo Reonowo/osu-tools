@@ -1,14 +1,17 @@
 // the docked top bar: identity, the loaded beatmap/player line, mod chips,
 // and the watch/edit switcher plus the edit-history controls
 
-import { Download, Redo2, Settings2, Undo2 } from "lucide-react";
+import { ChevronDown, Clapperboard, Download, FileDown, Redo2, Settings2, Undo2 } from "lucide-react";
+import { useState } from "react";
 import type { SettingsCategory } from "@/components/settings/categories";
 import { OpenMenu } from "@/components/shell/OpenMenu";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatMods, formatTime } from "@/lib/format";
+import { exportMenuEntries } from "@/lib/video-export-flow";
 import { keybindSuffix } from "@/playback/keybinds";
 import { useViewerStore, type ViewerMode } from "@/state/store";
 
@@ -30,12 +33,85 @@ export function Identity() {
 	);
 }
 
+/** the export split as a labelled menu: entries come from the pure module
+ * (lib/video-export-flow.ts), so the gate's answer is tested headless and
+ * this component only renders it */
+function ExportMenu({
+	onOpenExportReplay,
+	onOpenExportVideo
+}: {
+	onOpenExportReplay: () => void;
+	onOpenExportVideo: () => void;
+}) {
+	const scene = useViewerStore((s) => s.scene);
+	const [open, setOpen] = useState(false);
+	const entries = scene === null ? [] : exportMenuEntries(scene);
+	const onOpen: Record<string, () => void> = {
+		replay: onOpenExportReplay,
+		video: onOpenExportVideo
+	};
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<Tooltip>
+				<TooltipTrigger
+					render={
+						<PopoverTrigger
+							render={
+								<Button size="sm" variant="secondary" className="gap-1 pr-1.5">
+									<Download /> export
+									<ChevronDown className="size-3 opacity-60" />
+								</Button>
+							}
+						/>
+					}
+				/>
+				<TooltipContent>write the current document to a .osr, or render it to a video</TooltipContent>
+			</Tooltip>
+			<PopoverContent align="end" className="w-[220px] gap-0.5 p-1.5">
+				{entries.map((entry) => {
+					const row = (
+						<button
+							key={entry.id}
+							type="button"
+							disabled={entry.disabledReason !== null}
+							onClick={() => {
+								setOpen(false);
+								onOpen[entry.id]();
+							}}
+							className="flex w-full items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[12px] font-medium text-[#e4e4e7] hover:bg-[#16161a] disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{entry.id === "replay" ? (
+								<FileDown className="size-3.5 text-[#71717a]" />
+							) : (
+								<Clapperboard className="size-3.5 text-[#71717a]" />
+							)}
+							{entry.label}
+						</button>
+					);
+					if (entry.disabledReason === null) return row;
+					// a natively disabled button suppresses mouse events, so the
+					// reason tooltip listens on a span around it
+					return (
+						<Tooltip key={entry.id}>
+							<TooltipTrigger render={<span className="block w-full" />}>{row}</TooltipTrigger>
+							<TooltipContent>{entry.disabledReason}</TooltipContent>
+						</Tooltip>
+					);
+				})}
+			</PopoverContent>
+		</Popover>
+	);
+}
+
 export function TopBar({
 	onOpenSettings,
-	onOpenExport
+	onOpenExportReplay,
+	onOpenExportVideo
 }: {
 	onOpenSettings: (category?: SettingsCategory) => void;
-	onOpenExport: () => void;
+	onOpenExportReplay: () => void;
+	onOpenExportVideo: () => void;
 }) {
 	const scene = useViewerStore((s) => s.scene);
 	const derived = useViewerStore((s) => s.derived);
@@ -185,22 +261,12 @@ export function TopBar({
 					</Tooltip>
 				)}
 
-				{/* the span wrapper predates the live dialog and was load-bearing
-				when this button could be disabled: a natively `disabled` button
-				suppresses mouse events outright (not just via pointer-events
-				css), so base-ui's hover tooltip needed a non-disabled ancestor
-				to listen on. TooltipTrigger could likely target the button
-				directly now, but that's unverified without a DOM pass, so the
-				wrapper stays -- a working tooltip matters more than one less
-				span */}
-				<Tooltip>
-					<TooltipTrigger render={<span />}>
-						<Button size="sm" variant="secondary" onClick={onOpenExport}>
-							<Download /> export
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent>write the current document to a .osr</TooltipContent>
-				</Tooltip>
+				{/* the export button is a two-entry menu: the replay export and
+				the video export each open their own dialog. the video entry can
+				be gated (a consented-mismatch scene renders nothing an external
+				renderer could resolve), so it disables in place with the reason
+				-- the same posture the editing panels take */}
+				<ExportMenu onOpenExportReplay={onOpenExportReplay} onOpenExportVideo={onOpenExportVideo} />
 
 				<Tooltip>
 					<TooltipTrigger
