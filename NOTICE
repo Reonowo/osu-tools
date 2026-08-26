@@ -63,5 +63,35 @@ results, scorebar, the score and combo fonts, the input overlay), to the
 editor (`hitcircleselect`), and to judgements this ruleset does not draw per
 object (`hit300g`, `hit100k`, `hit300k`) are not included.
 
+danser-go (downloaded on first use, not bundled)
+------------------------------------------------
+
+The video export feature can, with the user's explicit consent, download the
+pinned release of
+
+    Wieku/danser-go  --  https://github.com/Wieku/danser-go
+
+into the application's local data directory and run it as a separate program.
+Nothing danser-related ships inside this application or its installer; the
+download happens only when the user first asks for a video export and accepts
+the consent dialog, and it is verified against a SHA-256 hash pinned in this
+repository.
+
+danser-go is copyright Wieku and contributors, licensed under the
+
+    GNU General Public License v3.0
+    https://github.com/Wieku/danser-go/blob/master/LICENSE
+
+It is launched as an independent process (mere aggregation); the GPL applies
+to danser itself and does not extend to this application.
+
+The danser release archive additionally bundles:
+
+  * the BASS, BASS FX and BASSmix audio libraries (un4seen developments,
+    https://www.un4seen.com), which are free for non-commercial use -- this
+    application is a personal, non-commercial tool;
+  * an ffmpeg build (https://ffmpeg.org) licensed under the GPL, used by
+    danser for video encoding.
+
 Everything else in this repository is the project's own work; osu!lazer is
 referenced for behavioural parity only, and no lazer source code is included.
