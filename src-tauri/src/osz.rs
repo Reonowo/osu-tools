@@ -95,7 +95,7 @@ fn has_drive_prefix(segment: &str) -> bool {
 /// `enclosed_name()` is not safe to join, for the reason above. this rebuilds
 /// from `Component::Normal` alone and refuses anything else, so what comes
 /// back can only ever descend
-fn safe_relative_path(name: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn safe_relative_path(name: &str) -> Option<std::path::PathBuf> {
     let mut out = std::path::PathBuf::new();
     let mut any = false;
     for component in std::path::Path::new(name).components() {
@@ -1288,8 +1288,10 @@ mod tests {
 
     #[test]
     fn safe_relative_path_drops_no_op_components_and_refuses_every_escape() {
-        // the direct unit pin: the `.osz` extraction path is the only caller,
-        // and its own tests reach it through several layers
+        // the direct unit pin. two callers reach it through several layers of
+        // their own -- the `.osz` extraction path here, and the danser
+        // release unpack in `video::danser::install` -- so the guarantees
+        // every escape depends on are asserted once, here, in the open
         assert_eq!(safe_relative_path("map.osu"), Some(std::path::PathBuf::from("map.osu")));
         assert_eq!(safe_relative_path("./map.osu"), Some(std::path::PathBuf::from("map.osu")));
         assert_eq!(safe_relative_path("./sb/./bg.jpg"), Some(std::path::PathBuf::from("sb/bg.jpg")));
