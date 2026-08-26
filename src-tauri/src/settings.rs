@@ -26,6 +26,10 @@
 //! the way a beatmap association is -- opening a recent replay must never
 //! silently change the app's whole appearance. a v9 file hydrates it as the
 //! bundled default, which is the same look that build drew.
+//! v11 adds `video` and `rendererOptions`: the typed core of the video
+//! export preferences, and the opaque per-backend blob beside it (the
+//! renderer-swap seam's settings shape -- the blob dies with a backend on a
+//! swap, the core survives).
 //!
 //! every field is `#[serde(default)]` at the container level, so a v1 file --
 //! or any future file written by an older build -- hydrates the new fields
@@ -82,6 +86,17 @@ pub const MAX_KEYBIND_ACTIONS: usize = 64;
 pub const MAX_KEYBIND_BINDINGS: usize = 4;
 pub const MAX_KEYBIND_STRING: usize = 64;
 
+/// the structural caps on the per-backend renderer-options blobs, in the
+/// keybind posture: this crate knows neither a backend's option vocabulary
+/// nor its value shapes, so the only bounds are how many backends may hold a
+/// blob and how large one serialized blob may grow
+pub const MAX_RENDERER_OPTION_BACKENDS: usize = 8;
+pub const MAX_RENDERER_OPTION_BYTES: usize = 64 * 1024;
+
+/// longest encoder id `VideoExportPrefs::encoder` keeps: an ffmpeg encoder
+/// name is a short identifier, and anything longer is a hand edit
+pub const MAX_ENCODER_ID_CHARS: usize = 64;
+
 /// the frontend's sparse keybind overrides: action -> its binding slots, only
 /// for actions the user actually changed.
 ///
@@ -121,6 +136,43 @@ fn keybind_strings_within_cap(value: &serde_json::Value) -> bool {
             .all(|(key, field)| key.len() <= MAX_KEYBIND_STRING && keybind_strings_within_cap(field)),
         _ => true,
     }
+}
+
+/// the per-backend renderer options: backend id -> that backend's opaque
+/// settings blob, only for backends the user actually configured.
+///
+/// stored opaquely for the keybind map's reason, plus the seam's own: the
+/// blob's vocabulary belongs to the render backend behind the `VideoRenderer`
+/// trait, and it dies with that backend on a swap while the typed core prefs
+/// survive. one key is conventional rather than backend-owned: the install
+/// flow caches the encoder probe's winner under `probedEncoder` (the key is
+/// generic -- "this backend's probed encoder" -- even though the value only
+/// means something to the backend that probed it)
+pub type RendererOptionsMap = BTreeMap<String, serde_json::Value>;
+
+/// the keybind posture again: anything that is not a backend id mapped to an
+/// object is dropped entry by entry, and a branch of the wrong shape must not
+/// fail the whole settings parse
+fn lenient_renderer_options<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RendererOptionsMap, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(map) = value else {
+        return Ok(RendererOptionsMap::new());
+    };
+    Ok(map
+        .into_iter()
+        .filter(|(_, blob)| blob.is_object())
+        .collect())
+}
+
+/// the video preset enum vocabulary, resolved leniently: an unrecognised
+/// value -- a hand edit or a newer build's preset -- falls back to the field
+/// default rather than failing the parse, per field, so one bad key cannot
+/// reset the group beside it
+fn lenient_video<'de, D: Deserializer<'de>>(deserializer: D) -> Result<VideoExportPrefs, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(VideoExportPrefs::from_value_lenient(value))
 }
 
 /// same posture as `lenient_keybinds`, and for the same reason: a newer build's
@@ -170,6 +222,13 @@ pub struct Settings {
     /// tidied disk must not stop the app opening
     #[serde(deserialize_with = "lenient_skin")]
     pub skin: SkinLocator,
+    /// the typed core of the video export preferences -- renderer-agnostic
+    /// by design, so they survive a backend swap
+    #[serde(deserialize_with = "lenient_video")]
+    pub video: VideoExportPrefs,
+    /// the opaque per-backend half beside the typed core
+    #[serde(deserialize_with = "lenient_renderer_options")]
+    pub renderer_options: RendererOptionsMap,
 }
 
 impl Default for Settings {
@@ -186,7 +245,120 @@ impl Default for Settings {
             timeline: TimelinePrefs::default(),
             keybinds: KeybindOverrides::new(),
             skin: SkinLocator::default(),
+            video: VideoExportPrefs::default(),
+            renderer_options: RendererOptionsMap::new(),
         }
+    }
+}
+
+/// the resolution presets the video export dialog offers, serialized as the
+/// `WIDTHxHEIGHT` string the dialog shows. a closed set rather than free
+/// width/height fields so the setting cannot reach a shape danser's encoder
+/// pipeline chokes on
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VideoResolution {
+    #[serde(rename = "1280x720")]
+    R1280x720,
+    #[serde(rename = "1920x1080")]
+    R1920x1080,
+    #[serde(rename = "2560x1440")]
+    R2560x1440,
+    #[serde(rename = "3840x2160")]
+    R3840x2160,
+}
+
+impl Default for VideoResolution {
+    fn default() -> VideoResolution {
+        VideoResolution::R1920x1080
+    }
+}
+
+impl VideoResolution {
+    pub fn dimensions(self) -> (u32, u32) {
+        match self {
+            VideoResolution::R1280x720 => (1280, 720),
+            VideoResolution::R1920x1080 => (1920, 1080),
+            VideoResolution::R2560x1440 => (2560, 1440),
+            VideoResolution::R3840x2160 => (3840, 2160),
+        }
+    }
+}
+
+/// whose skin the rendered video wears: the app's active selection mapped
+/// onto the renderer where a folder exists for it, or the renderer's own
+/// default look
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkinPolicy {
+    FollowApp,
+    RendererDefault,
+}
+
+impl Default for SkinPolicy {
+    fn default() -> SkinPolicy {
+        SkinPolicy::FollowApp
+    }
+}
+
+/// the renderer-agnostic video export preferences (the spec's typed generic
+/// core). everything a swapped-in backend would need too; nothing here may
+/// name a backend
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VideoExportPrefs {
+    pub resolution: VideoResolution,
+    /// 30 or 60; anything else sanitizes to 60
+    pub fps: u32,
+    /// `"auto"` (the probed winner decides) or an explicit encoder id
+    pub encoder: String,
+    pub skin_policy: SkinPolicy,
+    /// where the save dialog starts; the last directory a video landed in
+    pub last_video_dir: Option<String>,
+}
+
+impl Default for VideoExportPrefs {
+    fn default() -> VideoExportPrefs {
+        VideoExportPrefs {
+            resolution: VideoResolution::default(),
+            fps: 60,
+            encoder: "auto".into(),
+            skin_policy: SkinPolicy::default(),
+            last_video_dir: None,
+        }
+    }
+}
+
+impl VideoExportPrefs {
+    /// per-field lenient hydration: each recognised key is taken only when it
+    /// parses, so a hand-edited resolution cannot reset the fps beside it --
+    /// and a `video` branch of the wrong shape yields the defaults whole
+    fn from_value_lenient(value: serde_json::Value) -> VideoExportPrefs {
+        let mut prefs = VideoExportPrefs::default();
+        let serde_json::Value::Object(map) = value else {
+            return prefs;
+        };
+        if let Some(resolution) = map
+            .get("resolution")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            prefs.resolution = resolution;
+        }
+        if let Some(fps) = map.get("fps").and_then(serde_json::Value::as_u64) {
+            prefs.fps = u32::try_from(fps).unwrap_or(60);
+        }
+        if let Some(encoder) = map.get("encoder").and_then(serde_json::Value::as_str) {
+            prefs.encoder = encoder.to_string();
+        }
+        if let Some(policy) = map
+            .get("skinPolicy")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            prefs.skin_policy = policy;
+        }
+        if let Some(dir) = map.get("lastVideoDir").and_then(serde_json::Value::as_str) {
+            prefs.last_video_dir = Some(dir.to_string());
+        }
+        prefs
     }
 }
 
@@ -478,6 +650,33 @@ impl Settings {
                 0.0
             };
         }
+        // the video prefs' closed vocabularies came through the lenient
+        // hydration; what is left to bound is the open fields
+        if self.video.fps != 30 && self.video.fps != 60 {
+            self.video.fps = 60;
+        }
+        if self.video.encoder.is_empty() || self.video.encoder.chars().count() > MAX_ENCODER_ID_CHARS {
+            self.video.encoder = "auto".into();
+        }
+        // the renderer-options caps, in the keybind posture: structure only.
+        // a blob is dropped whole when oversized -- a truncated json blob
+        // would be a different corruption, not a bounded copy of the same one
+        self.renderer_options.retain(|backend, blob| {
+            blob.is_object()
+                && backend.len() <= MAX_KEYBIND_STRING
+                && serde_json::to_string(blob).is_ok_and(|s| s.len() <= MAX_RENDERER_OPTION_BYTES)
+        });
+        if self.renderer_options.len() > MAX_RENDERER_OPTION_BACKENDS {
+            // ordered map, so which entries survive is deterministic (the
+            // keybind cap's own reasoning)
+            let kept: Vec<String> = self
+                .renderer_options
+                .keys()
+                .take(MAX_RENDERER_OPTION_BACKENDS)
+                .cloned()
+                .collect();
+            self.renderer_options.retain(|backend, _| kept.contains(backend));
+        }
     }
 
     /// most recent first, one entry per path. re-opening a replay moves it to
@@ -559,6 +758,19 @@ mod tests {
             skin: SkinLocator::Stable {
                 path: r"D:\games\osu!\Skins\Rafis 2016".into(),
             },
+            video: VideoExportPrefs {
+                resolution: VideoResolution::R1280x720,
+                fps: 30,
+                encoder: "h264_nvenc".into(),
+                skin_policy: SkinPolicy::RendererDefault,
+                last_video_dir: Some(r"D:\videos".into()),
+            },
+            renderer_options: [(
+                "danser".to_string(),
+                json!({ "motionBlur": true, "probedEncoder": "h264_nvenc" }),
+            )]
+            .into_iter()
+            .collect(),
         }
     }
 
@@ -710,6 +922,16 @@ mod tests {
                 // path, so a folder skin and a stable one that happen to share
                 // a path still resolve through their own rules
                 "skin": { "kind": "stable", "path": r"D:\games\osu!\Skins\Rafis 2016" },
+                "video": {
+                    "resolution": "1280x720",
+                    "fps": 30,
+                    "encoder": "h264_nvenc",
+                    "skinPolicy": "rendererDefault",
+                    "lastVideoDir": r"D:\videos",
+                },
+                "rendererOptions": {
+                    "danser": { "motionBlur": true, "probedEncoder": "h264_nvenc" },
+                },
             })
         );
 
@@ -763,6 +985,14 @@ mod tests {
                 // a fresh install draws the app's own look, and that look is a
                 // selectable row rather than a "nothing selected" state
                 "skin": { "kind": "bundled" },
+                "video": {
+                    "resolution": "1920x1080",
+                    "fps": 60,
+                    "encoder": "auto",
+                    "skinPolicy": "followApp",
+                    "lastVideoDir": null,
+                },
+                "rendererOptions": {},
             })
         );
     }
@@ -1312,6 +1542,145 @@ mod tests {
             "an action mapped to something that is not a list of bindings is dropped"
         );
         assert_eq!(loaded.keybinds.get("moveTool").unwrap()[0], json!({ "hotkey": "N" }));
+    }
+
+    #[test]
+    fn video_prefs_survive_a_save_and_load_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = sample();
+        save_settings(dir.path(), &settings).unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.video, settings.video);
+        assert_eq!(loaded.renderer_options, settings.renderer_options);
+    }
+
+    #[test]
+    fn a_legacy_file_hydrates_the_video_prefs_and_an_empty_blob_map() {
+        // a v10 file has neither key; the stable path must survive and video
+        // export must come up on its defaults
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"osuStablePath":"D:\\games\\osu!","volume":40}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.osu_stable_path.as_deref(), Some(r"D:\games\osu!"));
+        assert_eq!(loaded.video, VideoExportPrefs::default());
+        assert_eq!(loaded.renderer_options, RendererOptionsMap::new());
+    }
+
+    #[test]
+    fn a_hand_edited_video_field_falls_back_alone() {
+        // per-field leniency: an unrecognised resolution resets only itself,
+        // never the fps beside it and never the settings file around it
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"volume":42,"video":{"resolution":"999x999","fps":30,"skinPolicy":"nope"}}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.volume, 42);
+        assert_eq!(loaded.video.resolution, VideoResolution::R1920x1080);
+        assert_eq!(loaded.video.fps, 30, "the parseable field beside it survives");
+        assert_eq!(loaded.video.skin_policy, SkinPolicy::FollowApp);
+
+        // and a video branch of the wrong shape entirely yields the defaults
+        // without taking the file down
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"volume":42,"video":"nope"}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.volume, 42);
+        assert_eq!(loaded.video, VideoExportPrefs::default());
+    }
+
+    #[test]
+    fn out_of_vocabulary_video_values_sanitize_to_the_defaults() {
+        let mut settings = Settings {
+            video: VideoExportPrefs {
+                fps: 45,
+                encoder: String::new(),
+                ..VideoExportPrefs::default()
+            },
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.video.fps, 60);
+        assert_eq!(settings.video.encoder, "auto");
+
+        settings.video.encoder = "x".repeat(MAX_ENCODER_ID_CHARS + 1);
+        settings.sanitize();
+        assert_eq!(settings.video.encoder, "auto");
+
+        // both legal rates and a real id pass untouched
+        for fps in [30u32, 60] {
+            let mut settings = Settings {
+                video: VideoExportPrefs {
+                    fps,
+                    encoder: "libx264".into(),
+                    ..VideoExportPrefs::default()
+                },
+                ..Settings::default()
+            };
+            settings.sanitize();
+            assert_eq!(settings.video.fps, fps);
+            assert_eq!(settings.video.encoder, "libx264");
+        }
+    }
+
+    #[test]
+    fn renderer_option_blobs_are_dropped_per_entry_when_malformed_or_oversized() {
+        // the lenient parse drops a non-object blob without failing the file
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"volume":42,"rendererOptions":{"danser":{"motionBlur":true},"broken":"nope"}}"#,
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.volume, 42);
+        assert!(loaded.renderer_options.contains_key("danser"));
+        assert!(!loaded.renderer_options.contains_key("broken"));
+
+        // and a whole map of the wrong shape hydrates empty
+        std::fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"volume":42,"rendererOptions":"nope"}"#,
+        )
+        .unwrap();
+        assert_eq!(load_settings(dir.path()).renderer_options, RendererOptionsMap::new());
+    }
+
+    #[test]
+    fn renderer_option_caps_bound_backends_and_blob_bytes() {
+        let mut settings = Settings {
+            renderer_options: (0..(MAX_RENDERER_OPTION_BACKENDS + 3))
+                .map(|i| (format!("backend{i:02}"), json!({ "k": i })))
+                .collect(),
+            ..Settings::default()
+        };
+        settings.renderer_options.insert(
+            "oversized".into(),
+            json!({ "blob": "x".repeat(MAX_RENDERER_OPTION_BYTES) }),
+        );
+        settings.sanitize();
+        assert!(
+            !settings.renderer_options.contains_key("oversized"),
+            "an oversized blob is dropped whole, never truncated"
+        );
+        assert_eq!(settings.renderer_options.len(), MAX_RENDERER_OPTION_BACKENDS);
+
+        // deterministic: the same map always clamps the same way
+        let mut again = Settings {
+            renderer_options: settings.renderer_options.clone(),
+            ..Settings::default()
+        };
+        again.sanitize();
+        assert_eq!(again.renderer_options, settings.renderer_options);
     }
 
     #[test]
