@@ -34,16 +34,29 @@ export function expectationCopy(kind: ExportPathKind, incomplete = false): strin
 	}
 }
 
-/** the destination the dialog prefills: the source path with an " (edited)"
- * suffix before the extension, so the common case needs no typing and never
+/** the marker an edited export's default name carries before its extension.
+ * shared with the video dialog's default file name -- the TEXT is shared,
+ * the condition deliberately is not: this dialog appends it unconditionally
+ * so the prefill never shadows the source `.osr`, while a synthesized video
+ * name has nothing to shadow and marks only a dirty document */
+export const EDITED_MARKER = " (edited)";
+
+/** index of the last path separator, either slash kind, -1 when none -- the
+ * one splitting rule every path-string decision in the export flows shares */
+export function lastPathSeparator(path: string): number {
+	return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+}
+
+/** the destination the dialog prefills: the source path with the edited
+ * marker before the extension, so the common case needs no typing and never
  * shadows the original */
 export function defaultExportPath(osrPath: string): string {
-	const sepIndex = Math.max(osrPath.lastIndexOf("/"), osrPath.lastIndexOf("\\"));
+	const sepIndex = lastPathSeparator(osrPath);
 	const dotIndex = osrPath.lastIndexOf(".");
 	// a dot inside the directory part, or leading a hidden-style name, is
 	// not an extension separator
-	if (dotIndex <= sepIndex + 1) return `${osrPath} (edited)`;
-	return `${osrPath.slice(0, dotIndex)} (edited)${osrPath.slice(dotIndex)}`;
+	if (dotIndex <= sepIndex + 1) return `${osrPath}${EDITED_MARKER}`;
+	return `${osrPath.slice(0, dotIndex)}${EDITED_MARKER}${osrPath.slice(dotIndex)}`;
 }
 
 /** the consent the first export attempt sends: with the overwrite warning
