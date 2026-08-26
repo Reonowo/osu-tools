@@ -44,9 +44,17 @@ md5 = "0.8"
 # pulls aes/bzip2/zstd/xz codecs this app never reads
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
+# the video renderer's download-on-first-use install: ureq fetches the
+# pinned release zip (blocking, run off-thread), sha2 verifies it against
+# the hardcoded pin before a byte is unpacked
+ureq = "2"
+sha2 = "0.10"
+
 [dev-dependencies]
 tempfile = "3"
 chrono = "0.4"
+# staged-set gc tests stamp directory mtimes to drive the eviction order
+filetime = "0.2"
 # [dev-dependencies] -- the mock runtime for command tests; feature
 # unification only applies this to test builds
 tauri = { version = "2", features = ["test"] }
