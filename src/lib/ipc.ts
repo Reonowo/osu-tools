@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
 	AudioSettings,
 	EditDelta,
@@ -11,11 +12,16 @@ import type {
 	KeybindOverrides,
 	LoadedScene,
 	OverlaySettings,
+	RendererOptionsMap,
 	Settings,
 	SkinEntry,
 	SkinLocator,
 	SkinManifest,
-	TimelineSettings
+	TimelineSettings,
+	VideoExportResult,
+	VideoProgressEvent,
+	VideoRendererStatus,
+	VideoSettings
 } from "./scene-types";
 
 const IPC_ERROR_KINDS = new Set([
@@ -32,7 +38,12 @@ const IPC_ERROR_KINDS = new Set([
 	"staleSession",
 	"notEditable",
 	"fileExists",
-	"exportOverflow"
+	"exportOverflow",
+	"rendererNotInstalled",
+	"stagingFailed",
+	"renderFailed",
+	"cancelled",
+	"exportBusy"
 ]);
 
 export function isIpcError(e: unknown): e is IpcError {
@@ -139,4 +150,44 @@ export function invokeResync(epoch: number): Promise<EditDelta> {
 
 export function invokeExportReplay(epoch: number, destPath: string, overwrite: boolean): Promise<ExportResult> {
 	return invoke<ExportResult>("export_replay", { epoch, destPath, overwrite });
+}
+
+/** the renderer's install state plus the metadata the consent dialog
+ * renders; the frontend learns the backend only through this answer */
+export function invokeGetVideoRendererStatus(): Promise<VideoRendererStatus> {
+	return invoke<VideoRendererStatus>("get_video_renderer_status");
+}
+
+/** the consent-gated download + install; progress arrives on the shared
+ * event channel as `installing` under the operation's own job id */
+export function invokeInstallVideoRenderer(): Promise<VideoRendererStatus> {
+	return invoke<VideoRendererStatus>("install_video_renderer");
+}
+
+/** one video export to a destination the save dialog already chose; the
+ * terminal outcome is this promise, never the event stream */
+export function invokeExportVideo(epoch: number, destPath: string): Promise<VideoExportResult> {
+	return invoke<VideoExportResult>("export_video", { epoch, destPath });
+}
+
+export function invokeCancelVideoExport(jobId: string): Promise<void> {
+	return invoke<void>("cancel_video_export", { jobId });
+}
+
+/** the dedicated video-prefs write -- the set_osu_stable_path pattern, never
+ * joining set_viewer_prefs' positional signature */
+export function invokeSetVideoPrefs(video: VideoSettings, rendererOptions: RendererOptionsMap): Promise<Settings> {
+	return invoke<Settings>("set_video_prefs", { video, rendererOptions });
+}
+
+/** re-runs the encoder probe on demand; the fresh winner lands in the
+ * backend's blob inside the returned settings */
+export function invokeRedetectVideoEncoder(): Promise<Settings> {
+	return invoke<Settings>("redetect_video_encoder");
+}
+
+/** subscribes to the one video progress channel. every operation --
+ * export stages and install alike -- reports here, each under its own job id */
+export function onVideoProgress(handler: (event: VideoProgressEvent) => void): Promise<UnlistenFn> {
+	return listen<VideoProgressEvent>("video-export-progress", (event) => handler(event.payload));
 }
