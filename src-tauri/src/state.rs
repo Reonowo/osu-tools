@@ -50,6 +50,9 @@ pub struct AppState {
     /// has to say it. an `Arc` so the blocking closure can hold it without a
     /// `State` borrow crossing the await, as `listing_cache` already does
     pub import_lock: Arc<Mutex<()>>,
+    /// the video export seam: the render backend, its roots, and the
+    /// one-operation-at-a-time job slot
+    pub video: crate::video::VideoState,
 }
 
 /// hands out a ticket per skin-selection write and lets only the newest-issued
@@ -80,7 +83,12 @@ impl SkinWriteOrder {
 }
 
 impl AppState {
-    pub fn new(config_dir: PathBuf, cache_root: PathBuf, skins_root: PathBuf) -> AppState {
+    pub fn new(
+        config_dir: PathBuf,
+        cache_root: PathBuf,
+        skins_root: PathBuf,
+        video: crate::video::VideoState,
+    ) -> AppState {
         let settings = load_settings(&config_dir);
         AppState {
             config_dir,
@@ -91,6 +99,7 @@ impl AppState {
             session: Mutex::new(None),
             skin_writes: Mutex::new(SkinWriteOrder::default()),
             import_lock: Arc::new(Mutex::new(())),
+            video,
         }
     }
 }

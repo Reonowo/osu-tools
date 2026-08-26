@@ -15,6 +15,7 @@ pub mod settings;
 pub mod skin;
 pub mod stable;
 pub mod state;
+pub mod video;
 
 #[cfg(test)]
 mod testutil;
@@ -35,14 +36,29 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
-            let cache_root = app.path().app_local_data_dir()?.join("osz-cache");
+            let data_root = app.path().app_local_data_dir()?;
+            let cache_root = data_root.join("osz-cache");
             // permanent, and deliberately NOT under the collected cache root:
             // a persisted skin locator points here and must survive orphan gc
-            let skins_root = app.path().app_local_data_dir()?.join("skins");
+            let skins_root = data_root.join("skins");
             // a crash's leftover cache dirs are unlocked by now; a live
             // instance cannot race this because of single-instance + locks
             cache::collect_orphans(&cache_root);
-            app.manage(state::AppState::new(config_dir, cache_root, skins_root));
+            // the video seam's own startup passes, beside the cache gc on the
+            // same terms: unrenamed temps are a crash's, job dirs never
+            // survive a restart, and the staged-set cap is enforced here
+            let danser_root = data_root.join("danser");
+            let jobs_root = data_root.join("danser-jobs");
+            let songs_root = data_root.join("danser-songs");
+            video::danser::sweep_install_temps(&danser_root);
+            video::sweep_job_dirs(&jobs_root);
+            video::staging::sweep_staging(&songs_root);
+            let video_state = video::VideoState::new(
+                std::sync::Arc::new(video::danser::DanserRenderer::new(danser_root)),
+                jobs_root,
+                songs_root,
+            );
+            app.manage(state::AppState::new(config_dir, cache_root, skins_root, video_state));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -61,7 +77,13 @@ pub fn run() {
             commands::redo,
             commands::revert_all,
             commands::resync,
-            commands::export_replay
+            commands::export_replay,
+            commands::export_video,
+            commands::cancel_video_export,
+            commands::get_video_renderer_status,
+            commands::install_video_renderer,
+            commands::set_video_prefs,
+            commands::redetect_video_encoder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

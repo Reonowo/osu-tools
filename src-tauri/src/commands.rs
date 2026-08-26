@@ -787,6 +787,31 @@ pub async fn export_replay(
     dest_path: String,
     overwrite: bool,
 ) -> Result<crate::scene::ExportResult, IpcError> {
+    let (bytes, regenerated) = prepared_export_bytes(state.inner(), epoch).await?;
+
+    // phase 4: the atomic write protocol, off the lock and off the runtime
+    let dest = PathBuf::from(&dest_path);
+    let byte_count = bytes.len() as u64;
+    tauri::async_runtime::spawn_blocking(move || crate::export::atomic_write(&dest, &bytes, overwrite))
+        .await
+        .map_err(|e| join_err("export write", e))??;
+
+    Ok(crate::scene::ExportResult {
+        path: dest_path,
+        bytes: byte_count,
+        regenerated,
+    })
+}
+
+/// phases 1-3 of the export: the current document as encoded `.osr` bytes
+/// with the regenerated summary when frames were dirty. shared verbatim
+/// between `export_replay` (which then writes them to the chosen path) and
+/// `export_video` (which writes them as the job's temp replay) -- one
+/// derivation, so the two exports can never describe different plays
+async fn prepared_export_bytes(
+    state: &AppState,
+    epoch: u64,
+) -> Result<(Vec<u8>, Option<crate::scene::RegeneratedDto>), IpcError> {
     // phase 1: gate and branch under the lock
     let prepared = {
         let mut guard = state.session.lock().expect("session lock");
@@ -812,8 +837,8 @@ pub async fn export_replay(
         }
     };
 
-    let (bytes, regenerated) = match prepared {
-        PreparedExport::Encoded(bytes) => (bytes, None),
+    match prepared {
+        PreparedExport::Encoded(bytes) => Ok((bytes, None)),
         PreparedExport::Resimulate {
             frames,
             processed,
@@ -868,22 +893,261 @@ pub async fn export_replay(
                 return Err(IpcError::StaleSession);
             }
             let bytes = session.document.export_with_derived(Some(&derived))?;
-            (bytes, Some(crate::scene::RegeneratedDto::from(&derived)))
+            Ok((bytes, Some(crate::scene::RegeneratedDto::from(&derived))))
+        }
+    }
+}
+
+/// the renderer's install state plus the metadata the consent dialog
+/// renders; the frontend learns the backend only through this answer
+#[tauri::command]
+pub fn get_video_renderer_status(state: State<'_, AppState>) -> crate::video::RendererStatus {
+    let renderer = &state.video.renderer;
+    crate::video::RendererStatus {
+        installed: renderer.installed(),
+        metadata: renderer.metadata(),
+        log_path: renderer.log_path().map(|p| p.display().to_string()),
+    }
+}
+
+/// the consent-gated install: download, checksum-verify, unpack. progress
+/// rides the shared event channel as `installing` under this operation's
+/// own job id -- install is never part of an export job. after a successful
+/// install the encoder probe runs once and its winner is cached in the
+/// backend's blob; a failed probe leaves the cache alone (auto falls back
+/// backend-side), and a failed settings write must not fail an install that
+/// already succeeded
+#[tauri::command]
+pub async fn install_video_renderer<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<crate::video::RendererStatus, IpcError> {
+    use tauri::Emitter;
+    let guard = state.video.begin()?;
+    let renderer = Arc::clone(&state.video.renderer);
+    let job_id = guard.id.clone();
+    let emitter = app.clone();
+    // the same token an export's render gets, and reaching the backend for the
+    // same reason: this operation holds the one video slot and runs behind a
+    // dialog that refuses every dismissal route while it does, so an install
+    // that could not be stopped would pin the user to a modal for the whole of
+    // a slow download. `cancel_video_export` names this job id
+    let cancel = guard.cancel.clone();
+    // announced BEFORE the backend is asked to do anything, because the job id
+    // is what the dialog's cancel affordance is keyed on and the backend's own
+    // first progress report does not arrive until bytes do -- dns, connect,
+    // tls and the response headers all happen before it. without this the
+    // cancel button is dead for exactly the stretch a user who just changed
+    // their mind is most likely to press it. percent is absent rather than
+    // zero: nothing has been measured yet
+    let _ = app.emit(
+        crate::video::PROGRESS_EVENT,
+        crate::video::VideoProgress {
+            job_id: guard.id.clone(),
+            stage: crate::video::VideoStage::Installing,
+            percent: None,
+            speed: None,
+            eta: None,
+        },
+    );
+    let probed = tauri::async_runtime::spawn_blocking(move || {
+        renderer.install(
+            &|percent| {
+                let _ = emitter.emit(
+                    crate::video::PROGRESS_EVENT,
+                    crate::video::VideoProgress {
+                        job_id: job_id.clone(),
+                        stage: crate::video::VideoStage::Installing,
+                        percent,
+                        speed: None,
+                        eta: None,
+                    },
+                );
+            },
+            &cancel,
+        )?;
+        // past this line the install has LANDED -- downloaded, checksum-verified
+        // and published under the versioned dir. a cancel arriving now is too
+        // late to refuse: throwing the install away would cost the user the
+        // whole ~31 MB again next time, for a stop they raised after the work
+        // was already done. what a cancel here is really asking to stop is the
+        // probe, the other unbounded stretch (four candidates, each with its own
+        // deadline) -- so the install stands and only the probe is skipped, and
+        // an empty probe cache is already a state `auto` falls back from
+        // backend-side. this is the render loop's own rule past its success
+        // marker, applied to the operation that has the same shape
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
+        Ok::<_, IpcError>(renderer.detect_encoder(&cancel).unwrap_or(None))
+    })
+    .await
+    .map_err(|e| join_err("renderer install", e))?
+    // whatever shape the backend's own abort took, a cancelled install reports
+    // as cancelled -- the same rewrite `run_export_job` does for a render
+    .map_err(|e| if guard.cancel.is_cancelled() { IpcError::Cancelled } else { e })?;
+    drop(guard);
+
+    if let Some(encoder) = probed {
+        persist_probed_encoder(state.inner(), &encoder);
+    }
+    Ok(get_video_renderer_status(state))
+}
+
+/// records the probe winner in the backend's blob, best-effort on the
+/// recents-write terms: an unwritable settings file must not fail the
+/// operation that already succeeded
+fn persist_probed_encoder(state: &AppState, encoder: &str) {
+    let backend_id = state.video.renderer.metadata().id;
+    let mut settings = state.settings.lock().expect("settings lock");
+    let mut candidate = settings.clone();
+    crate::video::record_probed_encoder(&mut candidate.renderer_options, &backend_id, encoder);
+    if save_settings(&state.config_dir, &candidate).is_ok() {
+        *settings = candidate;
+    }
+}
+
+/// the danser section's "re-detect" button: re-runs the probe on demand and
+/// answers with the settings holding the fresh winner
+#[tauri::command]
+pub async fn redetect_video_encoder(state: State<'_, AppState>) -> Result<Settings, IpcError> {
+    let guard = state.video.begin()?;
+    let renderer = Arc::clone(&state.video.renderer);
+    // this one holds the slot too, and for as long as a probe sweep takes, so
+    // it is cancellable on the same terms -- `cancel_video_export` names this
+    // operation's id exactly as it names an export's or an install's
+    let cancel = guard.cancel.clone();
+    let probed = off_thread(move || renderer.detect_encoder(&cancel)).await?;
+    drop(guard);
+    if let Some(encoder) = probed {
+        persist_probed_encoder(state.inner(), &encoder);
+    }
+    Ok(state.settings.lock().expect("settings lock").clone())
+}
+
+/// the dedicated video-prefs write (the `set_osu_stable_path` pattern --
+/// deliberately never joining `set_viewer_prefs`' positional signature):
+/// the typed core and the opaque per-backend blobs together, sanitized and
+/// persisted before publishing
+#[tauri::command]
+pub fn set_video_prefs(
+    state: State<'_, AppState>,
+    video: crate::settings::VideoExportPrefs,
+    renderer_options: crate::settings::RendererOptionsMap,
+) -> Result<Settings, IpcError> {
+    let mut settings = state.settings.lock().expect("settings lock");
+    // persist before publishing, as in set_osu_stable_path
+    let mut candidate = settings.clone();
+    candidate.video = video;
+    candidate.renderer_options = renderer_options;
+    candidate.sanitize();
+    save_settings(&state.config_dir, &candidate)?;
+    *settings = candidate;
+    Ok(settings.clone())
+}
+
+/// cancels the running export (or install) when `job_id` still names it; a
+/// job that already finished is a no-op, never an error
+#[tauri::command]
+pub fn cancel_video_export(state: State<'_, AppState>, job_id: String) {
+    state.video.cancel(&job_id);
+}
+
+/// one video export, destination chosen up front by the frontend's save
+/// dialog. everything the job needs is snapshotted or derived here --
+/// export-source record, prefs, the document's bytes -- then the generic
+/// orchestrator runs blocking with the backend behind the trait. one export
+/// at a time; progress rides the shared event channel; terminal
+/// success/failure is this Result
+#[tauri::command]
+pub async fn export_video<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    epoch: u64,
+    dest_path: String,
+) -> Result<crate::video::VideoExportResult, IpcError> {
+    use tauri::Emitter;
+    if !state.video.renderer.installed() {
+        return Err(IpcError::RendererNotInstalled);
+    }
+    let guard = state.video.begin()?;
+
+    // the scene half, under the session lock: the staging record, and the
+    // mismatch gate -- a consented-mismatch scene stages a beatmap whose
+    // hash the replay does not carry, so the renderer's md5 lookup can only
+    // answer "not found"; refusing typed here beats a render that fails
+    // minutes later (the frontend disables the action with this reason)
+    let source = {
+        let session_guard = state.session.lock().expect("session lock");
+        let session = session_guard.as_ref().ok_or(IpcError::StaleSession)?;
+        if session.epoch != epoch {
+            return Err(IpcError::StaleSession);
+        }
+        if matches!(
+            session.simulation,
+            crate::scene::SimulationDto::NotSimulated {
+                reason: crate::scene::NotSimulatedReason::BeatmapMismatch,
+            }
+        ) {
+            return Err(IpcError::StagingFailed {
+                message: "video export needs a matching beatmap: this replay was loaded against a \
+                          different beatmap by consent, and the renderer resolves beatmaps by the \
+                          replay's own hash"
+                    .into(),
+            });
+        }
+        session.export_source.clone()
+    };
+
+    // the prefs half, resolved so the backend never reads settings
+    let options = {
+        let settings = state.settings.lock().expect("settings lock");
+        let (width, height) = settings.video.resolution.dimensions();
+        crate::video::ResolvedRenderOptions {
+            width,
+            height,
+            fps: settings.video.fps,
+            encoder: settings.video.encoder.clone(),
+            skin: crate::video::select_skin(settings.video.skin_policy, &settings.skin),
+            songs_dir: state.video.songs_root.clone(),
+            renderer_options: settings
+                .renderer_options
+                .get(&state.video.renderer.metadata().id)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         }
     };
 
-    // phase 4: the atomic write protocol, off the lock and off the runtime
-    let dest = PathBuf::from(&dest_path);
-    let byte_count = bytes.len() as u64;
-    tauri::async_runtime::spawn_blocking(move || crate::export::atomic_write(&dest, &bytes, overwrite))
-        .await
-        .map_err(|e| join_err("export write", e))??;
+    // the document half: the same derivation `export_replay` writes, so the
+    // rendered play is exactly what a replay export of this moment contains
+    let (osr_bytes, _) = prepared_export_bytes(state.inner(), epoch).await?;
 
-    Ok(crate::scene::ExportResult {
-        path: dest_path,
-        bytes: byte_count,
-        regenerated,
+    let inputs = crate::video::ExportJobInputs {
+        job_id: guard.id.clone(),
+        jobs_root: state.video.jobs_root.clone(),
+        songs_root: state.video.songs_root.clone(),
+        dest_path: PathBuf::from(&dest_path),
+        osr_bytes,
+        source,
+        options,
+    };
+    let renderer = Arc::clone(&state.video.renderer);
+    let cancel = guard.cancel.clone();
+    let emitter = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::video::run_export_job(
+            renderer.as_ref(),
+            inputs,
+            |event| {
+                let _ = emitter.emit(crate::video::PROGRESS_EVENT, event);
+            },
+            &cancel,
+        )
     })
+    .await
+    .map_err(|e| join_err("video export", e))?;
+    drop(guard);
+    result
 }
 
 #[cfg(test)]
@@ -897,9 +1161,27 @@ mod tests {
         config_dir: std::path::PathBuf,
         cache_root: std::path::PathBuf,
     ) -> tauri::App<tauri::test::MockRuntime> {
+        mock_app_with_renderer(
+            config_dir,
+            cache_root,
+            Arc::new(crate::video::fake::FakeRenderer::new(true)),
+        )
+    }
+
+    fn mock_app_with_renderer(
+        config_dir: std::path::PathBuf,
+        cache_root: std::path::PathBuf,
+        renderer: Arc<crate::video::fake::FakeRenderer>,
+    ) -> tauri::App<tauri::test::MockRuntime> {
         // beside the cache root, never inside it: an imported skin's directory
         // must survive the orphan collection the cache root is subject to
         let skins_root = config_dir.join("skins");
+        // the video roots mirror lib.rs's layout beside the cache root
+        let video = crate::video::VideoState::new(
+            renderer,
+            config_dir.join("danser-jobs"),
+            config_dir.join("danser-songs"),
+        );
         tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![
                 load_replay,
@@ -917,11 +1199,25 @@ mod tests {
                 redo,
                 revert_all,
                 resync,
-                export_replay
+                export_replay,
+                export_video,
+                cancel_video_export,
+                get_video_renderer_status,
+                install_video_renderer,
+                set_video_prefs,
+                redetect_video_encoder
             ])
-            .manage(AppState::new(config_dir, cache_root, skins_root))
+            .manage(AppState::new(config_dir, cache_root, skins_root, video))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap()
+    }
+
+    /// the file the fixture map's `AudioFilename` names. a set is only
+    /// stageable with it present, so every helper that stands up a loadable
+    /// beatmap writes it -- a dir holding a lone `.osu` is a beatmap the app
+    /// loads with a warning, not one a video can be rendered from
+    fn write_fixture_audio(dir: &std::path::Path) {
+        std::fs::write(dir.join("audio.mp3"), b"fixture audio").unwrap();
     }
 
     /// stages the committed fixture map and a matching .osr in a temp dir
@@ -930,6 +1226,7 @@ mod tests {
         let md5 = format!("{:x}", md5::compute(&osu_bytes));
         let osu_path = dir.join("map.osu");
         std::fs::write(&osu_path, &osu_bytes).unwrap();
+        write_fixture_audio(dir);
         let osr_path = dir.join("replay.osr");
         std::fs::write(&osr_path, osr_bytes(&md5, 0, None)).unwrap();
         (osr_path, osu_path)
@@ -959,6 +1256,7 @@ mod tests {
         let md5 = format!("{:x}", md5::compute(&osu_bytes));
         let osu_path = dir.join("map.osu");
         std::fs::write(&osu_path, &osu_bytes).unwrap();
+        write_fixture_audio(dir);
         let osr_path = dir.join("replay.osr");
         std::fs::write(
             &osr_path,
@@ -979,6 +1277,353 @@ mod tests {
         crate::edit::EditOp::MoveFrames {
             moves: vec![crate::edit::FrameMove { index, x, y }],
         }
+    }
+
+    /// collects every progress event the video channel emits, as parsed json
+    fn capture_progress(
+        app: &tauri::App<tauri::test::MockRuntime>,
+    ) -> Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
+        use tauri::Listener;
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        app.listen(crate::video::PROGRESS_EVENT, move |event| {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+                sink.lock().unwrap().push(value);
+            }
+        });
+        events
+    }
+
+    #[test]
+    fn renderer_status_flips_after_install_and_the_probe_winner_is_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::video::fake::FakeRenderer::new(false));
+        let app = mock_app_with_renderer(
+            dir.path().join("config"),
+            dir.path().join("cache"),
+            Arc::clone(&fake),
+        );
+        let events = capture_progress(&app);
+
+        let status = get_video_renderer_status(app.state());
+        assert!(!status.installed);
+        assert_eq!(status.metadata.id, "fake");
+        assert_eq!(status.metadata.version, "1.2.3");
+
+        // an export with no install present is the typed refusal, and never
+        // starts a job
+        let err = tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            1,
+            dir.path().join("out.mp4").display().to_string(),
+        ))
+        .unwrap_err();
+        assert!(matches!(err, IpcError::RendererNotInstalled));
+
+        let status =
+            tauri::async_runtime::block_on(install_video_renderer(app.handle().clone(), app.state()))
+                .unwrap();
+        assert!(status.installed);
+
+        // install progress rides the shared channel as `installing` under its
+        // own job id, never as part of an export job
+        let events = events.lock().unwrap();
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| e["stage"] == "installing"));
+        let job_id = events[0]["jobId"].as_str().unwrap();
+        assert!(events.iter().all(|e| e["jobId"] == job_id));
+        assert_eq!(events.last().unwrap()["percent"], serde_json::json!(100.0));
+
+        // the probe winner landed in the backend's blob under the generic key
+        let settings = get_settings(app.state());
+        assert_eq!(
+            settings.renderer_options["fake"][crate::video::PROBED_ENCODER_KEY],
+            serde_json::json!("fake_hw")
+        );
+    }
+
+    #[test]
+    fn a_happy_path_export_runs_the_stages_in_order_over_prepared_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::video::fake::FakeRenderer::new(true));
+        let config_dir = dir.path().join("config");
+        let app = mock_app_with_renderer(config_dir.clone(), dir.path().join("cache"), Arc::clone(&fake));
+        let events = capture_progress(&app);
+        let scene = editable_scene(&app, dir.path(), 0, 20190906);
+
+        let dest = dir.path().join("out.mp4");
+        let result = tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            scene.epoch,
+            dest.display().to_string(),
+        ))
+        .unwrap();
+        assert_eq!(result.path, dest.display().to_string());
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            crate::video::fake::FAKE_VIDEO_BYTES,
+            "the rendered file reached the chosen destination"
+        );
+        assert_eq!(result.bytes, crate::video::fake::FAKE_VIDEO_BYTES.len() as u64);
+
+        // the stage stream, in order, with percent only inside rendering
+        let events = events.lock().unwrap();
+        let stages: Vec<&str> = events.iter().map(|e| e["stage"].as_str().unwrap()).collect();
+        assert_eq!(stages.first(), Some(&"staging"));
+        assert_eq!(stages.last(), Some(&"moving"));
+        assert!(stages.contains(&"rendering"));
+        let ordered: Vec<&str> = {
+            let mut deduped = stages.clone();
+            deduped.dedup();
+            deduped
+        };
+        assert_eq!(ordered, vec!["staging", "rendering", "moving"]);
+        assert!(events
+            .iter()
+            .all(|e| e["stage"] == "rendering" || e.get("percent").is_none()));
+        assert!(events
+            .iter()
+            .filter(|e| e["stage"] == "rendering")
+            .any(|e| e["percent"].is_number()));
+
+        // the backend received prepared inputs: the staged set (which
+        // outlives the job, keyed by diff md5) and the temp .osr inside the
+        // job dir (which does not)
+        let inputs_guard = fake.last_inputs.lock().unwrap();
+        let inputs = inputs_guard.as_ref().expect("the fake saw a render");
+        assert!(inputs.staged_set_dir.starts_with(config_dir.join("danser-songs")));
+        assert!(inputs.staged_set_dir.join("map.osu").is_file());
+        assert!(inputs.osr_path.starts_with(config_dir.join("danser-jobs")));
+        assert!(!inputs.osr_path.exists(), "the job dir is cleaned after success");
+        assert_eq!((inputs.options.width, inputs.options.height), (1920, 1080));
+        assert_eq!(inputs.options.fps, 60);
+        let jobs: Vec<_> = std::fs::read_dir(config_dir.join("danser-jobs"))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(jobs.is_empty(), "{jobs:?}");
+    }
+
+    #[test]
+    fn cancelling_a_running_install_yields_the_typed_cancel_and_installs_nothing() {
+        // the install holds the one video slot and the dialog refuses every
+        // dismissal route while it runs, so the cancel has to actually reach
+        // the backend rather than only flipping a token nothing reads
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::video::fake::FakeRenderer::new(false));
+        fake.hang_install
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let app = mock_app_with_renderer(
+            dir.path().join("config"),
+            dir.path().join("cache"),
+            Arc::clone(&fake),
+        );
+        let events = capture_progress(&app);
+
+        let handle = app.handle().clone();
+        let watched = Arc::clone(&events);
+        let canceller = std::thread::spawn(move || {
+            for _ in 0..2000 {
+                let installing_job = watched
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|e| e["stage"] == "installing")
+                    .and_then(|e| e["jobId"].as_str().map(str::to_string));
+                if let Some(job_id) = installing_job {
+                    cancel_video_export(handle.state(), job_id);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("the install never started");
+        });
+
+        let err =
+            tauri::async_runtime::block_on(install_video_renderer(app.handle().clone(), app.state()))
+                .unwrap_err();
+        canceller.join().unwrap();
+        assert!(matches!(err, IpcError::Cancelled), "{err:?}");
+        assert!(
+            !get_video_renderer_status(app.state()).installed,
+            "a cancelled install leaves the status exactly as it found it"
+        );
+        // and the slot is free again, so the next attempt is not refused busy
+        fake.hang_install
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            tauri::async_runtime::block_on(install_video_renderer(app.handle().clone(), app.state()))
+                .unwrap()
+                .installed
+        );
+    }
+
+    #[test]
+    fn cancelling_a_running_export_yields_the_typed_cancel_and_cleans_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::video::fake::FakeRenderer::new(true));
+        *fake.script.lock().unwrap() = crate::video::fake::FakeScript::HangUntilCancel;
+        let config_dir = dir.path().join("config");
+        let app = mock_app_with_renderer(config_dir.clone(), dir.path().join("cache"), Arc::clone(&fake));
+        let events = capture_progress(&app);
+        let scene = editable_scene(&app, dir.path(), 0, 20190906);
+        let dest = dir.path().join("out.mp4");
+
+        // the cancel command fires from another thread once rendering starts,
+        // exactly the shape the frontend's cancel button takes
+        let handle = app.handle().clone();
+        let watched = Arc::clone(&events);
+        let canceller = std::thread::spawn(move || {
+            for _ in 0..2000 {
+                let rendering_job = watched
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|e| e["stage"] == "rendering")
+                    .and_then(|e| e["jobId"].as_str().map(str::to_string));
+                if let Some(job_id) = rendering_job {
+                    cancel_video_export(handle.state(), job_id);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("rendering never started");
+        });
+
+        let err = tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            scene.epoch,
+            dest.display().to_string(),
+        ))
+        .unwrap_err();
+        canceller.join().unwrap();
+        assert!(matches!(err, IpcError::Cancelled), "{err:?}");
+        assert!(!dest.exists(), "no file may appear at the destination");
+        let jobs: Vec<_> = std::fs::read_dir(config_dir.join("danser-jobs"))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(jobs.is_empty(), "cancel cleans the job dir: {jobs:?}");
+    }
+
+    #[test]
+    fn a_second_concurrent_export_is_rejected_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::video::fake::FakeRenderer::new(true));
+        *fake.script.lock().unwrap() = crate::video::fake::FakeScript::HangUntilCancel;
+        let app = mock_app_with_renderer(
+            dir.path().join("config"),
+            dir.path().join("cache"),
+            Arc::clone(&fake),
+        );
+        let events = capture_progress(&app);
+        let scene = editable_scene(&app, dir.path(), 0, 20190906);
+        let epoch = scene.epoch;
+
+        let handle = app.handle().clone();
+        let dest = dir.path().join("first.mp4").display().to_string();
+        let first = std::thread::spawn(move || {
+            let state = handle.state::<AppState>();
+            tauri::async_runtime::block_on(export_video(handle.clone(), state, epoch, dest))
+        });
+
+        // wait for the first job to hold the slot
+        for _ in 0..2000 {
+            if !events.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let err = tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            epoch,
+            dir.path().join("second.mp4").display().to_string(),
+        ))
+        .unwrap_err();
+        assert!(matches!(err, IpcError::ExportBusy), "{err:?}");
+
+        // release the hung first job through the cancel command
+        let job_id = events.lock().unwrap()[0]["jobId"].as_str().unwrap().to_string();
+        cancel_video_export(app.state(), job_id);
+        let first = first.join().unwrap();
+        assert!(matches!(first, Err(IpcError::Cancelled)), "{first:?}");
+    }
+
+    #[test]
+    fn a_consented_mismatch_scene_is_refused_typed_before_any_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let (osr_path, _osu) = staged_replay(dir.path());
+        let other_bytes =
+            std::fs::read(fixtures_dir().join("beatmaps").join("slider-zoo-v14.osu")).unwrap();
+        let other = dir.path().join("other.osu");
+        std::fs::write(&other, &other_bytes).unwrap();
+        let scene = tauri::async_runtime::block_on(load_replay_with_beatmap(
+            app.handle().clone(),
+            app.state(),
+            osr_path.display().to_string(),
+            other.display().to_string(),
+            true,
+        ))
+        .unwrap();
+
+        let err = tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            scene.epoch,
+            dir.path().join("out.mp4").display().to_string(),
+        ))
+        .unwrap_err();
+        match err {
+            IpcError::StagingFailed { message } => {
+                assert!(message.contains("matching beatmap"), "{message}");
+            }
+            other => panic!("expected StagingFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_video_prefs_is_a_dedicated_sanitizing_persisting_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("config");
+        let app = mock_app(config_dir.clone(), dir.path().join("cache"));
+
+        let updated = set_video_prefs(
+            app.state(),
+            crate::settings::VideoExportPrefs {
+                resolution: crate::settings::VideoResolution::R2560x1440,
+                fps: 45,
+                encoder: "h264_qsv".into(),
+                skin_policy: crate::settings::SkinPolicy::RendererDefault,
+                last_video_dir: Some(r"D:\videos".into()),
+            },
+            [("danser".to_string(), serde_json::json!({ "motionBlur": true }))]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(updated.video.fps, 60, "an out-of-vocabulary rate sanitizes");
+        assert_eq!(updated.video.resolution, crate::settings::VideoResolution::R2560x1440);
+        assert_eq!(updated.video.encoder, "h264_qsv");
+
+        // persisted, not just in memory
+        let loaded = crate::settings::load_settings(&config_dir);
+        assert_eq!(loaded.video, updated.video);
+        assert_eq!(loaded.renderer_options["danser"]["motionBlur"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn redetect_updates_the_probe_cache_on_demand() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let settings =
+            tauri::async_runtime::block_on(redetect_video_encoder(app.state())).unwrap();
+        assert_eq!(
+            settings.renderer_options["fake"][crate::video::PROBED_ENCODER_KEY],
+            serde_json::json!("fake_hw")
+        );
     }
 
     #[test]
