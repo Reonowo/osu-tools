@@ -45,6 +45,55 @@ pub struct LegacyScoreAttributesMap {
     pub max_combo: u32,
 }
 
+/// stable's flat score surplus over lazer's kind-valued model for a whole
+/// map's sliders: the sum over every slider of `stable_slider_point_values`
+/// minus the by-kind 10/30 sum. on real point spacings (nothing
+/// sub-millisecond) it is nonzero exactly when a slider's final tick falls
+/// at or past the -36ms tail point, where stable judges the tick with
+/// every point due and values it as the slider end (engine parity issue 15;
+/// documented at `score::stable_slider_point_values`). the synthetic
+/// full-combo tests add this to lazer's dumped attributes, because lazer's
+/// own simulator does not model the term and stable headers demand it
+pub fn stable_tick_surplus(processed: &engine::beatmap::ProcessedBeatmap) -> u64 {
+    use engine::beatmap::stable_points::StablePointKind;
+    use engine::beatmap::ProcessedKind;
+
+    let mut surplus: i64 = 0;
+    for obj in &processed.objects {
+        let ProcessedKind::Slider(slider) = &obj.kind else { continue };
+        let valued: i64 = engine::score::stable_slider_point_values(obj.start_time, slider)
+            .iter()
+            .map(|&v| v as i64)
+            .sum();
+        let by_kind: i64 = slider
+            .stable_points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                // mirror the machine's re-kind (simulation/slider.rs): the
+                // final sorted point becomes the tail (30) and every other
+                // point emits as a tick (10) unless it is a repeat, so a
+                // mis-sorted non-final tail entry prices as the tick it
+                // would have scored, not 30
+                if i == slider.stable_points.len() - 1 {
+                    30
+                } else {
+                    match p.kind {
+                        StablePointKind::Repeat { .. } => 30,
+                        _ => 10,
+                    }
+                }
+            })
+            .sum();
+        surplus += valued - by_kind;
+    }
+    // sub-millisecond point ties can demote a repeat below its kind value
+    // and turn the surplus negative; no fixture map spaces points that
+    // tightly, so a panic here means a fixture acquired that degenerate
+    // shape and this helper needs a signed rethink
+    u64::try_from(surplus).expect("no fixture map spaces slider points sub-millisecond")
+}
+
 pub fn assert_vec2_close(actual: Vec2, expected: [f32; 2], ctx: &str) {
     assert!(
         (actual.x - expected[0]).abs() <= POSITION_TOL && (actual.y - expected[1]).abs() <= POSITION_TOL,

@@ -6,6 +6,15 @@
 //! * (base / 25) * peppyStars * modMultiplier` with the combo read before
 //! the element's own increment (osulegacyscoresimulator.cs:162-177).
 //!
+//! one place deliberately leaves that reference for a more stable-faithful
+//! one: a slider POINT's 10-vs-30 value comes from
+//! [`stable_slider_point_values`] (danser `slider.go:330-335`, stable's own
+//! shape) rather than from the point's kind, because stable values a judged
+//! point by how many points are DUE at that moment, not by what the point
+//! is. lazer's simulator never models this -- it walks its own nested
+//! objects kind-by-kind -- which is exactly the flat "-20 per map" header
+//! class of engine parity issue 15.
+//!
 //! spinner spin scoring follows stable's half-spin model
 //! (osulegacyscoresimulator.cs:130-156), computed from each spinner's
 //! stable scoring-rotation count (`simulation::spinner::StableSpinState`,
@@ -23,7 +32,7 @@
 //! instead, so the same rules run over what the play actually did.
 
 use crate::beatmap::difficulty::HitGrade;
-use crate::beatmap::{ProcessedBeatmap, ProcessedKind, ProcessedSpinner};
+use crate::beatmap::{ProcessedBeatmap, ProcessedKind, ProcessedSlider, ProcessedSpinner};
 use crate::simulation::score::{JudgementKind, ScoreState};
 use crate::simulation::JudgementTimeline;
 
@@ -34,6 +43,84 @@ fn base_value(grade: HitGrade) -> u64 {
         HitGrade::Meh => 50,
         HitGrade::Miss => 0,
     }
+}
+
+/// stable's score value (10 or 30) for each of one slider's points, in the
+/// judgement machine's list order.
+///
+/// ports the `maxScore` selection of danser's `processTicksStable`
+/// (slider.go:330-335, itself the stable shape): a judged point is valued
+/// from `pointsPassed` -- how many points are DUE at the judging moment --
+/// never from the point's own identity. `SliderEnd` (30) when every point
+/// is due, `SliderRepeat` (30) when the due count is a whole number of
+/// spans' worth (`len(points) / len(TickReverse)`, one reverse point per
+/// span), `SliderPoint` (10) otherwise.
+///
+/// under stable's live cadence (one point judged per game tick from the
+/// moment it falls due) the due counts, and so the values, are a static
+/// property of the map. the one shape real point spacings produce where
+/// this diverges from the point's kind (a degenerate sub-millisecond
+/// spacing could tie later points into a due count too, priced by the same
+/// rule): the tail is repositioned to `max(start + duration/2, end - 36)`
+/// (slider.go:109) IN PLACE at the end of the list, so a final tick inside
+/// that window has the tail due at or before it -- the walk that counts
+/// due points breaks at the first pending point in LIST order, which holds
+/// the tail back until the tick is due, and then both are due together:
+/// the tick is judged with `pointsPassed == len(points)` and scores 30,
+/// not 10. every play that scores such a tick banks a flat +20 the
+/// kind-valued fold misses -- constant per map, invisible to counts and
+/// combo. that is the whole flat -20-per-map header class of engine
+/// parity issue 15 (Totsugeki Rock and STYX HELIX carry one such slider,
+/// the two Kyouki Chinden difficulties carry 12 and 24, and each header
+/// sits exactly 20 * that count above the kind-valued fold)
+pub fn stable_slider_point_values(start_time: f64, slider: &ProcessedSlider) -> Vec<u64> {
+    let n = slider.stable_points.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // the machine's own point times: stable's floored score times with the
+    // final point repositioned in truncated integer arithmetic, exactly as
+    // simulation/slider.rs builds SliderState::points
+    let start = start_time as i64;
+    let end = slider.stable_end_time as i64;
+    let mut times: Vec<i64> = slider.stable_points.iter().map(|p| p.time as i64).collect();
+    // wrapping, not `-`/`+`: the saturating casts let a crafted finite end
+    // time sit at i64::MAX against a negative start, where go wraps and a
+    // debug-build rust `-` would panic (same posture as
+    // ProcessedSpinner::spins_required_for_bonus)
+    times[n - 1] = start.wrapping_add(end.wrapping_sub(start) / 2).max(end.wrapping_sub(36));
+
+    // pointsPassed's walk breaks at the first pending point in list order,
+    // so a point is due-for-counting only once everything before it is due
+    // too -- the prefix maximum
+    let mut reach = times;
+    for i in 1..n {
+        reach[i] = reach[i].max(reach[i - 1]);
+    }
+
+    let per_span = n / (slider.span_count.max(1) as usize);
+
+    let mut values = Vec::with_capacity(n);
+    let mut judge_time = i64::MIN;
+    // reach is nondecreasing and judge_time never moves backwards, so the
+    // due count is a cursor that only advances: O(n) overall, where a fresh
+    // prefix scan per point would go quadratic against the million-point
+    // slider MAX_SLIDER_NESTED_OBJECTS admits
+    let mut points_passed = 0usize;
+    for &reachable_at in &reach {
+        // one point per game tick, starting the tick the point falls due
+        judge_time = reachable_at.max(judge_time.saturating_add(1));
+        while points_passed < n && reach[points_passed] <= judge_time {
+            points_passed += 1;
+        }
+        let value = if points_passed == n || (per_span > 0 && points_passed % per_span == 0) {
+            30
+        } else {
+            10
+        };
+        values.push(value);
+    }
+    values
 }
 
 /// osulegacyscoresimulator.cs:165 -- `(int)(Math.Max(0, combo - 1) *
@@ -90,19 +177,52 @@ pub fn total_score(
     let mut state = ScoreState::default();
     let mut total: u64 = 0;
 
+    // per-slider stable point values and each slider's next point ordinal:
+    // the machine emits one event per judged point in list order, so the
+    // running count of a slider's tick/repeat/tail events IS the point index
+    let mut point_values: Vec<Option<Vec<u64>>> = vec![None; processed.objects.len()];
+    let mut point_ordinal: Vec<usize> = vec![0; processed.objects.len()];
+    let mut slider_point = |index: usize, kind_value: u64, hit: bool| -> u64 {
+        let ordinal = match point_ordinal.get_mut(index) {
+            Some(ordinal) => {
+                let current = *ordinal;
+                *ordinal += 1;
+                current
+            }
+            // out-of-bounds object: a mismatched timeline/beatmap pair must
+            // degrade, never panic (same posture as the spinner leg below)
+            None => return if hit { kind_value } else { 0 },
+        };
+        if !hit {
+            return 0;
+        }
+        let values = point_values[index].get_or_insert_with(|| {
+            match processed.objects.get(index).map(|o| (&o.kind, o.start_time)) {
+                Some((ProcessedKind::Slider(slider), start_time)) => {
+                    stable_slider_point_values(start_time, slider)
+                }
+                // a point event on a non-slider object only arises from a
+                // mismatched pair; the empty table falls back to the kind
+                _ => Vec::new(),
+            }
+        });
+        values.get(ordinal).copied().unwrap_or(kind_value)
+    };
+
     for event in &timeline.events {
         match event.kind {
-            JudgementKind::SliderHead { hit }
-            | JudgementKind::SliderRepeat { hit, .. }
-            | JudgementKind::SliderTail { hit } => {
+            JudgementKind::SliderHead { hit } => {
                 if hit {
                     total = total.saturating_add(30);
                 }
             }
+            JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit } => {
+                let value = slider_point(event.object_index, 30, hit);
+                total = total.saturating_add(value);
+            }
             JudgementKind::SliderTick { hit } => {
-                if hit {
-                    total = total.saturating_add(10);
-                }
+                let value = slider_point(event.object_index, 10, hit);
+                total = total.saturating_add(value);
             }
             // lazer's gameplay ticks; scored via the stable half-spin model
             // below instead (module doc)
@@ -438,6 +558,76 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn stable_point_values_match_kinds_on_time_ordered_sliders() {
+        use crate::beatmap::stable_points::StablePointKind;
+        use crate::simulation::test_support::slider_map;
+
+        // tick rate 2: tick at t=1250, tail point at 1321 -- ordered, so
+        // the pointsPassed valuation lands exactly on the kinds
+        for (tick_rate, repeats) in [(2.0, 0), (2.0, 1), (1.0, 2)] {
+            let beatmap = slider_map(tick_rate, repeats);
+            let obj = &beatmap.objects[0];
+            let ProcessedKind::Slider(slider) = &obj.kind else { unreachable!() };
+            let values = stable_slider_point_values(obj.start_time, slider);
+            let n = slider.stable_points.len();
+            let by_kind: Vec<u64> = slider
+                .stable_points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| match p.kind {
+                    // the machine re-kinds the final point to the tail
+                    _ if i == n - 1 => 30,
+                    StablePointKind::Tick => 10,
+                    _ => 30,
+                })
+                .collect();
+            assert_eq!(values, by_kind, "tick rate {tick_rate}, {repeats} repeats");
+        }
+    }
+
+    #[test]
+    fn a_tail_adjacent_tick_is_valued_as_the_slider_end() {
+        use crate::simulation::test_support::slider_map;
+
+        // tick rate 1.5: the one tick lands at t=1333, AFTER the tail
+        // point's repositioned 1321 -- the walk holds the tail back behind
+        // the tick, both fall due together, and the tick is judged with
+        // every point due: stable values it 30, not 10
+        let beatmap = slider_map(1.5, 0);
+        let obj = &beatmap.objects[0];
+        let ProcessedKind::Slider(slider) = &obj.kind else { unreachable!() };
+        assert_eq!(stable_slider_point_values(obj.start_time, slider), vec![30, 30]);
+    }
+
+    #[test]
+    fn a_reordered_tail_slider_banks_stables_extra_twenty() {
+        use crate::replay::frames::Buttons;
+        use crate::simulation::simulate;
+        use crate::simulation::test_support::{frame, slider_map, wrap};
+
+        // the same shape end to end: a tracked play through the tick-rate
+        // 1.5 slider. head 30 + tick 30 (promoted from 10) + tail 30 +
+        // aggregate 300 with combo 3 before it (2 * 12 * 4 = 96) = 486 --
+        // exactly 20 more than the kind-valued fold's 466, which is the
+        // whole flat -20-per-map header class of parity issue 15
+        let beatmap = slider_map(1.5, 0);
+        let end_t = beatmap.objects[0].end_time;
+        let frames = wrap(vec![
+            frame(1000.0, 100.0, 100.0, Buttons::LEFT_1),
+            frame(1250.0, 170.0, 100.0, Buttons::LEFT_1),
+            frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
+            frame(end_t + 50.0, 200.0, 100.0, 0),
+        ]);
+        let timeline = simulate(&beatmap, &frames).unwrap();
+        assert_eq!(
+            (timeline.totals.count_300, timeline.totals.max_combo),
+            (1, 3),
+            "precondition: the play full-combos the slider"
+        );
+        assert_eq!(total_score(&timeline, &beatmap, 4, 1.0), 486);
     }
 
     #[test]

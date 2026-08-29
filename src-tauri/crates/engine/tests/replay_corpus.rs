@@ -256,8 +256,18 @@ fn synthetic_full_combo_on_the_fixture_map() {
         "an all-great full combo is all geki"
     );
 
-    // and the achieved total on this spinner-free full combo is exactly the
-    // theoretical maximum lazer's own simulator dumped for the map
+    // and the achieved total on this spinner-free full combo is lazer's
+    // dumped theoretical maximum PLUS stable's tail-adjacent-tick surplus
+    // (engine parity issue 15): stable values a judged slider point by how
+    // many points are due at that moment, so a final tick at or past the
+    // -36ms tail point scores 30 rather than 10 -- a term lazer's own
+    // simulator does not model and stable headers demand. the surplus is
+    // computed from the same valuation the fold uses and pinned to the one
+    // slider on this map carrying the shape, so a fixture change that adds
+    // or removes the shape fails loudly instead of shifting the total
+    let surplus = fixture_util::stable_tick_surplus(&processed);
+    assert_eq!(surplus, 20, "exactly one tail-adjacent tick on slider-zoo-v14");
+
     let dump: fixture_util::LegacyScoreAttributesDump =
         fixture_util::load_json("score/legacy_score_attributes.json");
     let attributes = dump
@@ -268,8 +278,8 @@ fn synthetic_full_combo_on_the_fixture_map() {
     let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap();
     assert_eq!(
         total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
-        attributes.accuracy_score + attributes.combo_score,
-        "simulated full-combo total matches lazer's dumped attributes"
+        attributes.accuracy_score + attributes.combo_score + surplus,
+        "simulated full-combo total matches lazer's dumped attributes plus stable's surplus"
     );
 }
 

@@ -99,12 +99,18 @@
 //! which judgement, and when, is the app's own composition with no lazer
 //! analogue to dump, and lives in frontend tests instead.
 //!
-//! this crate has exactly one deliberate scoring divergence from lazer: the
-//! classic slider tail increments combo (stable semantics), evidenced by
-//! `OsuLegacyScoreSimulator.cs:92-96` and the `LegacyComboIncrease` padding at
-//! `LegacyScoreDecoder.cs:245-254` -- lazer's own lazer-native tail result
-//! does not touch combo, but the oracle here is the stable `.osr` header's
-//! max combo, so the stable rule wins. documented at [`simulation::score`].
+//! this crate has exactly two deliberate scoring divergences from lazer,
+//! both places where the stable `.osr` header oracle contradicts lazer's own
+//! model. one: the classic slider tail increments combo (stable semantics),
+//! evidenced by `OsuLegacyScoreSimulator.cs:92-96` and the
+//! `LegacyComboIncrease` padding at `LegacyScoreDecoder.cs:245-254` --
+//! lazer's own lazer-native tail result does not touch combo. documented at
+//! [`simulation::score`]. two: a slider point's scorev1 value comes from how
+//! many points are due at its judging moment, never from the point's own
+//! kind (danser `slider.go:330-335`, the stable shape) -- a final tick at or
+//! past the -36ms tail point scores 30 where lazer's simulator counts 10,
+//! which is a flat, map-constant term stable headers demand (engine parity
+//! issue 15). documented at [`score::stable_slider_point_values`].
 
 pub mod beatmap;
 pub mod error;

@@ -92,6 +92,17 @@ fn full_combo_timeline(processed: &ProcessedBeatmap) -> JudgementTimeline {
         match &object.kind {
             ProcessedKind::Circle => push(index, object.start_time, JudgementKind::Circle(HitGrade::Great)),
             ProcessedKind::Slider(slider) => {
+                // the fold joins these lazer-list events to the stable value
+                // table by running ordinal; the join is only exact while the
+                // two generators agree on per-slider point counts, so a
+                // divergent fixture map must fail by name here instead of
+                // shifting the total
+                let non_head = slider.nested.iter().filter(|n| n.kind != NestedKind::Head).count();
+                assert_eq!(
+                    non_head,
+                    slider.stable_points.len(),
+                    "object {index}: lazer nested and stable point counts diverge"
+                );
                 for nested in &slider.nested {
                     let kind = match nested.kind {
                         NestedKind::Head => JudgementKind::SliderHead { hit: true },
@@ -203,9 +214,14 @@ fn synthetic_full_combo_totals_match_the_lazer_dumped_attributes() {
         let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap();
         let timeline = full_combo_timeline(&processed);
 
+        // stable's tail-adjacent-tick surplus (parity issue 15) sits on top
+        // of lazer's dumped attributes: lazer's simulator values slider
+        // points by kind, stable by due count, and the headers side with
+        // stable -- see fixture_util::stable_tick_surplus
+        let surplus = fixture_util::stable_tick_surplus(&processed);
         assert_eq!(
             total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
-            case.accuracy_score + case.combo_score,
+            case.accuracy_score + case.combo_score + surplus,
             "{}: full-combo total",
             case.name
         );
