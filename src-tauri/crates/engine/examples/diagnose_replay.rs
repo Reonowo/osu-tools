@@ -83,29 +83,44 @@ fn main() {
     if dump_events {
         println!("\n== full event timeline with scorev1 contributions ==");
         // replay the achieved fold event by event so each row shows what it
-        // added -- the same arithmetic as score::scorev1::total_score
+        // added -- the same arithmetic as score::scorev1::total_score,
+        // including the pointsPassed valuation of slider points (a
+        // tail-adjacent tick scores 30, parity issue 15)
+        use engine::score::stable_slider_point_values;
         use engine::simulation::score::ScoreState;
         let mut state = ScoreState::default();
         let mut running: u64 = 0;
+        let mut point_ordinal: Vec<usize> = vec![0; processed.objects.len()];
+        let mut point_value = |index: usize, kind_value: u64, hit: bool| -> u64 {
+            let ordinal = point_ordinal[index];
+            point_ordinal[index] += 1;
+            if !hit {
+                return 0;
+            }
+            match &processed.objects[index].kind {
+                engine::beatmap::ProcessedKind::Slider(slider) => {
+                    stable_slider_point_values(processed.objects[index].start_time, slider)
+                        .get(ordinal)
+                        .copied()
+                        .unwrap_or(kind_value)
+                }
+                _ => kind_value,
+            }
+        };
         for event in &timeline.events {
             let combo_before = u64::from(state.combo);
             let added = match event.kind {
-                JudgementKind::SliderHead { hit }
-                | JudgementKind::SliderRepeat { hit, .. }
-                | JudgementKind::SliderTail { hit } => {
+                JudgementKind::SliderHead { hit } => {
                     if hit {
                         30
                     } else {
                         0
                     }
                 }
-                JudgementKind::SliderTick { hit } => {
-                    if hit {
-                        10
-                    } else {
-                        0
-                    }
+                JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit } => {
+                    point_value(event.object_index, 30, hit)
                 }
+                JudgementKind::SliderTick { hit } => point_value(event.object_index, 10, hit),
                 JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => 0,
                 JudgementKind::Circle(grade)
                 | JudgementKind::SpinnerFinal(grade)
