@@ -103,8 +103,12 @@ impl SliderState {
         if let Some(last) = points.last_mut() {
             let start = obj_start_time as i64;
             let end = slider.stable_end_time as i64;
-            let duration = end - start;
-            last.time = (start + duration / 2).max(end - 36) as f64;
+            // wrapping, not `-`/`+`: the saturating casts let a crafted
+            // finite end time sit at i64::MAX against a negative start,
+            // where go wraps and a debug-build rust `-` would panic (same
+            // posture as ProcessedSpinner::spins_required_for_bonus)
+            let duration = end.wrapping_sub(start);
+            last.time = start.wrapping_add(duration / 2).max(end.wrapping_sub(36)) as f64;
             last.kind = StablePointKind::Tail;
         }
         SliderState {
