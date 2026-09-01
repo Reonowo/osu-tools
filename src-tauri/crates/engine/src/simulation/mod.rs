@@ -51,6 +51,7 @@ pub(crate) mod presses;
 pub mod score;
 pub(crate) mod slider;
 pub(crate) mod spinner;
+pub mod trace;
 
 use std::cell::Cell;
 
@@ -417,7 +418,7 @@ pub(crate) mod test_support {
     use crate::math::Vec2;
     use crate::replay::frames::{Buttons, ReplayFrame};
 
-    fn base_map(hit_objects: Vec<HitObject>) -> Beatmap {
+    pub(crate) fn base_map(hit_objects: Vec<HitObject>) -> Beatmap {
         Beatmap {
             format_version: 14,
             mode: GameMode::Osu,
@@ -470,7 +471,7 @@ pub(crate) mod test_support {
 
     /// control points as in task 5's tests: a two-point linear segment whose
     /// expected distance pins the path length exactly
-    fn linear_slider(start_time: f64, pos: Vec2, length: f64, repeat_count: i32) -> HitObject {
+    pub(crate) fn linear_slider(start_time: f64, pos: Vec2, length: f64, repeat_count: i32) -> HitObject {
         HitObject {
             start_time,
             pos,
