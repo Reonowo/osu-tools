@@ -97,6 +97,11 @@ pub struct ProcessedSlider {
     /// tick times, repeat-span phase, and end timing. rendering and every
     /// lazer-parity fixture keep consuming `nested`
     pub stable_points: Vec<crate::beatmap::stable_points::StableScorePoint>,
+    /// stable's score path: absolute raw-position segments with
+    /// int64-truncated time windows, the ball model the legacy tracking
+    /// judges against (danser objects/slider.go PositionAt), which applies
+    /// stacking as a delta at the read site -- experiment
+    pub stable_score_path: Vec<crate::beatmap::stable_points::StableScorePathSeg>,
     /// stable's own slider end: the floor of the accumulated per-segment
     /// track traversal. feeds the -36ms tail point, the end-aggregate
     /// trigger, and the note-lock end read on the legacy path;
@@ -191,9 +196,11 @@ pub fn process_beatmap(map: &Beatmap) -> Result<ProcessedBeatmap> {
             HitObjectKind::Circle => (obj.pos, obj.start_time, ProcessedKind::Circle),
             HitObjectKind::Slider(data) => {
                 let slider = build_slider(map, obj.start_time, obj.pos, data, preempt, fade_in)?;
-                // stable points are retained alongside the lazer nested list
-                // and count against the same map-wide ceiling
-                total_nested += slider.nested.len() + slider.stable_points.len();
+                // stable points and the ball's score-path segments are
+                // retained alongside the lazer nested list and count against
+                // the same map-wide ceiling
+                total_nested +=
+                    slider.nested.len() + slider.stable_points.len() + slider.stable_score_path.len();
                 if total_nested > limits::MAX_TOTAL_SLIDER_NESTED_OBJECTS {
                     return Err(resource_limit(
                         "MAX_TOTAL_SLIDER_NESTED_OBJECTS",
@@ -201,7 +208,9 @@ pub fn process_beatmap(map: &Beatmap) -> Result<ProcessedBeatmap> {
                         total_nested as u64,
                     ));
                 }
-                total_vertices += slider.path.calculated_path().len();
+                // the stable-side flatten is a second retained vertex list
+                // on the same path
+                total_vertices += slider.path.calculated_path().len() + slider.path.stable_raw_path().len();
                 if total_vertices > limits::MAX_TOTAL_SLIDER_PATH_VERTICES {
                     return Err(resource_limit(
                         "MAX_TOTAL_SLIDER_PATH_VERTICES",
@@ -331,7 +340,7 @@ fn build_slider(
     base_fade_in: f64,
 ) -> Result<ProcessedSlider> {
     // slider.cs:45 -- osu! sliders always optimise catmull
-    let path = SliderPath::new(data.control_points.clone(), data.expected_distance, true)?;
+    let path = SliderPath::new_at(data.control_points.clone(), data.expected_distance, true, position)?;
 
     let timing = timing_point_at(&map.timing_points, start_time);
     let diff_point = difficulty_point_at(&map.difficulty_points, start_time);
@@ -369,6 +378,7 @@ fn build_slider(
         end_position: Vec2::ZERO,
         nested: Vec::new(),
         stable_points: Vec::new(),
+        stable_score_path: Vec::new(),
         stable_end_time: start_time,
         path,
     };
@@ -384,19 +394,21 @@ fn build_slider(
     )?;
     slider.nested = build_nested(&slider, position, start_time, base_preempt, base_fade_in, &events);
 
-    let (stable_points, stable_end_time) = crate::beatmap::stable_points::stable_score_points(
-        start_time,
-        span_count,
-        &slider.path,
-        timing.beat_len,
-        diff_point.slider_velocity,
-        diff_point.generate_ticks,
-        map.slider_multiplier,
-        map.slider_tick_rate,
-        map.format_version,
-    )?;
+    let (stable_points, stable_end_time, stable_score_path) =
+        crate::beatmap::stable_points::stable_score_points(
+            start_time,
+            span_count,
+            &slider.path,
+            timing.beat_len,
+            diff_point.slider_velocity,
+            diff_point.generate_ticks,
+            map.slider_multiplier,
+            map.slider_tick_rate,
+            map.format_version,
+        )?;
     slider.stable_points = stable_points;
     slider.stable_end_time = stable_end_time;
+    slider.stable_score_path = stable_score_path;
     Ok(slider)
 }
 
@@ -659,19 +671,20 @@ mod tests {
     fn total_nested_object_cap_boundary() {
         // a repeat count is a handful of file bytes, so several sliders can
         // sit near the per-slider cap at once; the total budget bounds their
-        // combined retention across BOTH point lists -- a tickless slider
-        // with r repeats retains (r + 2) lazer nested objects plus (r + 1)
-        // stable score points. this pair lands exactly on the total, and the
-        // smallest possible third slider (head + tail + end point, 3 more)
-        // goes past it
+        // combined retention across EVERY point list -- a tickless linear
+        // slider with r repeats retains (r + 2) lazer nested objects,
+        // (r + 1) stable score points, and (r + 1) ball score-path segments
+        // (one cut line per span). this pair lands exactly on the total, and
+        // the smallest possible third slider (head + tail + end point + ball
+        // segment, 4 more) goes past it
         assert_eq!(
             2 * limits::MAX_SLIDER_NESTED_OBJECTS,
             limits::MAX_TOTAL_SLIDER_NESTED_OBJECTS
         );
         let r1 = 500_000usize;
-        let r2 = (limits::MAX_TOTAL_SLIDER_NESTED_OBJECTS - (2 * r1 + 3) - 3) / 2;
+        let r2 = (limits::MAX_TOTAL_SLIDER_NESTED_OBJECTS - (3 * r1 + 4) - 4) / 3;
         assert_eq!(
-            (2 * r1 + 3) + (2 * r2 + 3),
+            (3 * r1 + 4) + (3 * r2 + 4),
             limits::MAX_TOTAL_SLIDER_NESTED_OBJECTS,
             "the pair must sit exactly on the total"
         );
@@ -698,9 +711,10 @@ mod tests {
 
     #[test]
     fn total_path_vertex_cap_boundary() {
-        // a linear path keeps every distinct control point as a vertex, so a
-        // slider declaring exactly the per-slider vertex cap in control
-        // points retains that many vertices; two of those sit exactly on the
+        // a linear path keeps every distinct control point as a vertex, and
+        // the stable-side flatten retains the same count again, so a slider
+        // declaring exactly the per-slider vertex cap in control points
+        // retains twice that many vertices; ONE of those sits exactly on the
         // total budget and the smallest possible further path goes past it
         assert_eq!(
             2 * limits::MAX_SLIDER_PATH_VERTICES,
@@ -725,13 +739,12 @@ mod tests {
             }),
         };
 
-        let map = tickless(base_map(vec![at_cap(0.0), at_cap(1e9)]));
+        let map = tickless(base_map(vec![at_cap(0.0)]));
         assert!(process_beatmap(&map).is_ok());
 
         let map = tickless(base_map(vec![
             at_cap(0.0),
-            at_cap(1e9),
-            linear_slider(2e9, Vec2::ZERO, 100.0, 0),
+            linear_slider(1e9, Vec2::ZERO, 100.0, 0),
         ]));
         match process_beatmap(&map) {
             Err(EngineError::ResourceLimit {

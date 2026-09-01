@@ -30,6 +30,7 @@
 
 use crate::error::{resource_limit, Result};
 use crate::limits;
+use crate::math::Vec2;
 use crate::path::SliderPath;
 
 /// which slider element a stable score point is. deliberately not
@@ -59,6 +60,114 @@ pub struct StableScorePoint {
     pub kind: StablePointKind,
 }
 
+/// one segment of stable's score path (danser slider.go:492 PathLine):
+/// the ball walks segment endpoints in time windows TRUNCATED to whole
+/// milliseconds, so its position lags or leads the exact constant-velocity
+/// walk by up to velocity x 1ms. endpoints are ABSOLUTE raw playfield
+/// positions (stacking applies at read time); consumed by the legacy
+/// tracking's ball model (simulation::slider::ball_position)
+#[derive(Debug, Clone, Copy)]
+pub struct StableScorePathSeg {
+    pub time1: f64,
+    pub time2: f64,
+    pub p1: crate::math::Vec2,
+    pub p2: crate::math::Vec2,
+}
+
+/// one line of stable's cut track (danser curves::Linear + the customLength
+/// the multi-curve stamps on it)
+#[derive(Debug, Clone, Copy)]
+struct StableLine {
+    p1: Vec2,
+    p2: Vec2,
+    custom_length: f64,
+}
+
+/// multicurve.go:118 -- the cut keeps a line only while it is longer than
+/// the remaining overshoot by at least this much
+const MIN_PART_WIDTH: f64 = 0.0001;
+
+/// math87.go Mul87 -- f32 operands, f64 intermediate, f32 result
+fn mul87(a: f32, b: f32) -> f32 {
+    (f64::from(a) * f64::from(b)) as f32
+}
+
+/// math87.go Div87
+fn div87(a: f32, b: f32) -> f32 {
+    (f64::from(a) / f64::from(b)) as f32
+}
+
+/// vector2f.go Dst87 -- f32 subtraction first, f64 squares, the SUM
+/// narrowed to f32, then the f32 square root
+fn dst87(a: Vec2, b: Vec2) -> f32 {
+    let x = f64::from(b.x - a.x);
+    let y = f64::from(b.y - a.y);
+    ((x * x + y * y) as f32).sqrt()
+}
+
+/// vector2f.go Nor87 -- x87 normalise with the epsilon short-circuit
+fn nor87(v: Vec2) -> Vec2 {
+    let len_sq = (f64::from(v.x) * f64::from(v.x) + f64::from(v.y) * f64::from(v.y)) as f32;
+    if len_sq < 0.00001 {
+        return v;
+    }
+    let scale = div87(1.0, len_sq.sqrt());
+    Vec2::new(mul87(v.x, scale), mul87(v.y, scale))
+}
+
+/// multicurve.go:102-186 NewMultiCurveT, the stable branch: build one line
+/// per flattened edge of the UNADJUSTED path, cut the list to the declared
+/// pixel length with x87 arithmetic (whole trailing lines dropped while
+/// they fit inside the overshoot; the survivor re-aimed -- or extended,
+/// which a zero-length last line blocks, stable's no-extension quirk), then
+/// stamp each line's walk length as the f64 round-trip of its x87 f32
+/// length through the running accumulation (multicurve.go:172-177).
+///
+/// the whole computation runs in ABSOLUTE playfield coordinates -- the raw
+/// path arrives absolute (slider_path's stable flatten, new_at) because
+/// danser's curve points are absolute and the f32 arithmetic rounds
+/// differently there than in head-relative space (one ulp of track length
+/// is one truncated window millisecond at the right velocity, measured on
+/// a real play 2026-09-01)
+fn stable_cut_lines(raw_path: &[Vec2], desired_length: Option<f64>) -> Vec<StableLine> {
+    let mut lines: Vec<StableLine> = raw_path
+        .windows(2)
+        .map(|w| StableLine {
+            p1: w[0],
+            p2: w[1],
+            custom_length: 0.0,
+        })
+        .collect();
+
+    let length64: f64 = lines.iter().map(|l| f64::from(dst87(l.p1, l.p2))).sum();
+    let desired = desired_length.unwrap_or(0.0);
+    if length64 > 0.0 && desired != 0.0 {
+        let mut diff = length64 - desired;
+        while let Some(line) = lines.last().copied() {
+            let len87 = dst87(line.p1, line.p2);
+            if f64::from(len87) > diff + MIN_PART_WIDTH {
+                if line.p1 != line.p2 {
+                    let nor = nor87(line.p2 - line.p1);
+                    let mag = len87 - diff as f32;
+                    let pt = line.p1 + Vec2::new(mul87(nor.x, mag), mul87(nor.y, mag));
+                    lines.last_mut().expect("non-empty inside the cut loop").p2 = pt;
+                }
+                break;
+            }
+            diff -= f64::from(len87);
+            lines.pop();
+        }
+    }
+
+    let mut acc = 0.0f64;
+    for line in &mut lines {
+        let prev = acc;
+        acc += f64::from(dst87(line.p1, line.p2));
+        line.custom_length = acc - prev;
+    }
+    lines
+}
+
 /// timing.go:27-33 `GetRatio` -- the clamped inverse slider velocity,
 /// narrowed to f32 and divided by 100 IN f32. the raw green-line beat
 /// length is reconstructed as `100 / sv`; a non-positive or non-finite sv
@@ -86,7 +195,7 @@ pub(crate) fn stable_score_points(
     slider_multiplier: f64,
     tick_rate: f64,
     format_version: i32,
-) -> Result<(Vec<StableScorePoint>, f64)> {
+) -> Result<(Vec<StableScorePoint>, f64, Vec<StableScorePathSeg>)> {
     // timing.go:149-151 + 157-171, operation order preserved: the scoring
     // distance divides by tick rate and multiplies it back for the velocity
     let ratio = stable_beat_ratio(sv_multiplier);
@@ -107,8 +216,12 @@ pub(crate) fn stable_score_points(
     // expected-distance-adjusted cumulative, so lazer's truncation/extension
     // of the declared pixel length is already applied. the engine's
     // flattened vertices ARE stable's (the path module ports the same
-    // approximators stable ran); danser flattens with its own code, so
-    // where the two disagree in the last f32 bit the sweep arbitrates
+    // approximators stable ran); danser flattens with its own code and cuts
+    // with x87 arithmetic (multicurve.go NewMultiCurveT) -- porting that cut
+    // over these vertices was measured 2026-09-01 and REJECTED: it shifts
+    // tick boundaries on maps issue 13's walk already gets right (34 sweep
+    // regressions vs this walk's 21, mixing two mechanisms), because the
+    // x87 lengths are only as danser-equal as the vertex set underneath
     let cumulative = path.cumulative_length();
     let segment_lengths: Vec<f32> = cumulative
         .windows(2)
@@ -128,6 +241,55 @@ pub(crate) fn stable_score_points(
     }
 
     let span_count = span_count.max(1) as usize;
+
+    // the tracking ball's score path, built from stable's own cut of the
+    // UNADJUSTED flattened path (danser slider.go:489-492 over the lines
+    // NewMultiCurveT produced). deliberately decoupled from the tick walk
+    // below, which stays on the lazer-adjusted cumulative diffs that issue
+    // 13's sweeps validated tick-for-tick: coupling both to the x87 cut was
+    // measured 2026-09-01 and rejected (it shifts tick boundaries on maps
+    // the walk already gets right), while the BALL is where the sweep says
+    // stable's own geometry decides plays (the strict-< follow compare
+    // flips on sub-pixel placement at slide start)
+    let lines = stable_cut_lines(path.stable_raw_path(), path.expected_distance());
+    let mut score_path: Vec<StableScorePathSeg> = Vec::new();
+    // the walk retains span_count x lines segments, two independently
+    // capped axes whose product is not: ~9000 declared slides over a
+    // near-cap vertex path is tens of GB from a cap-compliant file. past
+    // the per-slider ceiling the ball path abandons to empty -- the legacy
+    // tracking falls back to lazer geometry, like a budget-blown stable
+    // flatten -- instead of failing a map lazer loads fine
+    let seg_budget_blown = span_count.saturating_mul(lines.len()) > limits::MAX_SLIDER_NESTED_OBJECTS;
+    let ball_spans = if seg_budget_blown { 0 } else { span_count };
+    let mut ball_time = start_time;
+    for span in 0..ball_spans {
+        let indices: Vec<usize> = if span % 2 == 0 {
+            (0..lines.len()).collect()
+        } else {
+            (0..lines.len()).rev().collect()
+        };
+        for j in indices {
+            let line = lines[j];
+            // slider.go:479 -- the walk distance is the f32 narrowing of
+            // the line's stamped custom length
+            let distance = line.custom_length as f32;
+            let progress = 1000.0 * f64::from(distance) / velocity;
+            // danser slider.go:492 -- Time1/Time2 are int64-truncated; odd
+            // spans walk the same line with its endpoints swapped
+            let (p1, p2) = if span % 2 == 0 {
+                (line.p1, line.p2)
+            } else {
+                (line.p2, line.p1)
+            };
+            score_path.push(StableScorePathSeg {
+                time1: ball_time.trunc(),
+                time2: (ball_time + progress).trunc(),
+                p1,
+                p2,
+            });
+            ball_time += progress;
+        }
+    }
     let mut points: Vec<StableScorePoint> = Vec::new();
     let mut running_time = start_time;
     let mut end_time = start_time.floor();
@@ -229,7 +391,7 @@ pub(crate) fn stable_score_points(
     if !end_time.is_finite() {
         end_time = start_time.floor();
     }
-    Ok((points, end_time))
+    Ok((points, end_time, score_path))
 }
 
 #[cfg(test)]
@@ -367,5 +529,150 @@ mod tests {
             _ => unreachable!("the test map holds one slider"),
         };
         assert_eq!(repeats, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn the_cut_reaims_the_last_line_to_the_declared_length() {
+        // raw track 100px, declared 80: diff 20, the last 50px line is
+        // longer than the overshoot so it is re-aimed to 50 - 20 = 30px
+        let lines = super::stable_cut_lines(
+            &[Vec2::ZERO, Vec2::new(50.0, 0.0), Vec2::new(100.0, 0.0)],
+            Some(80.0),
+        );
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].p2, Vec2::new(80.0, 0.0));
+        assert_eq!(lines[0].custom_length, 50.0);
+        assert_eq!(lines[1].custom_length, 30.0);
+    }
+
+    #[test]
+    fn the_cut_drops_whole_trailing_lines_inside_the_overshoot() {
+        // raw track 60px, declared 45: diff 15 swallows the whole 10px
+        // trailing line (dropped, diff 5), then the 50px line re-aims to 45
+        let lines = super::stable_cut_lines(
+            &[Vec2::ZERO, Vec2::new(50.0, 0.0), Vec2::new(60.0, 0.0)],
+            Some(45.0),
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].p2, Vec2::new(45.0, 0.0));
+        assert_eq!(lines[0].custom_length, 45.0);
+    }
+
+    #[test]
+    fn a_zero_length_last_line_blocks_the_extension() {
+        // raw track 30px with a duplicated final vertex, declared 50: the
+        // negative diff would extend, but the zero-length last line takes
+        // the p1 == p2 branch and breaks without moving anything -- the
+        // stable no-extension quirk on this side of the pipeline
+        let lines = super::stable_cut_lines(
+            &[Vec2::ZERO, Vec2::new(30.0, 0.0), Vec2::new(30.0, 0.0)],
+            Some(50.0),
+        );
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].p2, Vec2::new(30.0, 0.0));
+        assert_eq!(lines[1].p1, Vec2::new(30.0, 0.0));
+        assert_eq!(lines[1].p2, Vec2::new(30.0, 0.0));
+    }
+
+    #[test]
+    fn the_stable_arc_steps_a_fixed_detail() {
+        // a half circle: a (0,0), b (100,100), c (200,0) circumscribe
+        // centre (100,0) radius 100; the sweep angle is pi, so stable's
+        // fixed step yields int(pi * 100 * 0.125) = 39 segments, 40
+        // vertices -- one every ~8px of arc, where lazer's tolerance
+        // subdivision would pick a different count entirely
+        let pts = crate::path::approximator::approximate_circular_arc_stable(
+            Vec2::ZERO,
+            Vec2::new(100.0, 100.0),
+            Vec2::new(200.0, 0.0),
+            crate::limits::MAX_SLIDER_PATH_VERTICES,
+        )
+        .expect("a genuine arc");
+        assert_eq!(pts.len(), 40);
+        assert_eq!(pts[0], Vec2::ZERO);
+        assert_eq!(pts[39], Vec2::new(200.0, 0.0));
+        for p in &pts[1..39] {
+            let r = (f64::from(p.x - 100.0).powi(2) + f64::from(p.y).powi(2)).sqrt();
+            assert!((r - 100.0).abs() < 0.01, "interior vertex off the circle: {p:?}");
+            assert!(p.y > 0.0, "interior vertex on the wrong side: {p:?}");
+        }
+    }
+
+    #[test]
+    fn the_score_path_windows_walk_stable_lengths_in_absolute_space() {
+        // the linear 100px slider at 280 px/s from slider_map: one cut line,
+        // window 1000 .. trunc(1000 + 100/280*1000) = 1357, endpoints at the
+        // slider's ABSOLUTE position (100,100) -> (200,100) -- the ball
+        // model reads these raw and applies stacking as a delta at the site
+        let processed = slider_map(0);
+        let ProcessedKind::Slider(s) = &processed.objects[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(s.stable_score_path.len(), 1);
+        let seg = s.stable_score_path[0];
+        assert_eq!(seg.time1, 1000.0);
+        assert_eq!(seg.time2, 1357.0);
+        assert_eq!(seg.p1, Vec2::new(100.0, 100.0));
+        assert_eq!(seg.p2, Vec2::new(200.0, 100.0));
+    }
+
+    #[test]
+    fn a_danser_straight_arc_flattens_as_the_raw_points() {
+        // multicurve.go:302-305 -- IsStraightLine32 routes the def through
+        // processLinear: the raw points survive, minus a point equal to its
+        // successor (old-map red anchors)
+        let straight = crate::path::approximator::approximate_circular_arc_stable(
+            Vec2::ZERO,
+            Vec2::new(10.0, 10.0),
+            Vec2::new(100.0, 100.0),
+            crate::limits::MAX_SLIDER_PATH_VERTICES,
+        )
+        .expect("straight is a polyline, not a budget bounce");
+        assert_eq!(
+            straight,
+            vec![Vec2::ZERO, Vec2::new(10.0, 10.0), Vec2::new(100.0, 100.0)]
+        );
+
+        let red_anchor = crate::path::approximator::approximate_circular_arc_stable(
+            Vec2::ZERO,
+            Vec2::ZERO,
+            Vec2::new(100.0, 0.0),
+            crate::limits::MAX_SLIDER_PATH_VERTICES,
+        )
+        .expect("a duplicated point is straight");
+        assert_eq!(red_anchor, vec![Vec2::ZERO, Vec2::new(100.0, 0.0)]);
+    }
+
+    #[test]
+    fn a_span_by_line_bomb_abandons_the_ball_path_not_the_walk() {
+        // 600k spans x 2 cut lines crosses the per-slider segment ceiling:
+        // the ball's score path abandons to empty (the legacy tracking's
+        // lazer-geometry fallback) while the point walk still resolves
+        // every span
+        let path = crate::path::SliderPath::new_at(
+            vec![
+                PathControlPoint {
+                    pos: Vec2::ZERO,
+                    path_type: Some(PathType::Linear),
+                },
+                PathControlPoint {
+                    pos: Vec2::new(50.0, 0.0),
+                    path_type: None,
+                },
+                PathControlPoint {
+                    pos: Vec2::new(100.0, 0.0),
+                    path_type: None,
+                },
+            ],
+            Some(100.0),
+            true,
+            Vec2::new(100.0, 100.0),
+        )
+        .expect("a plain linear path");
+        let (points, _, score_path) =
+            super::stable_score_points(1000.0, 600_000, &path, 500.0, 1.0, false, 1.4, 2.0, 14)
+                .expect("the point walk itself stays under its caps");
+        assert!(score_path.is_empty());
+        assert_eq!(points.len(), 600_000);
     }
 }

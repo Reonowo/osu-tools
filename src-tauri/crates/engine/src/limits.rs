@@ -179,7 +179,11 @@ pub const MAX_NONLINEAR_SLIDER_CONTROL_POINTS: usize = 10_000;
 /// 100000 length ceiling still admits ~1e14 ticks at the extreme). real maps,
 /// aspire included, sit in the low tens of thousands. this is a policy
 /// ceiling, not a parity limit; checked as events are pushed so rejection is
-/// O(cap) not O(declared)
+/// O(cap) not O(declared). also the per-slider ceiling on the retained
+/// stable score-path segments (`beatmap::stable_points`), whose count is
+/// span count times cut lines -- two independently capped axes whose
+/// product is not -- and which abandon to an empty path (the legacy
+/// tracking's lazer-geometry fallback) past it rather than erroring
 pub const MAX_SLIDER_NESTED_OBJECTS: usize = 1_000_000;
 
 /// the map-wide companion to [`MAX_SLIDER_NESTED_OBJECTS`]: that cap bounds
@@ -190,9 +194,10 @@ pub const MAX_SLIDER_NESTED_OBJECTS: usize = 1_000_000;
 /// cap, so fresh per-slider budgets alone admit tens of GiB of retention and
 /// an allocation abort instead of a `ResourceLimit`. charged cumulatively as
 /// sliders build (the per-slider cap bounds the transient overshoot to one
-/// slider's worth), counting BOTH retained point lists per slider -- the
-/// lazer nested objects and the stable score points
-/// (`beatmap::stable_points`), which are the same order of magnitude each.
+/// slider's worth), counting every retained point list per slider -- the
+/// lazer nested objects, the stable score points, and the ball's score-path
+/// segments (`beatmap::stable_points`), each individually bounded by the
+/// per-slider ceiling.
 /// 2x the per-slider ceiling keeps every real map, aspire included (low
 /// tens of thousands of nested objects map-wide), two orders of magnitude
 /// clear, while bounding worst-case retention near 100 MiB
@@ -200,7 +205,9 @@ pub const MAX_TOTAL_SLIDER_NESTED_OBJECTS: usize = 2_000_000;
 
 /// the same aggregate concern for [`MAX_SLIDER_PATH_VERTICES`]: each
 /// processed slider retains its flattened path (vertices plus a
-/// cumulative-length f64 per vertex), and a curved slider needs only
+/// cumulative-length f64 per vertex) plus the stable-side flatten
+/// (`SliderPath::stable_raw_path`, the same order of magnitude), and a
+/// curved slider needs only
 /// [`MAX_NONLINEAR_SLIDER_CONTROL_POINTS`] declared points -- well under 100
 /// KiB of file -- to reach the per-slider vertex cap, so one file can retain
 /// many such paths at once. charged cumulatively alongside the nested-object
