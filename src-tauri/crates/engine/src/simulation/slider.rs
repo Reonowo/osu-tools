@@ -21,6 +21,7 @@ use crate::math::Vec2;
 use crate::simulation::buttons::ActionMask;
 use crate::simulation::presses::{can_be_hit_stable, ClickAction};
 use crate::simulation::score::JudgementKind;
+use crate::simulation::trace;
 use crate::simulation::{Ctx, ObjectState};
 
 /// drawablesliderball.cs:19 / slider.go:276-285 -- the follow-circle
@@ -145,14 +146,40 @@ fn state_of(states: &mut [crate::simulation::ObjectState], index: usize) -> &mut
     }
 }
 
-/// the ball's absolute position at `time`: the engine's f32 curve walk over
-/// the folded span progress, stack-adjusted. danser walks stable's
-/// int64-timed piecewise score path instead (objects/slider.go:288-309) --
-/// the cheapest remaining fidelity lever if sweep residuals point at follow
-/// radius boundaries
+/// the ball's position at `time`: stable's own score-path walk (danser
+/// objects/slider.go:288-309 PositionAt) -- binary-search the
+/// int64-windowed segment, f32 lerp inside it, endpoint snap when the
+/// window collapses to zero ms. the segments carry ABSOLUTE raw positions,
+/// so stacking applies here as danser's ModifyPosition does, as the delta
+/// between the object's stacked and raw positions. a zero-duration slider
+/// pins at the stacked head (danser's IsRetarded); the engine's f32 curve
+/// walk over the folded span progress remains only as the fallback for a
+/// slider with no score path (degenerate or budget-abandoned geometry)
 fn ball_position(obj: &ProcessedObject, slider: &ProcessedSlider, time: f64) -> Vec2 {
-    let progress = ((time - obj.start_time) / slider.duration).clamp(0.0, 1.0);
-    obj.stacked_position + slider.curve_position_at(progress)
+    // slider.go:645-647 IsRetarded, the zero-duration half: danser pins the
+    // ball at the raw head and the ruleset's ModifyPosition stacks it --
+    // exactly the stacked head. checked before the walk, as danser does
+    if obj.start_time == slider.stable_end_time {
+        return obj.stacked_position;
+    }
+    let sp = &slider.stable_score_path;
+    if sp.is_empty() {
+        let progress = ((time - obj.start_time) / slider.duration).clamp(0.0, 1.0);
+        return obj.stacked_position + slider.curve_position_at(progress);
+    }
+    let idx = sp.partition_point(|s| s.time2 < time).min(sp.len() - 1);
+    let seg = sp[idx];
+    // danser's mutils.Clamp is compare-based; rust's clamp panics on an
+    // inverted or NaN window, which a hand-built map's degenerate velocity
+    // can produce
+    let clamped = time.max(seg.time1).min(seg.time2);
+    let raw = if seg.time2 == seg.time1 {
+        seg.p2
+    } else {
+        let t = ((clamped - seg.time1) as f32) / ((seg.time2 - seg.time1) as f32);
+        seg.p1 + (seg.p2 - seg.p1) * t
+    };
+    raw + (obj.stacked_position - obj.position)
 }
 
 /// slider.go:117-184 -- the head's view of the frame's click edges, called
@@ -220,8 +247,20 @@ pub(crate) fn update_for(ctx: &mut Ctx<'_>, index: usize, time: f64, cursor_pos:
     } else {
         radius
     };
-    let allowable =
-        mouse_down_acceptable && dst_sq_87(cursor_pos, ball) < mul87(radius_needed, radius_needed);
+    let dist_sq = dst_sq_87(cursor_pos, ball);
+    let radius_sq = mul87(radius_needed, radius_needed);
+    let allowable = mouse_down_acceptable && dist_sq < radius_sq;
+
+    // additive only: off by default, records nothing and decides nothing
+    trace::note_tracking(trace::TrackingSample {
+        object_index: index,
+        time,
+        dist_sq,
+        radius_sq,
+        acceptable: mouse_down_acceptable,
+        sliding_before: state.sliding,
+        allowable,
+    });
 
     if allowable && !state.sliding {
         state.sliding = true;
@@ -270,7 +309,8 @@ fn process_ticks_stable(ctx: &mut Ctx<'_>, index: usize, time: f64, allowable: b
         let state = state_of(&mut ctx.states, index);
         let judged_so_far = (state.scored + state.missed) as usize;
         let point = state.points[judged_so_far];
-        let hit = allowable && state.slide_start <= point.time;
+        let slide_start = state.slide_start;
+        let hit = allowable && slide_start <= point.time;
         if hit {
             state.scored += 1;
         } else {
@@ -283,6 +323,16 @@ fn process_ticks_stable(ctx: &mut Ctx<'_>, index: usize, time: f64, allowable: b
             // danser's end-point Hold) live in ScoreState::apply
             StablePointKind::Tail => JudgementKind::SliderTail { hit },
         };
+        trace::note_point(
+            index,
+            judged_so_far,
+            point.time,
+            point.kind,
+            time,
+            hit,
+            allowable,
+            slide_start,
+        );
         ctx.emit(time, index, kind);
     }
 }
@@ -346,7 +396,9 @@ mod tests {
     use crate::replay::frames::Buttons;
     use crate::simulation::score::JudgementKind;
     use crate::simulation::simulate;
-    use crate::simulation::test_support::{beatmap_tick_time, frame, slider_map, wrap};
+    use crate::simulation::test_support::{
+        base_map, beatmap_tick_time, frame, linear_slider, slider_map, wrap,
+    };
 
     // slider_map builds: od 5, ar 9, cs 4, sm 1.4, beat 500 (velocity 0.28),
     // tick rate configurable; one linear slider at (100, 100), length 100,
@@ -365,6 +417,44 @@ mod tests {
         let dx = f64::from(b.x - a.x);
         let dy = f64::from(b.y - a.y);
         assert_eq!(dst_sq_87(a, b), (dx * dx + dy * dy) as f32);
+    }
+
+    #[test]
+    fn a_zero_duration_slider_judges_against_the_pinned_head() {
+        // beat 0.001ms -> stable velocity ~1.4e8 px/s: the accumulated
+        // traversal floors back to the start time (stable_end_time ==
+        // start), danser's IsRetarded -- the ball pins at the stacked head
+        // instead of reading the score path's zero-width windows, whose
+        // lookup would sit at the END of the only cut line, 100px from a
+        // cursor parked on the head
+        let mut map = base_map(vec![linear_slider(
+            1000.0,
+            crate::math::Vec2::new(100.0, 100.0),
+            100.0,
+            0,
+        )]);
+        map.timing_points[0].beat_len = 0.001;
+        let beatmap = crate::beatmap::process_beatmap(&map).unwrap();
+        let crate::beatmap::ProcessedKind::Slider(s) = &beatmap.objects[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(s.stable_end_time, 1000.0, "the recipe must collapse the duration");
+        assert!(
+            !s.stable_score_path.is_empty(),
+            "the pin, not the empty-path fallback, must decide"
+        );
+        let frames = wrap(vec![
+            frame(1000.0, 100.0, 100.0, Buttons::LEFT_1),
+            frame(1050.0, 100.0, 100.0, 0),
+        ]);
+        let timeline = simulate(&beatmap, &frames).unwrap();
+        assert!(
+            timeline
+                .events
+                .iter()
+                .any(|e| e.kind == JudgementKind::SliderTail { hit: true }),
+            "the tail scores off the pinned ball"
+        );
     }
 
     #[test]
