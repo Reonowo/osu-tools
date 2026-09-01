@@ -21,6 +21,21 @@ pub struct SliderPath {
     calculated_length: f64,
     optimised_length: f64,
     segment_end_distances: Vec<f64>,
+    /// the STABLE-side flatten: same segment walk, but perfect arcs step
+    /// stable's fixed ~8px detail (approximate_circular_arc_stable) instead
+    /// of lazer's tolerance subdivision, catmull keeps every detail sample
+    /// (no 6px cull), and the expected-distance
+    /// adjustment never touches it — stable's own pixel-length cut (danser
+    /// NewMultiCurveT's x87 branch, in beatmap::stable_points) applies
+    /// downstream instead. held in ABSOLUTE playfield coordinates (danser's
+    /// computation space -- see new_at). consumed only by the legacy
+    /// simulation's tracking-ball score path
+    stable_raw_path: Vec<Vec2>,
+    /// the object's absolute position the stable flatten runs at
+    stable_position: Vec2,
+    /// a stable-side vertex-budget overflow abandons the list (see
+    /// extend_stable) instead of failing a path lazer builds fine
+    stable_raw_abandoned: bool,
 }
 
 impl SliderPath {
@@ -36,6 +51,22 @@ impl SliderPath {
         expected_distance: Option<f64>,
         optimise_catmull: bool,
     ) -> Result<SliderPath> {
+        SliderPath::new_at(control_points, expected_distance, optimise_catmull, Vec2::ZERO)
+    }
+
+    /// [`SliderPath::new`] with the object's absolute playfield position.
+    /// the lazer-side path is position-independent (control points are
+    /// head-relative, as sliderpath.cs holds them); the STABLE-side flatten
+    /// runs on absolute coordinates because that is the space danser (and
+    /// stable) computed in, and the f32 arithmetic inside the approximators
+    /// and the x87 length walk rounds differently there -- one ulp of track
+    /// length is one truncated ball-window millisecond at the right velocity
+    pub fn new_at(
+        control_points: Vec<PathControlPoint>,
+        expected_distance: Option<f64>,
+        optimise_catmull: bool,
+        position: Vec2,
+    ) -> Result<SliderPath> {
         let mut path = SliderPath {
             control_points,
             expected_distance,
@@ -45,6 +76,9 @@ impl SliderPath {
             calculated_length: 0.0,
             optimised_length: 0.0,
             segment_end_distances: Vec::new(),
+            stable_position: position,
+            stable_raw_path: Vec::new(),
+            stable_raw_abandoned: false,
         };
         // the c# keeps `segmentEnds` as a field purely because `calculatePath`
         // and `calculateLength` are separate methods sharing it; handing the
@@ -78,6 +112,13 @@ impl SliderPath {
 
     pub fn cumulative_length(&self) -> &[f64] {
         &self.cumulative_length
+    }
+
+    /// the stable-side flattened vertices (fixed-detail arcs, no
+    /// expected-distance adjustment) -- the input to stable's own
+    /// pixel-length cut in beatmap::stable_points
+    pub fn stable_raw_path(&self) -> &[Vec2] {
+        &self.stable_raw_path
     }
 
     /// sliderpath.cs:263 — non-finite values possible when distance is zero,
@@ -115,6 +156,8 @@ impl SliderPath {
     /// sliderpath.cs:287 — returns the segment-end vertex indices
     fn calculate_path(&mut self) -> Result<Vec<usize>> {
         self.calculated_path.clear();
+        self.stable_raw_path.clear();
+        self.stable_raw_abandoned = false;
         self.optimised_length = 0.0;
         let mut segment_end_indices: Vec<usize> = Vec::new();
 
@@ -141,6 +184,8 @@ impl SliderPath {
 
             if segment.len() == 1 {
                 self.calculated_path.push(segment[0]);
+                let lone = self.stable_position + segment[0];
+                self.extend_stable(&[lone]);
             } else if segment.len() > 1 {
                 let sub_path = calculate_sub_path(
                     segment,
@@ -148,6 +193,46 @@ impl SliderPath {
                     optimise_catmull,
                     &mut self.optimised_length,
                 )?;
+
+                // the stable-side flatten runs the SAME segment again in
+                // ABSOLUTE coordinates (danser's computation space — the
+                // f32 rounding differs from the head-relative walk), and
+                // diverges algorithmically on two segment shapes: a 3-point
+                // perfect arc, where stable stepped a fixed ~8px detail
+                // (approximate_circular_arc_stable, which also hands a
+                // danser-straight trio back as its raw points) while lazer
+                // subdivides by tolerance — and catmull, where stable kept
+                // every detail sample (danser processCatmull) while lazer
+                // culls to 6px chords, so the rerun passes
+                // optimise_catmull=false and its scratch length is never
+                // written. only the lazer path owns optimised_length
+                let seg_abs: Vec<Vec2> = segment.iter().map(|&v| self.stable_position + v).collect();
+                let stable_sub = if segment_type == PathType::PerfectCurve && segment.len() == 3 {
+                    approximator::approximate_circular_arc_stable(
+                        seg_abs[0],
+                        seg_abs[1],
+                        seg_abs[2],
+                        limits::MAX_SLIDER_PATH_VERTICES,
+                    )
+                } else {
+                    None
+                };
+                match stable_sub {
+                    Some(pts) => self.extend_stable(&pts),
+                    None => {
+                        let mut scratch = 0.0f64;
+                        match calculate_sub_path(&seg_abs, segment_type, false, &mut scratch) {
+                            Ok(abs_sub) => self.extend_stable(&abs_sub),
+                            // a budget the relative walk survived can
+                            // theoretically trip on absolute inputs;
+                            // abandon the stable list, never the path
+                            Err(_) => {
+                                self.stable_raw_path = Vec::new();
+                                self.stable_raw_abandoned = true;
+                            }
+                        }
+                    }
+                }
 
                 // sliderpath.cs:319 — drop a leading vertex that exactly
                 // repeats the running path's last one (exact f32 equality,
@@ -260,6 +345,30 @@ impl SliderPath {
         let last_cum = self.cumulative_length.last().copied().unwrap_or(0.0);
         self.calculated_path[pei] = self.calculated_path[pei - 1] + dir * ((expected - last_cum) as f32);
         self.cumulative_length.push(expected);
+    }
+
+    /// junction dedup for the stable-side flatten: danser's per-def edge
+    /// build never bridges curve defs, and consecutive defs share their
+    /// junction control point, so dropping an exactly-repeated leading
+    /// vertex reproduces its edge list (exact f32 equality, component-wise,
+    /// so nan never dedups). a budget overflow ABANDONS the stable list for
+    /// this path (empty = the legacy ball falls back to lazer geometry)
+    /// rather than failing a construction lazer completes -- the flag keeps
+    /// later segments from refilling a half-built list into wrong geometry
+    fn extend_stable(&mut self, sub: &[Vec2]) {
+        if self.stable_raw_abandoned {
+            return;
+        }
+        let skip_first = self
+            .stable_raw_path
+            .last()
+            .zip(sub.first())
+            .is_some_and(|(last, first)| last == first);
+        self.stable_raw_path.extend_from_slice(&sub[usize::from(skip_first)..]);
+        if self.stable_raw_path.len() > limits::MAX_SLIDER_PATH_VERTICES {
+            self.stable_raw_path = Vec::new();
+            self.stable_raw_abandoned = true;
+        }
     }
 
     /// sliderpath.cs:487
@@ -456,6 +565,27 @@ mod tests {
         let path = SliderPath::new(cps(&[(0.0, 0.0, None), (10.0, 0.0, None)]), None, true).unwrap();
         assert_eq!(path.calculated_path().len(), 2);
         assert_eq!(path.distance(), 10.0);
+    }
+
+    #[test]
+    fn the_stable_flatten_keeps_every_catmull_sample() {
+        // danser processCatmull never culls: two knot pairs keep all
+        // CATMULL_DETAIL x 2 samples each in the stable flatten, while the
+        // lazer path applies sliderpath.cs:378's 6px cull to the same tiny
+        // segment
+        let path = SliderPath::new_at(
+            cps(&[
+                (0.0, 0.0, Some(PathType::Catmull)),
+                (4.0, 3.0, None),
+                (8.0, 0.0, None),
+            ]),
+            None,
+            true,
+            Vec2::new(100.0, 100.0),
+        )
+        .unwrap();
+        assert_eq!(path.stable_raw_path().len(), 200);
+        assert!(path.calculated_path().len() < 200);
     }
 
     #[test]

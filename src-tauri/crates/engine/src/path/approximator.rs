@@ -45,6 +45,106 @@ fn subdivision_depth_check(depth: usize, max_depth: usize) -> Result<()> {
     Ok(())
 }
 
+/// danser cirarc.go `arcStable` + approximation.go `ApproximateCircularArc`
+/// (detail 0.125) — osu!stable's own fixed-step arc flattening, one vertex
+/// every ~8 pixels of arc length, which the legacy simulation's
+/// tracking-ball geometry follows. danser flattens its gameplay lines with
+/// THIS, not with the lazer-tolerance arc the rest of this module ports —
+/// the two produce structurally different vertex sets, and the strict-<
+/// follow compare turns on the difference. f32 storage with x87-shaped f64
+/// intermediates, exactly as the reference computes them. a danser-straight
+/// trio (|cross| < 0.001 in f32, vector2f.go IsStraightLine32) flattens as
+/// the raw control points — multicurve.go:302-305 routes it through
+/// processLinear, never the arc walk. returns `None` only when the
+/// fixed-step count would blow the vertex budget (a crafted huge-radius
+/// arc that lazer's adaptive subdivision handles in a handful of
+/// vertices), where the caller falls back to the lazer flatten, degrading
+/// ball-geometry fidelity for that one slider instead of failing a path
+/// lazer builds fine
+pub(crate) fn approximate_circular_arc_stable(
+    a: Vec2,
+    b: Vec2,
+    c: Vec2,
+    max_vertices: usize,
+) -> Option<Vec<Vec2>> {
+    const OSU_PI: f32 = 3.141_592_74;
+    let cross = ((b.y - a.y) * (c.x - a.x) - (b.x - a.x) * (c.y - a.y)).abs();
+    if cross < 0.001 {
+        // multicurve.go:316-322 processLinear -- the raw points, minus any
+        // point equal to its successor (old-map red anchors)
+        let trio = [a, b, c];
+        let pts = (0..3)
+            .filter(|&i| i == 2 || trio[i] != trio[i + 1])
+            .map(|i| trio[i])
+            .collect();
+        return Some(pts);
+    }
+
+    let len_sq_87 = |v: Vec2| (f64::from(v.x) * f64::from(v.x) + f64::from(v.y) * f64::from(v.y)) as f32;
+    let dst_87 = |p: Vec2, q: Vec2| {
+        let x = f64::from(q.x - p.x);
+        let y = f64::from(q.y - p.y);
+        ((x * x + y * y) as f32).sqrt()
+    };
+    let ct_at = |pt: Vec2, centre: Vec2| {
+        (f64::from(pt.y) - f64::from(centre.y)).atan2(f64::from(pt.x) - f64::from(centre.x))
+    };
+
+    let (a1x, a1y) = (f64::from(a.x), f64::from(a.y));
+    let (b1x, b1y) = (f64::from(b.x), f64::from(b.y));
+    let (c1x, c1y) = (f64::from(c.x), f64::from(c.y));
+    // cirarc.go:73 -- the discriminant narrows to f32 before dividing
+    let d = (2.0 * (a1x * (b1y - c1y) + b1x * (c1y - a1y) + c1x * (a1y - b1y))) as f32;
+    let a_sq = f64::from(len_sq_87(a));
+    let b_sq = f64::from(len_sq_87(b));
+    let c_sq = f64::from(len_sq_87(c));
+    let centre = Vec2::new(
+        ((a_sq * (b1y - c1y) + b_sq * (c1y - a1y) + c_sq * (a1y - b1y)) / f64::from(d)) as f32,
+        ((a_sq * (c1x - b1x) + b_sq * (a1x - c1x) + c_sq * (b1x - a1x)) / f64::from(d)) as f32,
+    );
+    let r_s = dst_87(a, centre);
+
+    let t_initial = ct_at(a, centre);
+    let mut t_mid = ct_at(b, centre);
+    let mut t_final = ct_at(c, centre);
+    // cirarc.go:90-100 -- the wrap constant is stable's own f32 pi, widened
+    let two_pi = 2.0 * f64::from(OSU_PI);
+    while t_mid < t_initial {
+        t_mid += two_pi;
+    }
+    while t_final < t_initial {
+        t_final += two_pi;
+    }
+    if t_mid > t_final {
+        t_final -= two_pi;
+    }
+
+    // approximation.go:15 -- int truncation of |angle range * radius| / 8.
+    // a NaN product as-casts to 0; +inf saturates to usize::MAX (an inf
+    // radius survives dst_87 when the f64 square sum overflows f32), so
+    // the budget compare must not add to `segments` before testing it
+    let segments = (((t_final - t_initial) * f64::from(r_s)).abs() * 0.125) as usize;
+    if segments >= max_vertices {
+        return None;
+    }
+
+    let mut pts = vec![Vec2::ZERO; segments + 1];
+    pts[0] = a;
+    // danser writes pt3 over pt1 when segments == 0 -- preserved as-is
+    pts[segments] = c;
+    for (i, pt) in pts.iter_mut().enumerate().take(segments).skip(1) {
+        let t = i as f64 / segments as f64;
+        let theta = t_final * t + t_initial * (1.0 - t);
+        // cirarc.go:118 PointAtS -- cos/sin scaled in f64, narrowed to f32,
+        // then an x87 add against the centre
+        *pt = Vec2::new(
+            (f64::from((theta.cos() * f64::from(r_s)) as f32) + f64::from(centre.x)) as f32,
+            (f64::from((theta.sin() * f64::from(r_s)) as f32) + f64::from(centre.y)) as f32,
+        );
+    }
+    Some(pts)
+}
+
 /// pathapproximator.cs:33 — delegates to the b-spline path with degree
 /// `max(1, len - 1)`; the max(1, ...) keeps the degree valid even for zero
 /// or one control points, both of which the b-spline path no-ops on before
