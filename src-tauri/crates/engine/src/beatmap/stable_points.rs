@@ -17,8 +17,12 @@
 //! - tick times are `floor(f32(accumulated length) / velocity * 1000)`;
 //! - the tick phase carries across repeat spans through the
 //!   `tickDistance - remainder` handoff instead of restarting per span;
-//! - the slider's own end time is the floor of the accumulated per-segment
-//!   traversal, not `start + spans * (length / velocity)`;
+//! - the slider's own end time is the floor of the accumulated per-line
+//!   traversal of the X87 CUT LINES (the ball walk, danser slider.go:496),
+//!   not `start + spans * (length / velocity)` and not the lazer-adjusted
+//!   segment walk the ticks ride -- the two f32-narrowed sums can straddle
+//!   an integer floor (issue 16's end-time provenance class), and the 1ms
+//!   decides the -36ms tail verdict;
 //! - the beat-length ratio narrows through an f32 DIVISION
 //!   (`float32(clamp)/100`, timing.go:32), where lazer's compat shim
 //!   (`timing::precision_adjusted_beat_length`) divides in f64 after the
@@ -181,10 +185,12 @@ fn stable_beat_ratio(sv_multiplier: f64) -> f64 {
 }
 
 /// stable's score-point walk over one slider. returns the time-sorted
-/// points and stable's own end time (the floor of the accumulated
-/// per-segment traversal). never panics: degenerate inputs (zero-length
-/// paths, zero tick distance, non-finite velocities) fall through to a
-/// tail-only list, and the point count is capped like the lazer nested list
+/// points and stable's own end time (the floor of the cut-line walk's
+/// accumulated traversal, danser slider.go:496; the lazer-adjusted walk's
+/// floor only when the ball path is abandoned). never panics: degenerate
+/// inputs (zero-length paths, zero tick distance, non-finite velocities)
+/// fall through to a tail-only list, and the point count is capped like the
+/// lazer nested list
 pub(crate) fn stable_score_points(
     start_time: f64,
     span_count: i32,
@@ -242,15 +248,17 @@ pub(crate) fn stable_score_points(
 
     let span_count = span_count.max(1) as usize;
 
-    // the tracking ball's score path, built from stable's own cut of the
-    // UNADJUSTED flattened path (danser slider.go:489-492 over the lines
-    // NewMultiCurveT produced). deliberately decoupled from the tick walk
-    // below, which stays on the lazer-adjusted cumulative diffs that issue
-    // 13's sweeps validated tick-for-tick: coupling both to the x87 cut was
-    // measured 2026-09-01 and rejected (it shifts tick boundaries on maps
-    // the walk already gets right), while the BALL is where the sweep says
-    // stable's own geometry decides plays (the strict-< follow compare
-    // flips on sub-pixel placement at slide start)
+    // the tracking ball's score path AND the slider's end time, built from
+    // stable's own cut of the UNADJUSTED flattened path (danser
+    // slider.go:489-496 over the lines NewMultiCurveT produced).
+    // deliberately decoupled from the tick walk below, which stays on the
+    // lazer-adjusted cumulative diffs that issue 13's sweeps validated
+    // tick-for-tick: coupling the TICKS to the x87 cut was measured
+    // 2026-09-01 and rejected (it shifts tick boundaries on maps the walk
+    // already gets right), while the ball and the end are where the sweep
+    // says stable's own geometry decides plays (the strict-< follow compare
+    // flips on sub-pixel placement at slide start; the end's floor decides
+    // the -36ms tail check's millisecond)
     let lines = stable_cut_lines(path.stable_raw_path(), path.expected_distance());
     let mut score_path: Vec<StableScorePathSeg> = Vec::new();
     // the walk retains span_count x lines segments, two independently
@@ -290,9 +298,23 @@ pub(crate) fn stable_score_points(
             ball_time += progress;
         }
     }
+    // danser slider.go:493-496 -- the slider's end time is the floor of
+    // THIS walk's accumulation, assigned as the lines are consumed. the
+    // lazer-adjusted walk below keeps timing the ticks (issue 13), but its
+    // f32-narrowed sum can straddle an integer floor against the cut-line
+    // sum (structurally different vertex sets on arc sliders), and the 1ms
+    // shifts the -36ms tail verdict across the player's release (issue
+    // 16's end-time provenance class). a budget-abandoned or degenerate
+    // ball path falls back to the lazer walk's floor, same posture as the
+    // ball geometry itself
+    let cut_end_usable = !seg_budget_blown && !lines.is_empty() && ball_time.is_finite();
     let mut points: Vec<StableScorePoint> = Vec::new();
     let mut running_time = start_time;
-    let mut end_time = start_time.floor();
+    let mut end_time = if cut_end_usable {
+        ball_time.floor()
+    } else {
+        start_time.floor()
+    };
     let mut scoring_length_total = 0.0f64;
     let mut scoring_distance_acc = 0.0f64;
 
@@ -313,7 +335,9 @@ pub(crate) fn stable_score_points(
             let distance = segment_lengths[j];
             let progress = 1000.0 * f64::from(distance) / velocity;
             running_time += progress;
-            end_time = running_time.floor();
+            if !cut_end_usable {
+                end_time = running_time.floor();
+            }
             scoring_distance_acc += f64::from(distance);
 
             // the `tick_distance > 0` guard is ours, not danser's: a crafted
@@ -596,6 +620,47 @@ mod tests {
             assert!((r - 100.0).abs() < 0.01, "interior vertex off the circle: {p:?}");
             assert!(p.y > 0.0, "interior vertex on the wrong side: {p:?}");
         }
+    }
+
+    #[test]
+    fn the_end_time_floors_the_cut_line_walk_not_the_lazer_one() {
+        // nenten puranetto [a world without form] object 1184, the parity
+        // pass's end-time provenance repro (issue 16, 2026-09-02): the green
+        // line's f32 clamp pushes the f64 span duration to 75.000001287466148,
+        // so a walk over the lazer-adjusted segment lengths floors the end to
+        // start + 75 = 210470 -- but stable's end is the floor of the x87
+        // cut-line walk, whose f32 length sum stays under 75. oracle:
+        // .scratch/engine-parity-pass/danser-oracle/dumps/
+        // nenten-obj1184.path.txt ([SLIDER] endTime=210469), danser pin
+        // 8331b0ff, and the 1ms shift is what flips the -36ms tail verdict
+        // on the map's 12 port-gap plays
+        let osu = "osu file format v14
+
+[General]
+AudioFilename: audio.mp3
+Mode: 0
+
+[Difficulty]
+HPDrainRate:6
+CircleSize:4.2
+OverallDifficulty:8.5
+ApproachRate:9.5
+SliderMultiplier:1.8
+SliderTickRate:1
+
+[TimingPoints]
+5195,300,4,1,1,50,1,0
+206945,-83.3333333333333,4,1,1,75,0,1
+
+[HitObjects]
+489,210,210395,2,0,P|496:184|494:157,1,53.9999983520508,2|2,0:0|0:0,0:0:0:0:
+";
+        let map = crate::formats::beatmap::decode_beatmap_bytes(osu.as_bytes()).unwrap();
+        let processed = process_beatmap(&map).unwrap();
+        let ProcessedKind::Slider(s) = &processed.objects[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(s.stable_end_time, 210469.0);
     }
 
     #[test]
