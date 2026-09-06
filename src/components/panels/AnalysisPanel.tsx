@@ -9,15 +9,18 @@ import { PanelHeader } from "@/components/shell/SidePanel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ERROR_WINDOW_MS, HISTOGRAM_BINS, type HistogramBin, type VelocitySample } from "@/lib/analysis";
 import { formatTime } from "@/lib/format";
+import { describeFailPoint } from "@/lib/hp";
 import {
 	crossCheckConsistent,
 	describeCrossCheck,
+	headerFailNote,
 	incompletenessNote,
 	integrityRowLabel,
 	integrityRowValue,
-	lifeBarNote,
+	lifeBarGraphNote,
 	rowVerdict
 } from "@/lib/integrity";
+import type { DerivedHp } from "@/lib/derive";
 import { formatLatticeStep, type Lattice, type OffLatticeSummary } from "@/lib/lattice";
 import type { Incompleteness, IntegrityReport } from "@/lib/scene-types";
 import { useViewerStore } from "@/state/store";
@@ -119,6 +122,41 @@ function Histogram({
 	);
 }
 
+// the play's HP: the lowest the CURRENT document reached, and the fail
+// point -- the first millisecond its HP hit zero, which is where stable would
+// have ended the play. this viewer keeps simulating past it and marks it
+// instead (`CONTEXT.md`'s fail point), so the row states it rather than
+// truncating anything, and says whether the loaded file's own header agrees.
+//
+// nothing is re-derived here: the curve, the lowest point and the fail point
+// all come off derive.ts, which re-runs on every landed edit. the lowest-HP
+// row is a readout and deliberately not a seek target -- HP is a continuous
+// quantity, and its minimum is a moment to read rather than a mark to visit
+function HpSection({ hp, report }: { hp: DerivedHp; report: IntegrityReport | null }) {
+	const lowest =
+		hp.lowest === null ? "—" : `${Math.round(hp.lowest.fraction * 100)}% at ${formatTime(hp.lowest.time)}`;
+	return (
+		<div>
+			<SectionLabel>hp</SectionLabel>
+			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+				<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[7px] text-[11px]">
+					<StatRow label="lowest HP" value={lowest} />
+					<StatRow
+						label="fail point"
+						value={describeFailPoint(
+							hp.curve.length > 0,
+							hp.failPoint === null ? null : formatTime(hp.failPoint)
+						)}
+					/>
+				</dl>
+				<div className="mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] text-[#8a8a93]">
+					{headerFailNote(report?.lifeBarGraph ?? null)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
 // the loaded file's header-vs-simulated comparison. rendered only when the
 // scene shipped a report (pre-lazer authoritative scenes), so an
 // inapplicable rules profile never raises false mismatch alarms. the report
@@ -187,7 +225,9 @@ function IntegritySection({
 				>
 					{describeCrossCheck(report.crossCheck)}
 				</div>
-				<div className="mt-1 text-[10.5px] text-[#8a8a93]">{lifeBarNote(report.lifeBarPresent)}</div>
+				<div className="mt-1 text-[10.5px] text-[#8a8a93] tabular-nums">
+					{lifeBarGraphNote(report.lifeBarGraph)}
+				</div>
 			</div>
 		</div>
 	);
@@ -378,6 +418,8 @@ export function AnalysisPanel() {
 						}
 					/>
 				)}
+
+				{authoritative && <HpSection hp={derived.hp} report={scene.integrity} />}
 
 				<VelocityChart
 					velocity={analysis.velocity}
