@@ -23,7 +23,23 @@
 //! - allClicked: at that moment, every earlier still-alive object back to
 //!   the nearest alive stable new-combo flag must already be hit; an
 //!   in-flight slider (aggregate pending while the section's last object is
-//!   judged early) withholds the burst entirely.
+//!   judged early) withholds the burst.
+//!
+//! two refinements danser's port leaves implicit come from the direct read
+//! of stable's own writer (`.scratch/stable-osr-writer/findings.md` Q6, the
+//! hit object manager's judgement method at 0x10c390):
+//!
+//! - a withheld burst is not "no addition": the answer is **Mu** whenever
+//!   the result is a base hit and neither geki nor katu applies, the failed
+//!   backward walk included ("if any object in the section was not hit, the
+//!   addition is Mu"). the header counts no Mu, which is why the tally never
+//!   saw the difference -- but the HP fold pays 6C for one, so the walk
+//!   yields the three-valued answer and the tally reads two of it.
+//! - a **spinner** closing the section skips the backward walk entirely
+//!   (all-hit is assumed) while still reading the counters and the miss
+//!   exclusion. this one IS observable in the header: it awards where the
+//!   plain danser rule withheld, on a play whose spinner ends a section with
+//!   an earlier object still in flight.
 //!
 //! section boundaries are stable's load-time flags
 //! (`ProcessedObject::stable_new_combo` -- raw new-combo with the first
@@ -57,11 +73,39 @@ struct Resolution {
     head_time: Option<f64>,
 }
 
+/// the combo-end addition stable attaches to a section-last object's own
+/// result. the header counts only two of the three (`count_geki` for
+/// 300+Geki, `count_katsu` for 300+Katu and 100+Katu; Mu moves no counter),
+/// but the HP fold pays all three -- 6C / 10C / 14C on top of the base gain
+/// -- which is why the walk below yields the answer rather than a tally
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComboEndAddition {
+    Mu,
+    Katu,
+    Geki,
+}
+
+/// `true` when the object at `index` closes a combo section: stable's
+/// boundaries are the load-time flags, so a section ends where the NEXT
+/// object carries one (or at the end of the map)
+pub(crate) fn is_section_last(objects: &[crate::beatmap::ProcessedObject], index: usize) -> bool {
+    index + 1 == objects.len() || objects[index + 1].stable_new_combo
+}
+
 /// stable's geki/katu machine over the emitted timeline -- see the module
 /// doc for the semantics and the danser citation. events are consumed in
 /// emission order, which is the simulation's walk order (the same order
-/// danser's SendResult fires in)
-pub fn section_tally(processed: &ProcessedBeatmap, timeline: &JudgementTimeline) -> SectionTally {
+/// danser's SendResult fires in).
+///
+/// this is THE machine: every consumer folds over its per-event answer
+/// rather than re-deriving the counters, the trigger or the backward walk.
+/// `on_result` is called once per object-level result, in emission order,
+/// with that event's index and the addition stable attaches to it
+fn walk_object_results(
+    processed: &ProcessedBeatmap,
+    timeline: &JudgementTimeline,
+    mut on_result: impl FnMut(usize, Option<ComboEndAddition>),
+) {
     let objects = &processed.objects;
     // a never-resolved object (no object-level result in the timeline --
     // unreachable via simulate, which judges everything, but this is a
@@ -90,20 +134,6 @@ pub fn section_tally(processed: &ProcessedBeatmap, timeline: &JudgementTimeline)
         }
     }
 
-    // sections are structural: one per section-last object. the identity
-    // sections - (geki + katsu) = sections_without_burst holds by
-    // construction, as before
-    let is_section_last =
-        |i: usize| i + 1 == objects.len() || objects[i + 1].stable_new_combo;
-    let sections = (0..objects.len()).filter(|&i| is_section_last(i)).count() as u32;
-
-    let mut tally = SectionTally {
-        sections,
-        count_geki: 0,
-        count_katsu: 0,
-        sections_without_burst: 0,
-    };
-
     // ruleset.go:565-570 + 593-606 -- the counters and the trigger fold
     let mut current_katu = 0u32;
     let mut current_bad = 0u32;
@@ -121,22 +151,68 @@ pub fn section_tally(processed: &ProcessedBeatmap, timeline: &JudgementTimeline)
         }
 
         let index = event.object_index;
-        if index >= objects.len() || !is_section_last(index) {
+        if index >= objects.len() || !is_section_last(objects, index) {
+            on_result(k, None);
             continue;
         }
         // a missed section-ender resets the counters without awarding
         // (BaseHits excludes Miss, ruleset.go:593)
-        if grade != HitGrade::Miss && all_clicked(processed, &resolutions, index, k, event.time) {
-            if current_katu == 0 && current_bad == 0 {
-                tally.count_geki += 1;
-            } else if current_bad == 0 {
-                tally.count_katsu += 1;
+        let addition = if grade == HitGrade::Miss {
+            None
+        } else {
+            // a SPINNER closing the section skips the backward walk
+            // outright -- all-hit is assumed (client read, findings.md Q6);
+            // the counters and the miss exclusion above still apply
+            let all_hit = matches!(objects[index].kind, ProcessedKind::Spinner(_))
+                || all_clicked(processed, &resolutions, index, k, event.time);
+            match (all_hit, current_katu, current_bad) {
+                (true, 0, 0) => Some(ComboEndAddition::Geki),
+                (true, _, 0) => Some(ComboEndAddition::Katu),
+                // Mu is the answer whenever neither of the two applies,
+                // INCLUDING a failed backward walk (findings.md Q6: "if any
+                // object in the section was not hit, the addition is Mu")
+                _ => Some(ComboEndAddition::Mu),
             }
-        }
+        };
+        on_result(k, addition);
         current_katu = 0;
         current_bad = 0;
     }
+}
 
+/// the combo-end addition stable attaches to each timeline event, indexed
+/// by event index: `None` everywhere but a section-last object-level result
+/// that was a base hit. the HP fold's read of the shared walk
+pub fn combo_end_additions(
+    processed: &ProcessedBeatmap,
+    timeline: &JudgementTimeline,
+) -> Vec<Option<ComboEndAddition>> {
+    let mut additions = vec![None; timeline.events.len()];
+    walk_object_results(processed, timeline, |event, addition| {
+        additions[event] = addition;
+    });
+    additions
+}
+
+/// the header's geki/katu pair, counted off the same walk. sections are
+/// structural -- one per section-last object -- so the identity
+/// `sections - (geki + katsu) = sections_without_burst` holds by
+/// construction; a Mu section ended without a burst exactly as a withheld
+/// one did, which is why the tally reads only two of the three answers
+pub fn section_tally(processed: &ProcessedBeatmap, timeline: &JudgementTimeline) -> SectionTally {
+    let objects = &processed.objects;
+    let sections = (0..objects.len()).filter(|&i| is_section_last(objects, i)).count() as u32;
+    let mut tally = SectionTally {
+        sections,
+        count_geki: 0,
+        count_katsu: 0,
+        sections_without_burst: 0,
+    };
+    walk_object_results(processed, timeline, |_, addition| match addition {
+        Some(ComboEndAddition::Geki) => tally.count_geki += 1,
+        Some(ComboEndAddition::Katu) => tally.count_katsu += 1,
+        Some(ComboEndAddition::Mu) | None => {}
+    });
     tally.sections_without_burst = tally
         .sections
         .saturating_sub(tally.count_geki + tally.count_katsu);
@@ -548,6 +624,117 @@ mod tests {
             }
         );
         assert_identity(&tally);
+    }
+
+    #[test]
+    fn a_withheld_burst_is_mu_not_nothing() {
+        // findings.md Q6: a base hit that fails the backward walk still
+        // carries an addition -- Mu. the header counts none, which is why
+        // the tally is unchanged, but the HP fold pays 6C for it
+        let processed = map_of(vec![slider(1000.0, true), circle(2000.0, false), circle(3000.0, true)]);
+        let timeline = timeline_at(&[
+            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            (1, JudgementKind::Circle(HitGrade::Great), 1900.0),
+            (0, JudgementKind::SliderTail { hit: true }, 2100.0),
+            (0, JudgementKind::SliderAggregate(HitGrade::Great), 2100.0),
+            (2, JudgementKind::Circle(HitGrade::Great), 3000.0),
+        ]);
+        let additions = combo_end_additions(&processed, &timeline);
+        // the section-ending circle at index 1: in-flight slider -> Mu
+        assert_eq!(additions[1], Some(ComboEndAddition::Mu));
+        // the trailing single-object section is clean -> Geki
+        assert_eq!(additions[4], Some(ComboEndAddition::Geki));
+        // and the tally reads exactly two of the three answers
+        assert_eq!(section_tally(&processed, &timeline).count_geki, 1);
+    }
+
+    #[test]
+    fn a_missed_section_ender_yields_nothing_and_still_resets_the_counters() {
+        let processed = map_of(vec![
+            circle(1000.0, true),
+            circle(1500.0, false),
+            circle(2000.0, true),
+        ]);
+        let timeline = timeline_of(&[
+            (0, JudgementKind::Circle(HitGrade::Ok)),
+            // the section-ender misses: no addition at all
+            (1, JudgementKind::Circle(HitGrade::Miss)),
+            // ...and the next section starts from zeroed counters, so its
+            // all-great ender is a Geki despite the 100 two events back
+            (2, JudgementKind::Circle(HitGrade::Great)),
+        ]);
+        let additions = combo_end_additions(&processed, &timeline);
+        assert_eq!(additions[1], None);
+        assert_eq!(additions[2], Some(ComboEndAddition::Geki));
+    }
+
+    #[test]
+    fn a_spinner_closing_a_section_awards_by_the_counters_alone() {
+        // findings.md Q6: "for a spinner ending the section the walk is
+        // skipped (all-hit is assumed)". same shape as the withheld-circle
+        // case below it, so the two differ only in the ender's kind
+        let processed = map_of(vec![slider(1000.0, true), spinner(2000.0), circle(4000.0, false)]);
+        assert!(processed.objects[2].stable_new_combo, "post-spinner force");
+        let timeline = timeline_at(&[
+            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            // the spinner resolves while the section's slider is still in
+            // flight -- the backward walk would have found it unhit
+            (1, JudgementKind::SpinnerFinal(HitGrade::Great), 2400.0),
+            (0, JudgementKind::SliderTail { hit: true }, 2600.0),
+            (0, JudgementKind::SliderAggregate(HitGrade::Great), 2600.0),
+            (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
+        ]);
+        let additions = combo_end_additions(&processed, &timeline);
+        assert_eq!(
+            additions[1],
+            Some(ComboEndAddition::Geki),
+            "both counters are zero and a spinner never walks back"
+        );
+        assert_eq!(section_tally(&processed, &timeline).count_geki, 2);
+
+        // the counters still bind: an earlier 100 in the same section demotes
+        // the spinner's award to Katu
+        let with_a_hundred = timeline_at(&[
+            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            (0, JudgementKind::SliderTail { hit: true }, 1600.0),
+            (0, JudgementKind::SliderAggregate(HitGrade::Ok), 1600.0),
+            (1, JudgementKind::SpinnerFinal(HitGrade::Great), 2400.0),
+            (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
+        ]);
+        assert_eq!(
+            combo_end_additions(&processed, &with_a_hundred)[3],
+            Some(ComboEndAddition::Katu)
+        );
+
+        // and a missed spinner still awards nothing
+        let missed = timeline_at(&[
+            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            (0, JudgementKind::SliderTail { hit: true }, 1600.0),
+            (0, JudgementKind::SliderAggregate(HitGrade::Great), 1600.0),
+            (1, JudgementKind::SpinnerFinal(HitGrade::Miss), 2400.0),
+            (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
+        ]);
+        assert_eq!(combo_end_additions(&processed, &missed)[3], None);
+    }
+
+    #[test]
+    fn a_circle_in_the_spinners_shape_still_withholds() {
+        // the paired case: identical timing, a circle instead of a spinner,
+        // so the backward walk runs and finds the in-flight slider
+        let processed = map_of(vec![slider(1000.0, true), circle(2400.0, false), circle(4000.0, true)]);
+        let timeline = timeline_at(&[
+            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            (1, JudgementKind::Circle(HitGrade::Great), 2400.0),
+            (0, JudgementKind::SliderTail { hit: true }, 2600.0),
+            (0, JudgementKind::SliderAggregate(HitGrade::Great), 2600.0),
+            (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
+        ]);
+        assert_eq!(
+            combo_end_additions(&processed, &timeline)[1],
+            Some(ComboEndAddition::Mu),
+            "a circle ender walks back and withholds where the spinner awarded"
+        );
+        assert_eq!(section_tally(&processed, &timeline).count_geki, 1);
     }
 
     #[test]
