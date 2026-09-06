@@ -5,7 +5,8 @@ import {
 	incompletenessNote,
 	integrityRowLabel,
 	integrityRowValue,
-	lifeBarNote,
+	headerFailNote,
+	lifeBarGraphNote,
 	rowVerdict
 } from "./integrity";
 import type { IntegrityReport } from "./scene-types";
@@ -17,7 +18,7 @@ const report: IntegrityReport = {
 		{ field: "perfect", header: 1, simulated: 0, match: false }
 	],
 	crossCheck: { sections: 105, gekiKatsu: 103, sectionsWithoutBurst: 2, countMiss: 2, count50: 0 },
-	lifeBarPresent: false
+	lifeBarGraph: { status: "absent" }
 };
 
 describe("integrity rows", () => {
@@ -68,9 +69,20 @@ describe("cross-check", () => {
 });
 
 describe("life bar note", () => {
-	test("absence is information, not silence", () => {
-		expect(lifeBarNote(true)).toBe("life bar present");
-		expect(lifeBarNote(false)).toContain("absent");
+	test("a compared graph reads as a count, never a verdict", () => {
+		expect(lifeBarGraphNote({ status: "compared", matched: 51, total: 51, headerFailed: false })).toBe(
+			"51 of 51 samples match"
+		);
+		// one short is what a genuine play can land, so the wording carries no
+		// accusation either way
+		expect(lifeBarGraphNote({ status: "compared", matched: 50, total: 51, headerFailed: true })).toBe(
+			"50 of 51 samples match"
+		);
+	});
+
+	test("a header with no graph to count keeps the absence note", () => {
+		expect(lifeBarGraphNote({ status: "absent" })).toContain("absent");
+		expect(lifeBarGraphNote({ status: "empty" })).toBe(lifeBarGraphNote({ status: "absent" }));
 	});
 });
 
@@ -99,5 +111,25 @@ describe("incompleteness note", () => {
 		expect(note).toContain("play ended early");
 		expect(note).toContain(`${(480).toLocaleString()} of ${(1544).toLocaleString()} objects judged`);
 		expect(note).toContain("expected, not verdicts");
+	});
+});
+
+describe("the header's own fail record", () => {
+	test("the header's three states each get their own sentence", () => {
+		const failed = headerFailNote({ status: "compared", matched: 51, total: 51, headerFailed: true });
+		const survived = headerFailNote({
+			status: "compared",
+			matched: 51,
+			total: 51,
+			headerFailed: false
+		});
+		const silent = headerFailNote({ status: "absent" });
+		expect(failed).toContain("recorded a fail");
+		expect(survived).toContain("recorded no fail");
+		expect(silent).toContain("no life bar graph");
+		expect(new Set([failed, survived, silent]).size).toBe(3);
+		// an empty graph and no report at all say the same nothing
+		expect(headerFailNote({ status: "empty" })).toBe(silent);
+		expect(headerFailNote(null)).toBe(silent);
 	});
 });

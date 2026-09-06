@@ -2,7 +2,7 @@
 // formatting, and the cross-check sentence. the analysis panel is the thin
 // shell over these
 
-import type { Incompleteness, IntegrityReport, IntegrityRow } from "./scene-types";
+import type { Incompleteness, IntegrityReport, IntegrityRow, LifeBarGraphReport } from "./scene-types";
 
 const ROW_LABELS: Record<string, string> = {
 	count300: "300s",
@@ -59,8 +59,30 @@ export function rowVerdict(row: IntegrityRow, incompleteness: Incompleteness | n
 	return incompleteness !== null ? "expected" : "differs";
 }
 
-export function lifeBarNote(present: boolean): string {
-	return present ? "life bar present" : "life bar absent — common in downloaded replays";
+/** the integrity section's life bar row. a compared graph reads as a count of
+ * matched samples over the header's own total — never a verdict, since a
+ * genuine play can land one short — and the other two states keep the
+ * present-or-absent note's own wording: neither carries a graph to count */
+export function lifeBarGraphNote(report: LifeBarGraphReport): string {
+	if (report.status !== "compared") return "life bar absent — common in downloaded replays";
+	return `${report.matched.toLocaleString()} of ${report.total.toLocaleString()} samples match`;
+}
+
+/** whether the loaded file's own header agrees about the fail, for the hp
+ * section to print beside the fail point this document derives.
+ *
+ * three states, and only the compared one can answer: a header graph ending
+ * in `0` is stable's own record of a fail, one that does not is its record of
+ * a play that survived, and a header carrying no graph says neither. it lives
+ * here beside the note above because both read the same report of the same
+ * loaded file, and neither reads the HP curve at all */
+export function headerFailNote(report: LifeBarGraphReport | null): string {
+	if (report === null || report.status !== "compared") {
+		return "the loaded file carries no life bar graph, so its header says nothing either way";
+	}
+	return report.headerFailed
+		? "the loaded file's life bar graph ends at zero — stable recorded a fail"
+		: "the loaded file's life bar graph does not end at zero — stable recorded no fail";
 }
 
 /** the play-ended-early annotation: the header counts only the objects
