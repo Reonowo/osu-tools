@@ -10,6 +10,7 @@ import type {
 	EditOp,
 	FrameChanges,
 	FrameDto,
+	HpCurve,
 	IpcError,
 	LoadedScene,
 	RecentReplay,
@@ -190,6 +191,54 @@ function moveDelta(revision: number, index: number, frame: FrameDto, label: stri
 		simulation: null
 	};
 }
+
+describe("the HP curve on a landed edit", () => {
+	/** the scene's own simulation carrying a chosen HP curve */
+	function simulationWith(hpCurve: HpCurve) {
+		const base = testScene().simulation;
+		if (base.status !== "authoritative") throw new Error("the test scene is authoritative");
+		return { ...base, hpCurve };
+	}
+
+	test("an edit that fails the play makes the fail point appear, and undo removes it", async () => {
+		const clean: HpCurve = [
+			[0, 1],
+			[1000, 0.6]
+		];
+		const failed: HpCurve = [
+			[0, 1],
+			[700, 0],
+			[1000, 0]
+		];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async () => testScene({ simulation: simulationWith(clean) }),
+				applyEdit: async () => ({
+					...moveDelta(1, 1, { time: 16, x: 9.5, y: 0.5, buttons: 0 }, "move"),
+					simulation: simulationWith(failed)
+				}),
+				undo: async () => ({
+					...moveDelta(2, 1, { time: 16, x: 0, y: 0, buttons: 0 }, "move"),
+					canUndo: false,
+					history: { labels: [], cursor: 0 },
+					simulation: simulationWith(clean)
+				})
+			})
+		);
+		await store.getState().openReplay("C:\r.osr");
+		expect(store.getState().derived!.hp.failPoint).toBeNull();
+		expect(store.getState().derived!.hp.lowest).toEqual({ time: 1000, fraction: 0.6 });
+
+		await store.getState().commitEdit({
+			label: "move",
+			payload: { kind: "ops", ops: [{ kind: "moveFrames", moves: [{ index: 1, x: 9.5, y: 0.5 }] }] }
+		});
+		expect(store.getState().derived!.hp.failPoint).toBe(700);
+
+		await store.getState().undoEdit();
+		expect(store.getState().derived!.hp.failPoint).toBeNull();
+	});
+});
 
 describe("load flow", () => {
 	test("openReplay success installs scene + derived and bumps sceneId", async () => {
@@ -1105,7 +1154,8 @@ describe("timeline settings", () => {
 			hitWindowBands: true,
 			tethers: true,
 			nestedMarks: true,
-			severityTicks: true
+			severityTicks: true,
+			hpCurve: true
 		});
 	});
 
@@ -1864,7 +1914,7 @@ describe("editor slice and edit queue", () => {
 		const integrity = {
 			rows: [{ field: "count300", header: 1, simulated: 1, match: true }],
 			crossCheck: { sections: 1, gekiKatsu: 1, sectionsWithoutBurst: 0, countMiss: 0, count50: 0 },
-			lifeBarPresent: false
+			lifeBarGraph: { status: "absent" as const }
 		};
 		const store = createViewerStore(
 			deps({

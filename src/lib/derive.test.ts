@@ -1,9 +1,61 @@
 import { describe, expect, test } from "bun:test";
 import { testScene } from "../test/scene";
-import type { Grade, JudgementEventDto, LoadedScene, RenderNested, RenderObject } from "./scene-types";
+import type { Grade, HpCurve, JudgementEventDto, LoadedScene, RenderNested, RenderObject } from "./scene-types";
 import { deriveScene, dropSummary, type ObjectLaneEntry } from "./derive";
 
 describe("deriveScene", () => {
+	describe("hp", () => {
+		/** the scene's own simulation carrying a chosen HP curve */
+		function withCurve(hpCurve: HpCurve): LoadedScene {
+			const base = testScene();
+			if (base.simulation.status !== "authoritative") throw new Error("the test scene is authoritative");
+			return testScene({ simulation: { ...base.simulation, hpCurve } });
+		}
+
+		test("a scene with no authoritative simulation has no curve at all", () => {
+			const d = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+			expect(d.hp).toEqual({ curve: [], lowest: null, failPoint: null });
+		});
+
+		test("an empty curve reports neither a lowest point nor a fail point", () => {
+			const d = deriveScene(withCurve([]));
+			expect(d.hp).toEqual({ curve: [], lowest: null, failPoint: null });
+		});
+
+		test("a clean play reports its lowest point and no fail point", () => {
+			const d = deriveScene(
+				withCurve([
+					[0, 1],
+					[1000, 0.4],
+					[2000, 0.8]
+				])
+			);
+			expect(d.hp.lowest).toEqual({ time: 1000, fraction: 0.4 });
+			expect(d.hp.failPoint).toBeNull();
+		});
+
+		test("a play reaching zero twice keeps the first zero as its fail point", () => {
+			const d = deriveScene(
+				withCurve([
+					[0, 1],
+					[500, 0],
+					[900, 0.7],
+					[1400, 0],
+					[1800, 0.3]
+				])
+			);
+			expect(d.hp.failPoint).toBe(500);
+		});
+
+		test("the curve rides straight from the scene, never re-derived here", () => {
+			const curve: HpCurve = [
+				[0, 1],
+				[10, 0.5]
+			];
+			expect(deriveScene(withCurve(curve)).hp.curve).toEqual(curve);
+		});
+	});
+
 	test("bounds cover lead-in, frames, preempt, and fade-out tails", () => {
 		const d = deriveScene(testScene());
 		// min(0, -leadIn, firstFrame, firstAppear = 1000 - 600)
@@ -27,6 +79,7 @@ describe("deriveScene", () => {
 				simulation: {
 					...scene.simulation,
 					status: "authoritative",
+					hpCurve: [],
 					events: [
 						{
 							time: 1400,
@@ -54,6 +107,7 @@ describe("deriveScene", () => {
 				simulation: {
 					...scene.simulation,
 					status: "authoritative",
+					hpCurve: [],
 					events: [
 						{
 							time: 1180,
@@ -150,6 +204,7 @@ function laneScene(objects: RenderObject[], events: JudgementEventDto[], frames:
 		renderPlan: { ...base.renderPlan, objects },
 		simulation: {
 			status: "authoritative",
+			hpCurve: [],
 			events,
 			totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0 }
 		}

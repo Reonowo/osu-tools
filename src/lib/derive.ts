@@ -5,8 +5,17 @@ import { HIT_FADE_OUT_TIME } from "../engine/game-constants";
 import type { PhysicalKey } from "../engine/buttons";
 import { buttonEdges, pressEdges, type ButtonEdges, type Press } from "../engine/interpolation";
 import { analyseScene, judgedTime, type ReplayAnalysis } from "./analysis";
+import { hpExtremes, type HpExtremes } from "./hp";
 import { severityTargets, type SeverityTargets, type SeverityTick } from "./judgement-nav";
-import type { Grade, JudgementEventDto, LoadedScene, RenderNested, RenderObject, RenderSlider } from "./scene-types";
+import type {
+	Grade,
+	HpCurve,
+	JudgementEventDto,
+	LoadedScene,
+	RenderNested,
+	RenderObject,
+	RenderSlider
+} from "./scene-types";
 
 /** the tether: the bond from an object to its judging press. exists exactly
  * where a hit error exists (analysis.ts's judgedTime, the shared predicate),
@@ -79,10 +88,23 @@ export interface DerivedScene {
 	 * edit for free: fix a miss, the engine re-simulates, this walk runs again
 	 * and the target is gone with no invalidation logic anywhere */
 	severityTargets: SeverityTargets;
+	/** the play's HP: the engine's curve and the two readings taken off it.
+	 * derived here rather than by the strip or the panel so both read one
+	 * answer and both re-derive on a landed edit for free */
+	hp: DerivedHp;
 	/** hit-timing and cursor statistics for the analysis panel */
 	analysis: ReplayAnalysis;
 	/** the replay panel's numbers, simulated-primary with header references */
 	stats: ReplayStats;
+}
+
+/** the HP curve and what the strip's fail mark and the panel's hp section
+ * read off it. the resampling to pixel columns deliberately does NOT happen
+ * here — it needs the strip's observed width, which is a render-time fact */
+export interface DerivedHp extends HpExtremes {
+	/** empty for a scene with no authoritative simulation, and for one whose
+	 * drain-rate search never settled */
+	curve: HpCurve;
 }
 
 /** the letter ranks, distinct from scene-types' judgement Grade */
@@ -247,6 +269,19 @@ export function dropSummary(object: RenderObject, entry: ObjectLaneEntry): strin
 	return `dropped ${parts.join(" + ")}`;
 }
 
+/** the scene's HP curve with its lowest point and fail point. gated on an
+ * authoritative simulation exactly as combo and accuracy are: an unsimulated
+ * or beatmap-mismatched play has no HP to show, and the wire already ships an
+ * empty curve for a drain search that never settled.
+ *
+ * a lazer-native play IS authoritative here, exactly as it is for combo and
+ * accuracy — only the integrity report is version-gated (`load.rs`) — so it
+ * carries an HP curve like it carries a combo */
+function derivedHp(scene: LoadedScene): DerivedHp {
+	const curve = scene.simulation.status === "authoritative" ? scene.simulation.hpCurve : [];
+	return { curve, ...hpExtremes(curve) };
+}
+
 export function deriveScene(scene: LoadedScene): DerivedScene {
 	const objects = scene.renderPlan.objects;
 	const firstAppear = objects.length > 0 ? objects[0].startTime - objects[0].preempt : 0;
@@ -375,6 +410,7 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		objectLane,
 		severityTicks,
 		severityTargets: severityTargets(severityTicks, objects),
+		hp: derivedHp(scene),
 		analysis: analyseScene(scene, presses),
 		stats: replayStats(scene)
 	};
