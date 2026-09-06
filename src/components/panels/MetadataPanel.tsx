@@ -40,6 +40,11 @@ function toLocalInput(unixMs: number): string {
 export function MetadataPanel() {
 	const scene = useViewerStore((s) => s.scene);
 	const commitEdit = useViewerStore((s) => s.commitEdit);
+	// the life bar row is the one field whose fate depends on WHICH export
+	// this document would take: regenerated once frames are edited, carried
+	// from the source otherwise. every other row here is a value, so only
+	// this one has to read the dirty split
+	const framesDirty = useViewerStore((s) => s.editor?.framesDirty ?? false);
 
 	// the epoch is in both draft-sync deps so a replay swap resets the drafts
 	// even when the new scene renders the identical value
@@ -145,14 +150,14 @@ export function MetadataPanel() {
 						<LockedRow label="max combo" value={`${replay.maxCombo}x`} />
 						<LockedRow label="perfect" value={replay.perfect ? "yes" : "no"} />
 						<LockedRow label="total score" value={replay.totalScore.toLocaleString()} />
-						<LockedRow label="life bar graph" value="written empty" warning />
+						<LockedRow label="life bar graph" value={framesDirty ? "regenerated" : "carried over"} />
 					</div>
 				</div>
 
 				<p className="text-[10.5px] leading-[1.55] text-[#8a8a93]">
 					these fields are derived from the simulated judgement timeline and regenerate on export; only the
-					player name and timestamp above are directly editable. an HP-drain port is still missing, so the
-					life bar is written empty rather than carried over.
+					player name and timestamp above are directly editable. a frame-edited export regenerates the life
+					bar graph from the re-simulated play; a metadata-only one carries the source's own over untouched.
 				</p>
 			</div>
 		</>
