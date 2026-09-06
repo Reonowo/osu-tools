@@ -101,12 +101,14 @@ export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]
 		"overlays.cursorPath",
 		"overlays.hideCursor",
 		"overlays.keyOverlay",
+		"overlays.hpBar",
 		"overlays.displayLength",
 		"overlays.playfieldGrid",
 		"timeline.hitWindowBands",
 		"timeline.tethers",
 		"timeline.nestedMarks",
-		"timeline.severityTicks"
+		"timeline.severityTicks",
+		"timeline.hpCurve"
 	],
 	// `skin` covers no per-key pref for the same reason `general` does not:
 	// the selection is one discriminated locator behind a bespoke picker, not a

@@ -36,7 +36,17 @@ export const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string; descr
 		label: "hide gameplay cursor",
 		description: "hides the cursor and its trail so the path and markers read clearly on their own"
 	},
-	{ key: "keyOverlay", label: "show key overlay", description: "the K1/K2/M1/M2 press counters beside the playfield" }
+	{
+		key: "keyOverlay",
+		label: "show key overlay",
+		description: "the K1/K2/M1/M2 press counters beside the playfield"
+	},
+	{
+		key: "hpBar",
+		label: "show HP bar",
+		description:
+			"the play's HP while it plays, drawn at the playfield's top-left in watch mode — the app's own bar, never a skin's"
+	}
 ];
 
 // mirrors settings.rs TimelinePrefs -- the timeline dock's per-layer
@@ -63,6 +73,11 @@ export const TIMELINE_TOGGLES: { key: keyof TimelineSettings; label: string; des
 		key: "severityTicks",
 		label: "show severity ticks",
 		description: "the miss/meh/ok marks on the whole-replay overview strip, taller meaning worse"
+	},
+	{
+		key: "hpCurve",
+		label: "show HP curve",
+		description: "the play's HP under the overview strip, with a mark where stable would have failed the play"
 	}
 ];
 
