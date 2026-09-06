@@ -24,8 +24,15 @@ describe("exportPathKind", () => {
 		);
 		expect(copies.size).toBe(3);
 		expect(expectationCopy("carried")).toContain("carried byte-for-byte");
+		// decision 1: a carried export keeps the source's own life bar
+		// graph rather than stamping the download-shaped empty tell
+		expect(expectationCopy("carried")).toContain("life bar graph carried over");
+		expect(expectationCopy("carried")).not.toContain("written empty");
 		expect(expectationCopy("passthrough")).toContain("byte-identically");
 		expect(expectationCopy("regenerating")).toContain("regenerated");
+		// the life bar is regenerated on this path now, not written empty
+		expect(expectationCopy("regenerating")).toContain("life bar graph included");
+		expect(expectationCopy("regenerating")).not.toContain("written empty");
 	});
 
 	test("an incomplete play's regenerating copy states the honest-by-construction behaviour", () => {
@@ -72,18 +79,21 @@ describe("overwrite flow", () => {
 });
 
 describe("post-export summary", () => {
+	const regenerated = {
+		count300: 1000,
+		count100: 12,
+		count50: 3,
+		countGeki: 150,
+		countKatsu: 9,
+		countMiss: 2,
+		maxCombo: 1204,
+		perfect: false,
+		totalScore: 31415926,
+		lifeBarConverged: true
+	};
+
 	test("lists every regenerated value plus the two dirty-export constants", () => {
-		const rows = regeneratedSummaryRows({
-			count300: 1000,
-			count100: 12,
-			count50: 3,
-			countGeki: 150,
-			countKatsu: 9,
-			countMiss: 2,
-			maxCombo: 1204,
-			perfect: false,
-			totalScore: 31415926
-		});
+		const rows = regeneratedSummaryRows(regenerated);
 		expect(rows.map((r) => r.label)).toEqual([
 			"300s",
 			"100s",
@@ -101,7 +111,14 @@ describe("post-export summary", () => {
 		);
 		expect(rows.find((r) => r.label === "perfect")!.value).toBe("no");
 		expect(rows.find((r) => r.label === "total score")!.value).toBe((31415926).toLocaleString());
-		expect(rows.find((r) => r.label === "life bar")!.value).toBe("written empty");
+		expect(rows.find((r) => r.label === "life bar")!.value).toBe("regenerated");
+	});
+
+	test("the life bar row says when the drain search did not settle", () => {
+		// the graph is written either way -- an unsettled search is a caveat
+		// on the numbers behind it, not a missing field
+		const rows = regeneratedSummaryRows({ ...regenerated, lifeBarConverged: false });
+		expect(rows.find((r) => r.label === "life bar")!.value).toBe("regenerated (drain search did not converge)");
 	});
 
 	test("passthrough and carried get their own outcome copy", () => {

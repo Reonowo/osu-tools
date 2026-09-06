@@ -22,13 +22,13 @@ export function expectationCopy(kind: ExportPathKind, incomplete = false): strin
 	switch (kind) {
 		case "regenerating": {
 			const base =
-				"frames were edited: every derived header field is regenerated from the re-simulated timeline, the life bar is written empty, and the replay hash is recomputed";
+				"frames were edited: every derived header field is regenerated from the re-simulated timeline, the life bar graph included, and the replay hash is recomputed";
 			const endedEarly =
 				". this play ended early, so the regenerated fields describe the exported frames simulated over the whole map — every object past the end of the frames counts as a miss";
 			return incomplete ? base + endedEarly : base;
 		}
 		case "carried":
-			return "only metadata changed: the frame payload is carried byte-for-byte under the edited header, with the replay hash recomputed and the life bar written empty";
+			return "only metadata changed: the frame payload is carried byte-for-byte under the edited header, with the replay hash recomputed and the source's own life bar graph carried over";
 		case "passthrough":
 			return "no edits: the original file is re-emitted byte-identically, unknown trailing data included";
 	}
@@ -84,7 +84,12 @@ export function regeneratedSummaryRows(fields: RegeneratedFields): { label: stri
 		{ label: "max combo", value: fields.maxCombo.toLocaleString() },
 		{ label: "perfect", value: fields.perfect ? "yes" : "no" },
 		{ label: "total score", value: fields.totalScore.toLocaleString() },
-		{ label: "life bar", value: "written empty" },
+		{
+			label: "life bar",
+			// the graph is written either way -- the search not settling is a
+			// caveat on the numbers behind it, not a missing field
+			value: fields.lifeBarConverged ? "regenerated" : "regenerated (drain search did not converge)"
+		},
 		{ label: "replay hash", value: "recomputed" }
 	];
 }

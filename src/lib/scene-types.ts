@@ -140,6 +140,10 @@ export interface RegeneratedFields {
 	maxCombo: number;
 	perfect: boolean;
 	totalScore: number;
+	/** whether the drain-rate search behind the regenerated life bar graph
+	 * settled. the graph is written either way; this is what lets the summary
+	 * say so instead of claiming more than it knows */
+	lifeBarConverged: boolean;
 }
 
 export type FrameChanges =
