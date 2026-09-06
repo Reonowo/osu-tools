@@ -3077,8 +3077,9 @@ Name: Audible
         assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
         // "i only changed the player name" is literally true of the bytes
         assert_eq!(out.compressed_payload, source.compressed_payload);
-        // and the dirty-header rules still applied
-        assert_eq!(out.header.life_graph.as_deref(), Some(""));
+        // and the dirty-header rules still applied: the hash is recomputed,
+        // while the life bar graph rides along exactly as the source held it
+        assert_eq!(out.header.life_graph, source.header.life_graph);
         assert_eq!(
             out.header.replay_md5,
             Some(engine::score::replay_hash("renamed", out.header.timestamp_ticks).unwrap())
@@ -3118,7 +3119,6 @@ Name: Audible
         assert_eq!(out.header.max_combo, reported.max_combo);
         assert_eq!(out.header.perfect, reported.perfect);
         assert_eq!(out.header.total_score, reported.total_score);
-        assert_eq!(out.header.life_graph.as_deref(), Some(""));
 
         // the self-consistency property: decode the exported file, simulate
         // it from scratch, and the header must equal the fresh derivation
@@ -3133,6 +3133,11 @@ Name: Audible
         )
         .unwrap();
         let fresh = engine::score::DerivedFields::narrow(&wide).unwrap();
+        // the life bar graph is part of the same self-consistency property:
+        // re-simulating the exported file reproduces the header's own graph
+        assert_eq!(out.header.life_graph.as_deref(), Some(fresh.life_bar.as_str()));
+        assert!(!fresh.life_bar.is_empty(), "this play judges objects, so it samples");
+        assert!(reported.life_bar_converged);
         assert_eq!(out.header.count_300, fresh.count_300);
         assert_eq!(out.header.count_100, fresh.count_100);
         assert_eq!(out.header.count_50, fresh.count_50);
@@ -3142,6 +3147,48 @@ Name: Audible
         assert_eq!(out.header.max_combo, fresh.max_combo);
         assert_eq!(out.header.perfect, fresh.perfect);
         assert_eq!(out.header.total_score, fresh.total_score);
+    }
+
+    #[test]
+    fn a_regenerated_life_bar_reads_back_as_present_when_the_export_is_reopened() {
+        // the round trip the export dialog and the analysis panel describe
+        // from opposite ends: a frame edit exports a regenerated graph, and
+        // re-opening that file reports the life bar as PRESENT -- where the
+        // old empty write reproduced exactly the download-shaped tell
+        // `integrity.ts`'s note is worded for
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+        assert!(
+            !scene.integrity.as_ref().unwrap().life_bar_present,
+            "the synthetic source carries no graph, so the report starts absent"
+        );
+
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![move_op(5, 200.0, 150.0)],
+            "move".into(),
+        ))
+        .unwrap();
+
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.unwrap().life_bar_converged);
+
+        let reopened = tauri::async_runtime::block_on(load_replay_with_beatmap(
+            app.handle().clone(),
+            app.state(),
+            dest.display().to_string(),
+            dir.path().join("map.osu").display().to_string(),
+            false,
+        ))
+        .unwrap();
+        assert!(
+            reopened.integrity.as_ref().unwrap().life_bar_present,
+            "the regenerated graph reads back as a present life bar"
+        );
     }
 
     #[test]
@@ -3169,7 +3216,11 @@ Name: Audible
         let bytes = std::fs::read(&dest).unwrap();
         assert_ne!(bytes, source);
         let out = engine::formats::osr::decode_osr(&bytes).unwrap();
-        assert_eq!(out.header.life_graph.as_deref(), Some(""));
+        // a marker-dirty document regenerates like any frame-dirty one, so
+        // the graph is written rather than emptied or carried
+        let graph = out.header.life_graph.as_deref().expect("the graph is written");
+        assert!(graph.ends_with(','), "stable's trailing comma: {graph}");
+        assert!(graph.contains('|'), "time|value pairs: {graph}");
         assert_eq!(out.header.player_name.as_deref(), Some("test"));
     }
 
@@ -3268,6 +3319,18 @@ Name: Audible
             total_score: 0,
             sections: 1,
             sections_without_burst: 0,
+            health: engine::score::HealthCurve {
+                search: engine::score::DrainRateSearch {
+                    rate: 0.05,
+                    normal_multiplier: 1.0,
+                    combo_end_multiplier: 1.0,
+                    hp_after_perfect_play: Vec::new(),
+                    max_combo: 0,
+                    iterations: 0,
+                    converged: true,
+                },
+                samples: Vec::new(),
+            },
         })
         .unwrap_err();
         let mapped = IpcError::ExportOverflow {

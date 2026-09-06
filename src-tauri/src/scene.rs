@@ -252,6 +252,10 @@ pub struct RegeneratedDto {
     pub max_combo: u16,
     pub perfect: bool,
     pub total_score: u32,
+    /// whether the drain-rate search behind the regenerated life bar graph
+    /// settled. the graph is written either way; this is what lets the
+    /// export summary say so rather than claim more than it knows
+    pub life_bar_converged: bool,
 }
 
 impl From<&engine::score::DerivedFields> for RegeneratedDto {
@@ -266,6 +270,7 @@ impl From<&engine::score::DerivedFields> for RegeneratedDto {
             max_combo: fields.max_combo,
             perfect: fields.perfect,
             total_score: fields.total_score,
+            life_bar_converged: fields.life_bar_converged,
         }
     }
 }
@@ -647,6 +652,18 @@ mod tests {
             total_score: 300,
             sections: 105,
             sections_without_burst: 2,
+            health: engine::score::HealthCurve {
+                search: engine::score::DrainRateSearch {
+                    rate: 0.03,
+                    normal_multiplier: 1.0,
+                    combo_end_multiplier: 1.0,
+                    hp_after_perfect_play: vec![200.0],
+                    max_combo: 1,
+                    iterations: 4,
+                    converged: true,
+                },
+                samples: vec![engine::score::LifeBarSample { time: 0.0, value: 1.0 }],
+            },
         };
         let report = IntegrityDto::compare(&header, &derived);
         let v = serde_json::to_value(&report).unwrap();
@@ -713,6 +730,7 @@ mod tests {
                 max_combo: 250,
                 perfect: false,
                 total_score: 1_234_567,
+                life_bar_converged: true,
             }),
         };
         let v = serde_json::to_value(&result).unwrap();
@@ -737,6 +755,7 @@ mod tests {
                 "maxCombo",
                 "perfect",
                 "totalScore",
+                "lifeBarConverged",
             ]
             .into_iter()
             .collect()
