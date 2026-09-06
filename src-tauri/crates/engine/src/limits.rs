@@ -1,8 +1,11 @@
 //! hard caps applied at format boundaries. every breach surfaces as
-//! `EngineError::ResourceLimit` carrying the constant's name. values are set
-//! generously above anything observed in real maps, aspire-tier included;
-//! each constant lands alongside the module that enforces it and gets a
-//! boundary test (accept at the limit, error just past it).
+//! `EngineError::ResourceLimit` carrying the constant's name -- with one
+//! deliberate exception, [`MAX_HEALTH_DRAIN_SEARCH_ITERATIONS`], whose
+//! breach is a defined answer reported through the search's own result
+//! rather than an error (the row below says why). values are set generously
+//! above anything observed in real maps, aspire-tier included; each constant
+//! lands alongside the module that enforces it and gets a boundary test
+//! (accept at the limit, error just past it).
 //!
 //! | constant | value | what it guards | boundary test(s) |
 //! |---|---|---|---|
@@ -25,6 +28,8 @@
 //! | [`MAX_UNDO_DEPTH`] | 1,000 | undo history entries retained per `replay::document::ReplayDocument`; the oldest entry evicts at the cap, and an eviction sets a sticky per-kind dirty flag so a diverged document can never read back as pristine | `replay::document::tests::undo_depth_cap_evicts_the_oldest_and_dirtiness_sticks` |
 //! | [`MAX_UNDO_RETAINED_MEMBERS`] | 8,000,000 (= 2 × [`MAX_REPLAY_FRAMES`]) | the member total retained across the undo history's entries, bounding memory where [`MAX_UNDO_DEPTH`] alone cannot: a whole-stream batch or a restore snapshot weighs up to [`MAX_REPLAY_FRAMES`] members on its own, so counting entries admits gigabytes; oldest entries evict past the budget with the same sticky-flag latch, and the entry just pushed never evicts so one over-budget step still lands | `replay::document::tests::undo_history_evicts_by_retained_members_too` and `...::the_newest_entry_survives_a_budget_it_alone_exceeds` |
 //! | [`MAX_SIMULATION_SWEEP_STEPS`] | 1,000,000,000 | the total inner-loop steps one `simulation::simulate` run may spend across its per-instant walks: press receptor + note-lock walks, the slider tracking sweep, the drain's per-slider scan, and the spinner rotation sweep. per-instant cost is proportional to the born, unresolved span, which lazer pays too -- but lazer's update count is human-bounded while this one is file-bounded ([`MAX_REPLAY_FRAMES`] admits millions of crafted instants over [`MAX_HIT_OBJECTS`] simultaneous objects, products in the trillions). `simulate` passes the constant into the budget-parameterized runner and the walks charge a shared counter, checked after each frame entry and deadline group so the overshoot is bounded by one instant's walks; like [`MAX_SLIDER_PATH_VERTICES`], tests supply a tighter budget through the parameterized entry point | `simulation::tests::sweep_step_budget_boundary` |
+//! | [`MAX_SPINNER_SCORING_INCREMENTS`] | 4,000,000 (= [`MAX_REPLAY_FRAMES`]) | the total per-half-turn spinner scoring records one `simulation::simulate` run may retain across every spinner. stable's disc counts at most one half turn per frame per spinner, so a single spinner's records are bounded by the frame count on their own -- but a crafted map can overlap arbitrarily many spinners, and the product of frames and simultaneously-turning discs is bounded only by [`MAX_SIMULATION_SWEEP_STEPS`], which admits hundreds of millions of 16-byte records. an out-of-memory abort is worse than a panic (it cannot be caught at all), so the retention gets its own cap rather than riding on the step budget. real content sits orders of magnitude below: osu!standard never overlaps spinners, so a real replay's total is its own frame count at worst | `simulation::spinner::tests::spinner_increment_budget_boundary` |
+//! | [`MAX_HEALTH_DRAIN_SEARCH_ITERATIONS`] | 1,000 | passes of stable's map-load drain-rate search in `score::health`. **the one deliberate exception to this table's "every breach is a `ResourceLimit` error" rule**: the search is not a format boundary and has no error channel to fail into -- it runs inside `derive_score`, whose product a load-time integrity report and an export both read, and a map whose search does not settle is not malformed input. so a trip follows lazer's own escape (`LegacyDrainingHealthProcessor` bails to zero drop when the multiplier runs away): zero passive drain, both multipliers reset to 1, every perfect-play HP at the 200 maximum that answer implies, and `converged: false` carried out to the export summary so the user is told the life bar was regenerated without a settled search. stable's own loop is unbounded; it converged in 3 to 65 passes across all 18 corpus fixtures, and convergence is geometric (every failure branch shrinks the rate by 4-6% or grows the gains by 1-3%), so the cap is ~15x the worst observed | `score::health::tests::search_iteration_cap_boundary` |
 //! | [`MAX_OSR_SERIALIZED_PAYLOAD_BYTES`] | 128 MiB | uncompressed frame text `formats::osr::serialize_actions` produces when `encode_osr` is asked to reserialize (as opposed to passing through the original verbatim compressed payload), checked incrementally as that text is written and before compression is attempted, so an oversized crafted file fails fast without first materialising the whole string or paying for a wasted lzma pass | `formats::osr::tests::reserialized_payload_size_cap_boundary` |
 //! | [`MAX_SLIDER_PATH_VERTICES`] | 2,000,000 | the piecewise-linear vertex count of a slider's path, enforced at two layers: per-segment inside `path::approximator` (every approximator function takes it as an explicit `max_vertices` parameter rather than reading the constant directly, so a segment alone can never exceed it) and cross-segment inside `path::slider_path::SliderPath`'s path calculation, which accumulates vertices across all of a slider's segments even when every individual segment stayed under budget on its own | `path::approximator::tests::slider_path_vertex_count_cap_boundary` exercises the per-segment layer; `tests/slider_path_fixtures.rs`'s `vertex_budget_surfaces_as_resource_limit` and `cross_segment_vertex_budget_boundary` exercise the cross-segment accumulation layer specifically (the latter proves the cap by a segment combination no single segment could trip on its own) |
 //! | [`MAX_BEZIER_SUBDIVISION_DEPTH`] | 256 | how deep `path::approximator`'s bezier/b-spline subdivision may recurse before a curve is declared non-convergent. this is the only work loop in the crate whose termination is not implied by an output-size cap: a curve that never flattens produces no vertices at all, so `MAX_SLIDER_PATH_VERTICES` never fires and the working stack, not the output, is what grows | `path::approximator::tests::bezier_subdivision_depth_cap_boundary` (exact accept-at-limit/reject-past-limit on a curve with an analytically known depth) and `...::bezier_tolerates_nan_and_infinite_coordinates_without_panicking` (the non-convergent curve family the cap exists for) |
@@ -273,6 +278,27 @@ pub const MAX_UNDO_RETAINED_MEMBERS: usize = 2 * MAX_REPLAY_FRAMES;
 /// one; the public `simulate` passes this constant
 pub const MAX_SIMULATION_SWEEP_STEPS: u64 = 1_000_000_000;
 
+/// bounds the per-half-turn spinner scoring records (`simulation::SpinnerIncrement`)
+/// one `simulation::simulate` run retains across every spinner on the map.
+///
+/// the timeline used to carry one `i64` per spinner; it now carries one
+/// 16-byte record per counted half turn, because the health fold needs each
+/// increment's frame time and emission position. stable's disc counts at
+/// most one half turn per frame per spinner, so ONE spinner's records are
+/// bounded by the frame count already -- but nothing stops a crafted `.osu`
+/// from overlapping hundreds of spinners, and the product of
+/// [`MAX_REPLAY_FRAMES`] frames with simultaneously-turning discs is bounded
+/// only by [`MAX_SIMULATION_SWEEP_STEPS`], which admits hundreds of millions
+/// of records. that is an allocation failure rather than a `ResourceLimit`,
+/// and an abort cannot be caught at all -- the same reasoning that gave
+/// [`MAX_BEZIER_SUBDIVISION_DEPTH`] its own cap.
+///
+/// the value is [`MAX_REPLAY_FRAMES`] because that is the physical ceiling
+/// for a map with one spinner turning at a time, which is every real
+/// osu!standard map. charged as records are pushed and checked beside the
+/// sweep budget, so the overshoot is bounded by one frame entry's spinners
+pub const MAX_SPINNER_SCORING_INCREMENTS: u64 = MAX_REPLAY_FRAMES as u64;
+
 /// bounds the uncompressed frame text `formats::osr::serialize_actions` produces
 /// when `encode_osr` is asked to reserialize (as opposed to passing through the
 /// original verbatim compressed payload). the two cursor coordinates are range-checked
@@ -293,6 +319,35 @@ pub const MAX_SIMULATION_SWEEP_STEPS: u64 = 1_000_000_000;
 /// action list, and measuring the finished string would mean allocating all of
 /// it (many GiB for a crafted list) purely to reject it
 pub const MAX_OSR_SERIALIZED_PAYLOAD_BYTES: u64 = 128 * 1024 * 1024;
+
+/// bounds the passes stable's map-load drain-rate search (`score::health`)
+/// may spend looking for a rate a perfect play survives. THE ONE CAP IN THIS
+/// MODULE WHOSE BREACH IS NOT AN ERROR: the search sits inside `derive_score`
+/// rather than at a format boundary, both of whose consumers (the load-time
+/// integrity report and a regenerating export) want an answer rather than a
+/// refusal, and a map whose search does not settle is not malformed input.
+/// the trip result is therefore fully defined and reported, never raised --
+/// lazer's own escape from the same runaway (`LegacyDrainingHealthProcessor`
+/// drops to zero drain when its multiplier reaches infinity): zero passive
+/// drain, both multipliers back at 1, the perfect-play HP vector filled with
+/// the 200 maximum that combination implies, and `converged: false` riding
+/// out through `DerivedScore` to the export summary's life bar row.
+///
+/// stable's own loop is unbounded. it converged in 3 to 65 passes across
+/// every corpus fixture, and the search is geometric by construction -- each
+/// failure branch either shrinks the rate by 4-6% or grows the gain
+/// multipliers by 1-3%, so a shrinking rate reaches "drains nothing" and
+/// passes -- which is why a cap ~15x the worst observed pass count is
+/// generous rather than tight. like `MAX_SIMULATION_SWEEP_STEPS`, the budget
+/// is a parameter of an internal runner so the boundary test can drive it
+/// with a small input; the public entry point passes this constant.
+///
+/// per-pass cost is bounded by caps that already exist: the object walk by
+/// [`MAX_HIT_OBJECTS`] and the per-object gain applications by
+/// [`MAX_TOTAL_SLIDER_NESTED_OBJECTS`] (which charges `stable_points`) plus
+/// `score::health`'s own budget on repeated spin gains, whose count comes
+/// from a spinner's duration and is the one axis no other cap bounds
+pub const MAX_HEALTH_DRAIN_SEARCH_ITERATIONS: u32 = 1_000;
 
 /// per-slider budget on the piecewise-linear vertices `path::approximator` produces.
 /// every approximator function takes this as an explicit `max_vertices` parameter rather
