@@ -482,6 +482,11 @@ pub struct OverlayPrefs {
     pub tint_idle_markers: bool,
     pub hide_cursor: bool,
     pub key_overlay: bool,
+    /// the watch HUD's HP bar. an overlay preference for where it belongs in
+    /// the settings dialog, beside the key overlay -- the bar itself is watch
+    /// HUD, not analysis chrome (`docs/adr/0008`), and off means the curve is
+    /// never evaluated at all
+    pub hp_bar: bool,
     /// ms of replay either side of `now` the analysis overlays cover
     pub display_length: f64,
     /// the playfield grid's spacing in osu!px, one of `GRID_SPACINGS`, `0`
@@ -499,6 +504,7 @@ impl Default for OverlayPrefs {
             tint_idle_markers: false,
             hide_cursor: false,
             key_overlay: true,
+            hp_bar: true,
             display_length: DISPLAY_LENGTH_DEFAULT,
             // off: a grid the user never asked for must not appear over their
             // replay
@@ -585,6 +591,10 @@ pub struct TimelinePrefs {
     pub tethers: bool,
     pub nested_marks: bool,
     pub severity_ticks: bool,
+    /// the overview strip's HP fill AND its fail-point mark together: the
+    /// mark says where the fill reached zero, so hiding one without the
+    /// other would leave a mark over nothing
+    pub hp_curve: bool,
 }
 
 impl Default for TimelinePrefs {
@@ -594,6 +604,7 @@ impl Default for TimelinePrefs {
             tethers: true,
             nested_marks: true,
             severity_ticks: true,
+            hp_curve: true,
         }
     }
 }
@@ -732,6 +743,7 @@ mod tests {
                 tint_idle_markers: true,
                 hide_cursor: true,
                 key_overlay: false,
+                hp_bar: false,
                 display_length: 1200.0,
                 playfield_grid: 16,
             },
@@ -753,6 +765,7 @@ mod tests {
                 tethers: true,
                 nested_marks: false,
                 severity_ticks: true,
+                hp_curve: false,
             },
             keybinds: keybinds([("selectTool", json!({ "hotkey": "К", "codes": ["KeyV"] }))]),
             skin: SkinLocator::Stable {
@@ -820,6 +833,7 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.volume, 100);
         assert!(settings.overlays.key_overlay, "the key overlay ships enabled");
+        assert!(settings.overlays.hp_bar, "the HP bar ships enabled");
         assert_eq!(settings.overlays.display_length, DISPLAY_LENGTH_DEFAULT);
         assert!(!settings.overlays.cursor_path);
         assert!(settings.editing.snap_to_lattice, "snapping ships enabled");
@@ -855,6 +869,7 @@ mod tests {
                 tethers: true,
                 nested_marks: true,
                 severity_ticks: true,
+                hp_curve: true,
             },
             "every timeline layer ships visible"
         );
@@ -895,6 +910,7 @@ mod tests {
                     "tintIdleMarkers": true,
                     "hideCursor": true,
                     "keyOverlay": false,
+                    "hpBar": false,
                     "displayLength": 1200.0,
                     "playfieldGrid": 16,
                 },
@@ -916,6 +932,7 @@ mod tests {
                     "tethers": true,
                     "nestedMarks": false,
                     "severityTicks": true,
+                    "hpCurve": false,
                 },
                 "keybinds": { "selectTool": [{ "hotkey": "К", "codes": ["KeyV"] }] },
                 // the discriminated locator: both the KIND of location and the
@@ -959,6 +976,7 @@ mod tests {
                     "tintIdleMarkers": false,
                     "hideCursor": false,
                     "keyOverlay": true,
+                    "hpBar": true,
                     "displayLength": 800.0,
                     "playfieldGrid": 0,
                 },
@@ -980,6 +998,7 @@ mod tests {
                     "tethers": true,
                     "nestedMarks": true,
                     "severityTicks": true,
+                    "hpCurve": true,
                 },
                 "keybinds": {},
                 // a fresh install draws the app's own look, and that look is a
