@@ -4,8 +4,10 @@
 //! payload + trailer passthrough; metadata-only dirty -> the frame payload
 //! carried verbatim under the edited header; frames dirty -> reserialize
 //! with caller-supplied derived fields overlaid. every dirty export --
-//! carried included -- recomputes the replay hash, writes the life bar
-//! empty, and strips the unparsed lazer trailer.
+//! carried included -- recomputes the replay hash and strips the unparsed
+//! lazer trailer; the life bar graph is ruled per path (carried verbatim on
+//! the metadata-only path, rewritten on the regenerating one), see
+//! [`ReplayDocument::export_with_derived`].
 //!
 //! derived header fields (hit counts, max combo, total score) are not
 //! editable here: the tauri layer regenerates them from the recomputed
@@ -471,11 +473,26 @@ impl ReplayDocument {
     ///   regenerated fields would describe a different play.
     ///
     /// every dirty export -- carried included -- recomputes the replay hash
-    /// from the (possibly edited) player name and timestamp, writes the life
-    /// bar empty (never a stale health graph), and strips the unparsed lazer
-    /// trailer per the final-state passthrough rule. a revert-all'd document
-    /// is content-equal to baseline but marker-dirty, and deliberately takes
-    /// this conservative dirty path rather than passthrough
+    /// from the (possibly edited) player name and timestamp and strips the
+    /// unparsed lazer trailer per the final-state passthrough rule. a
+    /// revert-all'd document is content-equal to baseline but marker-dirty,
+    /// and deliberately takes this conservative dirty path rather than
+    /// passthrough.
+    ///
+    /// the life bar graph is the one header field the two dirty paths rule
+    /// differently. the carried path leaves it exactly as decoded --
+    /// populated, present-empty or absent -- because the frames it describes
+    /// are byte-identical, so the source's own graph is still true of them;
+    /// writing it empty would stamp an ordinary metadata edit with the
+    /// download-shaped tell a stable-written replay never carries
+    /// (`.scratch/hp-drain-port/spec.md` decision 1, which re-rules the
+    /// earlier "life bar written empty on every dirty export"). the
+    /// regenerating path never carries it -- it describes frames that no
+    /// longer exist -- and takes the regenerated string from `derived`
+    /// instead, written by the same overlay as every other derived field.
+    /// there is no third path and no separate fallback: an empty string is
+    /// written only when it is what the source held or what the graph writer
+    /// produced from zero samples
     pub fn export_with_derived(&self, derived: Option<&DerivedFields>) -> Result<Vec<u8>> {
         if !self.dirty() {
             return encode_osr(
@@ -487,19 +504,19 @@ impl ReplayDocument {
             );
         }
 
-        // the dirty-header overlay shared by both dirty paths: recomputed
-        // hash (its inputs include the two editable metadata fields), empty
-        // life bar written as lazer writes it (present-empty string,
-        // legacyscoreencoder.cs:117/202-206)
+        // the dirty-header overlay shared by both dirty paths: the
+        // recomputed hash, whose inputs include the two editable metadata
+        // fields. the life bar graph is deliberately NOT here -- see the
+        // per-path rule in the doc comment above
         let mut header = self.file.header.clone();
         header.replay_md5 = Some(replay_hash(
             header.player_name.as_deref().unwrap_or(""),
             header.timestamp_ticks,
         )?);
-        header.life_graph = Some(String::new());
 
         if !self.frames_dirty() {
-            // carried: the retained compressed payload rides along verbatim
+            // carried: the retained compressed payload rides along verbatim,
+            // and the source's own life bar graph rides with it untouched
             let carried = OsrFile {
                 header,
                 actions: Vec::new(),
@@ -521,6 +538,8 @@ impl ReplayDocument {
                 "a frame-dirty export requires regenerated derived fields".into(),
             ));
         };
+        // the overlay writes the regenerated life bar graph along with
+        // every other derived field, so nothing here touches it
         derived.overlay_onto(&mut header);
 
         // rebuild the action list from the edited frames. deltas are
@@ -964,7 +983,19 @@ mod tests {
     /// the compressed payload), then decode back so verbatim export has real
     /// payload bytes to pass through
     fn canonical_roundtrip(version: u32, trailer: Vec<u8>) -> (Vec<u8>, OsrFile) {
-        let built = synthetic_file(version, trailer);
+        canonical_roundtrip_with_life_graph(version, trailer, None)
+    }
+
+    /// the same, with the header's life bar graph set to a caller-supplied
+    /// value -- the carried path's whole subject, whose three states
+    /// (populated, present-empty, absent) must survive an export untouched
+    fn canonical_roundtrip_with_life_graph(
+        version: u32,
+        trailer: Vec<u8>,
+        life_graph: Option<&str>,
+    ) -> (Vec<u8>, OsrFile) {
+        let mut built = synthetic_file(version, trailer);
+        built.header.life_graph = life_graph.map(str::to_owned);
         let bytes = encode_osr(
             &built,
             &EncodeOptions {
@@ -991,8 +1022,14 @@ mod tests {
             max_combo: 99,
             perfect: false,
             total_score: 123_456,
+            life_bar: REGENERATED_GRAPH.into(),
+            life_bar_converged: true,
         }
     }
+
+    /// stands in for whatever the health fold produced; export cares only
+    /// that the regenerating path writes exactly this string
+    const REGENERATED_GRAPH: &str = "1000|1,3200|0.86,";
 
     /// same header shape as `synthetic_file`, but with a caller-supplied action
     /// list -- used for cases that need actions synthetic_file's fixed list
@@ -1867,7 +1904,7 @@ mod tests {
     }
 
     #[test]
-    fn every_dirty_export_recomputes_the_hash_and_empties_the_life_bar() {
+    fn every_dirty_export_recomputes_the_hash() {
         // carried: hash covers the edited name and the untouched ticks
         let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
         let mut doc = ReplayDocument::new(decoded, 14);
@@ -1877,9 +1914,8 @@ mod tests {
             re.header.replay_md5.as_deref(),
             Some(crate::score::replay_hash("renamed", 638_712_000_000_000_000).unwrap().as_str())
         );
-        assert_eq!(re.header.life_graph.as_deref(), Some(""));
 
-        // regenerating: same overlay on the frame-dirty path
+        // regenerating: same recomputation on the frame-dirty path
         let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
         let mut doc = ReplayDocument::new(decoded, 14);
         doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
@@ -1888,7 +1924,46 @@ mod tests {
             re.header.replay_md5.as_deref(),
             Some(crate::score::replay_hash("someone", 638_712_000_000_000_000).unwrap().as_str())
         );
+    }
+
+    #[test]
+    fn a_carried_export_carries_a_populated_life_graph_verbatim() {
+        let graph = "0|1,2013|0.98,4096|0.86,";
+        let (_, decoded) = canonical_roundtrip_with_life_graph(20240101, Vec::new(), Some(graph));
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.set_player_name(Some("renamed".into()));
+        let re = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
+        assert_eq!(re.header.life_graph.as_deref(), Some(graph));
+    }
+
+    #[test]
+    fn a_carried_export_keeps_a_present_empty_life_graph_present_and_empty() {
+        let (_, decoded) = canonical_roundtrip_with_life_graph(20240101, Vec::new(), Some(""));
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.set_player_name(Some("renamed".into()));
+        let re = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
         assert_eq!(re.header.life_graph.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_carried_export_keeps_an_absent_life_graph_absent() {
+        let (_, decoded) = canonical_roundtrip_with_life_graph(20240101, Vec::new(), None);
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.set_player_name(Some("renamed".into()));
+        let re = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
+        assert_eq!(re.header.life_graph, None);
+    }
+
+    #[test]
+    fn a_regenerating_export_writes_the_regenerated_life_graph() {
+        // the frame-dirty path never carries the source graph -- it
+        // describes frames that no longer exist -- and writes the one the
+        // health fold produced for the frames it is about to encode
+        let (_, decoded) = canonical_roundtrip_with_life_graph(20240101, Vec::new(), Some("0|1,"));
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+        let re = decode_osr(&doc.export_with_derived(Some(&derived())).unwrap()).unwrap();
+        assert_eq!(re.header.life_graph.as_deref(), Some(REGENERATED_GRAPH));
     }
 
     #[test]
@@ -1943,6 +2018,8 @@ mod tests {
         doc.set_player_name(Some("renamed".into()));
         doc.revert_all().unwrap();
         assert!(doc.frames_dirty() && doc.metadata_dirty());
+        // a marker-dirty document is a regenerating export like any other:
+        // it writes the regenerated graph, never the source's
 
         // the marker-dirty document refuses a derived-free export like any
         // frame-dirty one
@@ -1953,7 +2030,7 @@ mod tests {
         let re = decode_osr(&exported).unwrap();
         // baseline content under a conservative dirty header
         assert_eq!(re.header.player_name.as_deref(), Some("someone"));
-        assert_eq!(re.header.life_graph.as_deref(), Some(""));
+        assert_eq!(re.header.life_graph.as_deref(), Some(REGENERATED_GRAPH));
         assert_eq!(re.actions.len(), 4);
     }
 }
