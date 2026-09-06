@@ -264,6 +264,9 @@ fn the_stable_spinner_tick_model_reaches_the_lazer_dumped_bonus_at_the_cap() {
         spinner_scoring: vec![engine::simulation::SpinnerScoring {
             object_index: 0,
             scoring_half_spins: i64::from(spinner.total_half_spins_possible),
+            // the scorev1 fold reads the total alone; the per-increment
+            // records exist for the health fold
+            increments: Vec::new(),
         }],
     };
     let map = decode_beatmap_path(&fixture_util::fixtures_dir().join("beatmaps/spinner-od0.osu")).unwrap();

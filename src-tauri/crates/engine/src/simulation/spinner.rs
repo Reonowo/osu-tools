@@ -39,7 +39,7 @@ use crate::beatmap::{ProcessedKind, ProcessedSpinner};
 use crate::replay::frames::ReplayFrame;
 use crate::replay::interpolation::cursor_state_at;
 use crate::simulation::score::JudgementKind;
-use crate::simulation::{Ctx, ObjectState};
+use crate::simulation::{Ctx, ObjectState, SpinnerIncrement};
 
 #[derive(Debug, Default)]
 pub(crate) struct SpinnerState {
@@ -88,6 +88,10 @@ pub(crate) struct StableSpinState {
     rotation_count_f: f32,
     last_rotation_count: i64,
     pub scoring_rotation_count: i64,
+    /// one entry per increment of `scoring_rotation_count`, recorded at the
+    /// frame that produced it -- see [`SpinnerIncrement`] for why the
+    /// emission position rides along with the time
+    pub increments: Vec<SpinnerIncrement>,
 }
 
 impl Default for StableSpinState {
@@ -102,6 +106,7 @@ impl Default for StableSpinState {
             rotation_count_f: 0.0,
             last_rotation_count: 0,
             scoring_rotation_count: 0,
+            increments: Vec::new(),
         }
     }
 }
@@ -282,16 +287,27 @@ pub(crate) fn process_stable_scoring_frame(ctx: &mut Ctx<'_>, frame_index: usize
             continue;
         }
         let (duration, position) = (obj.end_time - obj.start_time, obj.position);
+        // read before the state borrow: nothing between here and the step
+        // emits, so this is the index the NEXT emitted event will take
+        let emission_index = ctx.events.len();
         let state = match &mut ctx.states[index] {
             ObjectState::Spinner(s) => &mut s.stable,
             _ => unreachable!("spinner_indices only holds spinner objects"),
         };
-        stable_scoring_step(state, frame.pos, position, duration, time_diff, held);
+        if stable_scoring_step(state, frame.pos, position, duration, time_diff, held) {
+            state.increments.push(SpinnerIncrement { time, emission_index });
+            // retained memory, not walk time: charged separately from the
+            // sweep budget (limits::MAX_SPINNER_SCORING_INCREMENTS) and
+            // checked by the driver beside it
+            ctx.spinner_increments += 1;
+        }
     }
 }
 
 /// one frame of the stable disc: danser-go spinner.go processStable,
-/// NoMod path (no rate modification, no relax/spun-out branches)
+/// NoMod path (no rate modification, no relax/spun-out branches). returns
+/// whether the scoring half-spin counter incremented on this frame, which
+/// is what the caller records as a [`SpinnerIncrement`]
 fn stable_scoring_step(
     state: &mut StableSpinState,
     cursor: crate::math::Vec2,
@@ -299,7 +315,7 @@ fn stable_scoring_step(
     duration: f64,
     time_diff: f64,
     held: bool,
-) {
+) -> bool {
     // 0.00008 + max(0, (5000 - duration) / 1000 / 2000), rad/ms^2 -- short
     // spinners spin up faster
     let max_acceleration = 0.00008 + ((5000.0 - duration) / 1000.0 / 2000.0).max(0.0);
@@ -377,7 +393,9 @@ fn stable_scoring_step(
         // crosses two half-turn boundaries -- stable's own accounting
         state.scoring_rotation_count += 1;
         state.last_rotation_count = rotation_count;
+        return true;
     }
+    false
 }
 
 /// the last replay frame at or before `time`, with its held-button gate --
@@ -469,10 +487,13 @@ pub(crate) fn finalize(ctx: &mut Ctx<'_>, index: usize, time: f64) {
 #[cfg(test)]
 mod tests {
     use crate::beatmap::difficulty::HitGrade;
+    use crate::beatmap::{process_beatmap, ProcessedBeatmap};
+    use crate::formats::beatmap::{HitObject, HitObjectKind};
+    use crate::math::Vec2;
     use crate::replay::frames::Buttons;
     use crate::simulation::score::JudgementKind;
     use crate::simulation::simulate;
-    use crate::simulation::test_support::{frame, spinner_map, wrap};
+    use crate::simulation::test_support::{base_map, frame, spinner_map, wrap};
 
     // spinner_map(duration, od) builds a map whose only object is a spinner
     // starting at 1000. helper: circular frames around (256, 192) at radius
@@ -617,6 +638,168 @@ mod tests {
             timeline.events.last().unwrap().kind,
             JudgementKind::SpinnerFinal(HitGrade::Miss),
             "presentation's flushed fifth spin does not advance stable's disc (danser: Miss)"
+        );
+    }
+
+    /// a spinner at 1000 for `duration` (od 5, as `spinner_map`) plus the
+    /// caller's circles -- the shape the increment-ordering test needs: a
+    /// spinning disc with an object-level judgement landing on one of its
+    /// own frames
+    fn spinner_with_circles(duration: f64, circles: &[(f64, f32, f32)]) -> ProcessedBeatmap {
+        let mut hit_objects = vec![HitObject {
+            start_time: 1000.0,
+            pos: Vec2::ZERO,
+            new_combo: false,
+            combo_offset: 0,
+            samples: Vec::new(),
+            kind: HitObjectKind::Spinner { duration },
+        }];
+        hit_objects.extend(circles.iter().map(|&(t, x, y)| HitObject {
+            start_time: t,
+            pos: Vec2::new(x, y),
+            new_combo: false,
+            combo_offset: 0,
+            samples: Vec::new(),
+            kind: HitObjectKind::Circle,
+        }));
+        process_beatmap(&base_map(hit_objects)).unwrap()
+    }
+
+    #[test]
+    fn every_scoring_half_spin_is_recorded_with_its_time_and_emission_position() {
+        let beatmap = spinner_map(2000.0, 5.0);
+        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 20.0, 8, Buttons::LEFT_1))).unwrap();
+        let scoring = &timeline.spinner_scoring[0];
+        assert!(
+            scoring.scoring_half_spins > 1,
+            "the scenario must actually turn the disc"
+        );
+        assert_eq!(
+            scoring.increments.len() as i64,
+            scoring.scoring_half_spins,
+            "one record per counted half turn"
+        );
+
+        let object = &beatmap.objects[0];
+        let final_index = timeline
+            .events
+            .iter()
+            .position(|e| matches!(e.kind, JudgementKind::SpinnerFinal(_)))
+            .expect("the spinner resolves");
+        let mut previous: Option<super::SpinnerIncrement> = None;
+        for increment in &scoring.increments {
+            // stable's disc only turns strictly inside the window
+            assert!(
+                increment.time > object.start_time && increment.time < object.end_time,
+                "increment at {} outside the spinner window",
+                increment.time
+            );
+            assert!(
+                increment.emission_index <= final_index,
+                "the spinner's own final judgement bounds every one of its increments"
+            );
+            assert!(increment.emission_index <= timeline.events.len());
+            if let Some(previous) = previous {
+                assert!(increment.time >= previous.time, "times are non-decreasing");
+                assert!(
+                    increment.emission_index >= previous.emission_index,
+                    "emission positions are non-decreasing"
+                );
+            }
+            previous = Some(*increment);
+        }
+    }
+
+    #[test]
+    fn spinner_increment_budget_boundary() {
+        // the records are RETAINED memory, so they are charged separately
+        // from the walk-time sweep budget: one step can retain one record,
+        // which is what a map overlapping discs would buy them with
+        let beatmap = spinner_map(2000.0, 5.0);
+        let frames = wrap(spin_frames(1000.0, 20.0, 8, Buttons::LEFT_1));
+        let recorded = simulate(&beatmap, &frames).unwrap().spinner_scoring[0]
+            .increments
+            .len() as u64;
+        assert!(recorded > 1, "the scenario must turn the disc");
+
+        let at_limit =
+            crate::simulation::simulate_with_increment_budget(&beatmap, &frames, recorded).unwrap();
+        assert_eq!(at_limit.spinner_scoring[0].increments.len() as u64, recorded);
+
+        match crate::simulation::simulate_with_increment_budget(&beatmap, &frames, recorded - 1) {
+            Err(crate::error::EngineError::ResourceLimit {
+                cap: "MAX_SPINNER_SCORING_INCREMENTS",
+                ..
+            }) => {}
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_increment_and_a_same_millisecond_judgement_order_by_the_walk_not_the_clock() {
+        // the disc reads only the frames, so a spinner-only pass supplies
+        // the increment times both scenarios below build their circle around
+        let frames = spin_frames(1000.0, 20.0, 8, Buttons::LEFT_1);
+        let probe = simulate(&spinner_map(2000.0, 5.0), &wrap(frames.clone())).unwrap();
+        let increments = probe.spinner_scoring[0].increments.clone();
+        assert!(increments.len() >= 6, "need increments to pick a middle one from");
+        let target = increments[increments.len() / 2].time;
+        let spinning = frames
+            .iter()
+            .find(|f| f.time == target)
+            .copied()
+            .expect("increments fire at replay frame times");
+
+        // (a) clicks run BEFORE the normal walk: a circle judged by the same
+        // frame's click walk is emitted first, so the increment sits after it
+        let clicked = spinner_with_circles(2000.0, &[(target, spinning.pos.x, spinning.pos.y)]);
+        let mut with_press = frames.clone();
+        for f in &mut with_press {
+            if f.time == target {
+                f.buttons = Buttons::new(Buttons::LEFT_1 | Buttons::RIGHT_1);
+            }
+        }
+        let timeline = simulate(&clicked, &wrap(with_press)).unwrap();
+        let circle_index = timeline
+            .events
+            .iter()
+            .position(|e| e.object_index == 1)
+            .expect("the circle resolves");
+        let circle = &timeline.events[circle_index];
+        assert_eq!(circle.kind, JudgementKind::Circle(HitGrade::Great));
+        assert_eq!(circle.time, target, "the click lands on the increment's frame");
+        let increment = timeline.spinner_scoring[0]
+            .increments
+            .iter()
+            .find(|i| i.time == target)
+            .expect("the extra button changes nothing about the disc");
+        assert!(
+            increment.emission_index > circle_index,
+            "a circle clicked in that frame's click walk precedes the increment"
+        );
+
+        // (b) the post walk runs AFTER the normal walk: a circle timing out
+        // on the same frame is emitted last, so the increment sits before it.
+        // od 5's 50-window is 149.5 -> the timeout fires strictly past
+        // start + 150, which for start = target - 155 is first true at target
+        let timing_out = spinner_with_circles(2000.0, &[(target - 155.0, 20.0, 20.0)]);
+        let timeline = simulate(&timing_out, &wrap(frames.clone())).unwrap();
+        let miss_index = timeline
+            .events
+            .iter()
+            .position(|e| e.object_index == 1)
+            .expect("the circle resolves");
+        let miss = &timeline.events[miss_index];
+        assert_eq!(miss.kind, JudgementKind::Circle(HitGrade::Miss));
+        assert_eq!(miss.time, target, "the timeout lands on the increment's frame");
+        let increment = timeline.spinner_scoring[0]
+            .increments
+            .iter()
+            .find(|i| i.time == target)
+            .expect("the added circle changes nothing about the disc");
+        assert!(
+            increment.emission_index <= miss_index,
+            "a circle timing out in that frame's post walk follows the increment"
         );
     }
 

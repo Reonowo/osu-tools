@@ -81,15 +81,37 @@ pub struct HitTotals {
     pub max_combo: u32,
 }
 
-/// one spinner's stable scoring-rotation count at the end of simulation --
+/// one increment of stable's scoring half-spin counter: the replay frame
+/// time the disc crossed the half-turn boundary at, and its EMISSION
+/// POSITION -- how many timeline events had already been emitted when it
+/// fired.
+///
+/// the position is what the health fold merges a spinner's HP gain by, and
+/// time alone cannot replace it: within one frame entry the walk is clicks,
+/// then the normal walk (where `stable_scoring_step` runs), then the post
+/// walk, and zero-delta frames repeat that cycle at the same millisecond.
+/// so a circle clicked in the same frame is emitted BEFORE the increment
+/// and one timing out in that frame's post walk AFTER it, both stamped with
+/// the identical time. read it as "this increment sits immediately before
+/// the event holding this index"
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpinnerIncrement {
+    pub time: f64,
+    pub emission_index: usize,
+}
+
+/// one spinner's stable scoring-rotation record at the end of simulation --
 /// the half-spin tally stable's own disc physics produced (see
-/// `spinner::StableSpinState`). carried on the timeline so the achieved
-/// scorev1 fold can apply stable's tick model without disturbing the
-/// lazer-parity spin/bonus events
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `spinner::StableSpinState`) plus one [`SpinnerIncrement`] per counted
+/// half turn. carried on the timeline so the achieved scorev1 fold can apply
+/// stable's tick model, and the health fold its per-half-turn HP gains,
+/// without disturbing the lazer-parity spin/bonus events
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpinnerScoring {
     pub object_index: usize,
     pub scoring_half_spins: i64,
+    /// exactly `scoring_half_spins` entries, in firing order
+    pub increments: Vec<SpinnerIncrement>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,6 +166,11 @@ pub(crate) struct Ctx<'a> {
     /// limits::MAX_SIMULATION_SWEEP_STEPS by the driver. a Cell because
     /// can_be_hit_stable walks under a shared borrow
     pub sweep_steps: Cell<u64>,
+    /// spinner half-turn records retained so far, charged against
+    /// limits::MAX_SPINNER_SCORING_INCREMENTS by the driver. the step
+    /// budget cannot stand in for it: one step can retain one record, so a
+    /// map that overlaps discs buys retention at a step apiece
+    pub spinner_increments: u64,
 }
 
 impl Ctx<'_> {
@@ -171,16 +198,54 @@ impl Ctx<'_> {
 /// so the walk consumes the converted stream as-is); an empty frame list is
 /// rejected below rather than assumed away
 pub fn simulate(beatmap: &ProcessedBeatmap, frames: &[ReplayFrame]) -> Result<JudgementTimeline> {
-    simulate_with_sweep_budget(beatmap, frames, limits::MAX_SIMULATION_SWEEP_STEPS)
+    simulate_with_budgets(
+        beatmap,
+        frames,
+        limits::MAX_SIMULATION_SWEEP_STEPS,
+        limits::MAX_SPINNER_SCORING_INCREMENTS,
+    )
 }
 
-/// the sweep-step budget is a parameter (production passes
-/// limits::MAX_SIMULATION_SWEEP_STEPS) so its boundary test can drive the
-/// cap with a small input, mirroring path::approximator's max_vertices
+/// the sweep-step budget alone, with the increment budget left at the
+/// production constant
+#[cfg(test)]
 fn simulate_with_sweep_budget(
     beatmap: &ProcessedBeatmap,
     frames: &[ReplayFrame],
     sweep_budget: u64,
+) -> Result<JudgementTimeline> {
+    simulate_with_budgets(
+        beatmap,
+        frames,
+        sweep_budget,
+        limits::MAX_SPINNER_SCORING_INCREMENTS,
+    )
+}
+
+/// the spinner-increment budget alone, with the step budget left at the
+/// production constant
+#[cfg(test)]
+fn simulate_with_increment_budget(
+    beatmap: &ProcessedBeatmap,
+    frames: &[ReplayFrame],
+    increment_budget: u64,
+) -> Result<JudgementTimeline> {
+    simulate_with_budgets(
+        beatmap,
+        frames,
+        limits::MAX_SIMULATION_SWEEP_STEPS,
+        increment_budget,
+    )
+}
+
+/// both budgets are parameters (production passes the two constants) so
+/// their boundary tests can drive each cap with a small input, mirroring
+/// path::approximator's max_vertices
+fn simulate_with_budgets(
+    beatmap: &ProcessedBeatmap,
+    frames: &[ReplayFrame],
+    sweep_budget: u64,
+    increment_budget: u64,
 ) -> Result<JudgementTimeline> {
     if frames.is_empty() {
         return Err(EngineError::InvalidArgument(
@@ -223,6 +288,7 @@ fn simulate_with_sweep_budget(
         spinner_indices,
         first_active_spinner: 0,
         sweep_steps: Cell::new(0),
+        spinner_increments: 0,
     };
 
     // the frame walk: frames sharing a timestamp form one group -- each
@@ -253,6 +319,13 @@ fn simulate_with_sweep_budget(
                     "MAX_SIMULATION_SWEEP_STEPS",
                     sweep_budget,
                     ctx.sweep_steps.get(),
+                ));
+            }
+            if ctx.spinner_increments > increment_budget {
+                return Err(resource_limit(
+                    "MAX_SPINNER_SCORING_INCREMENTS",
+                    increment_budget,
+                    ctx.spinner_increments,
                 ));
             }
         }
@@ -298,12 +371,13 @@ fn simulate_with_sweep_budget(
     let spinner_scoring = ctx
         .spinner_indices
         .iter()
-        .map(|&index| SpinnerScoring {
-            object_index: index,
-            scoring_half_spins: match &ctx.states[index] {
-                ObjectState::Spinner(state) => state.stable.scoring_rotation_count,
-                _ => unreachable!("spinner_indices only holds spinner objects"),
+        .map(|&index| match &ctx.states[index] {
+            ObjectState::Spinner(state) => SpinnerScoring {
+                object_index: index,
+                scoring_half_spins: state.stable.scoring_rotation_count,
+                increments: state.stable.increments.clone(),
             },
+            _ => unreachable!("spinner_indices only holds spinner objects"),
         })
         .collect();
     Ok(JudgementTimeline {

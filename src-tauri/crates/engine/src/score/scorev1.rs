@@ -458,6 +458,7 @@ mod tests {
         timeline.spinner_scoring = vec![SpinnerScoring {
             object_index: 0,
             scoring_half_spins: 12,
+            increments: Vec::new(),
         }];
         // 6 ticks * 100 + the final's bare 300 (combo 0 before it)
         assert_eq!(total_score(&timeline, &processed, 4, 1.0), 600 + 300);
@@ -474,10 +475,12 @@ mod tests {
             SpinnerScoring {
                 object_index: 0,
                 scoring_half_spins: 12,
+                increments: Vec::new(),
             },
             SpinnerScoring {
                 object_index: 99,
                 scoring_half_spins: 12,
+                increments: Vec::new(),
             },
         ];
         assert_eq!(total_score(&timeline, &circles_map(1), 4, 1.0), 300);
