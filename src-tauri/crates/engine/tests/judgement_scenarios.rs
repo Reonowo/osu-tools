@@ -34,9 +34,10 @@ fn grade_name(grade: HitGrade) -> &'static str {
 
 /// spinner accumulation follows lazer's gameplay ticks: per spinner, the
 /// engine's SpinnerSpin/SpinnerBonus event counts must equal the dump's
-/// hit SpinnerTick/SpinnerBonusTick counts, and the finals must grade
-/// identically (issue 03's mechanism baseline; the *scoring* of those spins
-/// follows stable, oracled separately)
+/// hit SpinnerTick/SpinnerBonusTick counts. These two scenarios also happen
+/// to earn the same final grades under stable and lazer. That agreement is
+/// not universal: stable's final uses the disc half-spin tally, pinned
+/// separately by simulation::spinner::tests and the real-replay corpus.
 #[test]
 fn spinner_accumulation_matches_the_lazer_dump() {
     let dump = load_judgement_dump("spinner-accumulation");
@@ -86,7 +87,7 @@ fn spinner_accumulation_matches_the_lazer_dump() {
         assert_eq!(
             grade_name(engine_final),
             dump_final.result,
-            "spinner {object_index}: final grade must match lazer's"
+            "spinner {object_index}: this scenario's final agrees with lazer's"
         );
     }
 }

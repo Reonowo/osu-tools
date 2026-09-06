@@ -923,7 +923,10 @@ mod tests {
         // spinner spin/bonus counts vary with sampling; assert around them
         assert_eq!(&kinds[..5], &expected[..5]);
         assert!(spins >= 1);
-        assert_eq!(kinds[5 + spins], SpinnerFinal(Great));
+        // The fast eight-revolution input earns stable Ok (the same
+        // disc/cursor split pinned in spinner::tests), while its lazer
+        // spin events remain presentation data.
+        assert_eq!(kinds[5 + spins], SpinnerFinal(Ok));
         assert_eq!(kinds[6 + spins], Circle(Great));
 
         // combo walk: 1 (circle), 2 (head), 3 (tick), 4 (tail), aggregate
@@ -933,12 +936,13 @@ mod tests {
         assert_eq!(timeline.events[4].combo_after, 4);
         assert_eq!(timeline.events.last().unwrap().combo_after, 6);
         assert_eq!(timeline.totals.max_combo, 6);
-        assert_eq!(timeline.totals.count_300, 4); // circle, aggregate, spinner, circle
+        assert_eq!(timeline.totals.count_300, 3); // circle, aggregate, circle
+        assert_eq!(timeline.totals.count_100, 1); // spinner
         assert_eq!(timeline.totals.count_miss, 0);
 
         // accuracy after each basic result is the stable formula
         assert_eq!(timeline.events[0].accuracy_after, 1.0);
-        assert_eq!(timeline.events.last().unwrap().accuracy_after, 1.0);
+        assert_eq!(timeline.events.last().unwrap().accuracy_after, 1000.0 / 1200.0);
     }
 
     #[test]

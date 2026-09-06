@@ -1,7 +1,9 @@
 //! spinner rotation accounting: ports spinnerrotationtracker.cs (angle and
 //! delta), spinnerspinhistory.cs (spin completion, forward path only -- the
-//! simulator never rewinds), and drawablespinner.cs (tick awarding and the
-//! final result). sampling per the module conventions (standing decision 6):
+//! simulator never rewinds), and drawablespinner.cs (presentation ticks).
+//! The final grade and score use stable's disc half-turn count (danser-go
+//! @ 8331b0ff, rulesets/osu/spinner.go), not lazer's cursor completion.
+//! Sampling per the module conventions (standing decision 6):
 //! cursor-dependent spinner state samples at replay frame times
 //! (`process_frame_segment`, one delta per frame-to-frame segment) and at
 //! judgement instants (`finalize`'s trailing flush, below), each clipped to
@@ -110,11 +112,6 @@ const STABLE_FRAME_TIME: f64 = 1000.0 / 60.0;
 const STABLE_VELOCITY_CAP: f64 = 0.05;
 
 impl SpinnerState {
-    /// spinnerspinhistory.cs:29
-    pub fn total_rotation(&self) -> f32 {
-        360.0 * self.completed_spins as f32 + self.current_spin_max
-    }
-
     fn current_spin_rotation(&self) -> f32 {
         self.total_accumulated - self.total_at_last_completion
     }
@@ -315,7 +312,9 @@ fn stable_scoring_step(
         state.current_velocity +=
             (state.theoretical_velocity - state.current_velocity).max(-max_accel_this_frame);
     }
-    state.current_velocity = state.current_velocity.clamp(-STABLE_VELOCITY_CAP, STABLE_VELOCITY_CAP);
+    state.current_velocity = state
+        .current_velocity
+        .clamp(-STABLE_VELOCITY_CAP, STABLE_VELOCITY_CAP);
 
     // danser's AngleR: atan2(dy, dx) on the raw frame position
     let mouse_angle = f64::from(cursor.y - centre.y).atan2(f64::from(cursor.x - centre.x));
@@ -352,7 +351,11 @@ fn stable_scoring_step(
         }
         if angle_diff.abs() < std::f64::consts::PI {
             if state.frame_variance > STABLE_FRAME_TIME * 1.04 {
-                state.theoretical_velocity = if time_diff > 0.0 { angle_diff / time_diff } else { 0.0 };
+                state.theoretical_velocity = if time_diff > 0.0 {
+                    angle_diff / time_diff
+                } else {
+                    0.0
+                };
             } else {
                 state.theoretical_velocity = angle_diff / STABLE_FRAME_TIME;
             }
@@ -366,8 +369,7 @@ fn stable_scoring_step(
     let rotation_addition = state.current_velocity * time_diff;
     // the float32 counter and the f32 cast of the addition are stable's own
     // precision, kept bit-faithful
-    state.rotation_count_f +=
-        ((f64::from(rotation_addition as f32)).abs() / std::f64::consts::PI) as f32;
+    state.rotation_count_f += ((f64::from(rotation_addition as f32)).abs() / std::f64::consts::PI) as f32;
 
     let rotation_count = state.rotation_count_f as i64;
     if rotation_count != state.last_rotation_count {
@@ -408,17 +410,30 @@ fn spin_kind(spinner: &ProcessedSpinner, n: u32) -> Option<JudgementKind> {
     }
 }
 
-/// drawablespinner.cs:232-241 -- `Progress` is a c# float: totalrotation,
-/// the 360 divisor, and spinsrequired all stay in single precision, and only
-/// the grade comparisons (`> .9`, `> .75`) widen the result to double.
-/// reproducing the f32 rounding matters exactly at those boundaries: 972
-/// degrees over 3 required spins rounds to just above 0.9 in f32 (ok) but to
-/// exactly 0.9 in f64 (meh)
-fn completion_progress(total_rotation: f32, spins_required: i32) -> f64 {
-    f64::from((total_rotation / 360.0 / spins_required as f32).clamp(0.0, 1.0))
+/// danser-go @ 8331b0ff, rulesets/osu/spinner.go:371-377,427-449:
+/// post-20190510 stable grades the disc's scored HALF-turns. Deliberately
+/// differs from lazer's cursor-rotation completion fractions: the same
+/// cursor can clear lazer's required spins before stable's accelerating
+/// disc earns a great. The spin/bonus presentation events still follow
+/// lazer; only this aggregate feeds the grade, combo and section tally.
+/// Pre-May-2019 grading needs a replay-version rules profile (TODO.md).
+fn stable_final_grade(scored_halves: i64, required_halves: i32) -> HitGrade {
+    // Widen before +/-1: crafted difficulty/duration can saturate the
+    // processed requirement to either i32 bound.
+    let required = i64::from(required_halves);
+    if required == 0 || scored_halves > required {
+        HitGrade::Great
+    } else if scored_halves >= required - 1 {
+        HitGrade::Ok
+    } else if scored_halves >= required / 4 {
+        HitGrade::Meh
+    } else {
+        HitGrade::Miss
+    }
 }
 
-/// the end-of-spinner deadline: drawablespinner.cs:247-273
+/// Finish the presentation rotation and judge stable's disc at the first
+/// update at or past the spinner end (danser spinner.go UpdatePostFor).
 pub(crate) fn finalize(ctx: &mut Ctx<'_>, index: usize, time: f64) {
     if matches!(&ctx.states[index], ObjectState::Spinner(s) if s.finished) {
         return;
@@ -444,20 +459,10 @@ pub(crate) fn finalize(ctx: &mut Ctx<'_>, index: usize, time: f64) {
         _ => unreachable!("finalize is only called for spinner states"),
     };
     state.finished = true;
-    let progress = if spinner.spins_required == 0 {
-        1.0
-    } else {
-        completion_progress(state.total_rotation(), spinner.spins_required)
-    };
-    let grade = if progress >= 1.0 {
-        HitGrade::Great
-    } else if progress > 0.9 {
-        HitGrade::Ok
-    } else if progress > 0.75 {
-        HitGrade::Meh
-    } else {
-        HitGrade::Miss
-    };
+    let grade = stable_final_grade(
+        state.stable.scoring_rotation_count,
+        spinner.stable_half_spins_required,
+    );
     ctx.emit(time, index, JudgementKind::SpinnerFinal(grade));
 }
 
@@ -493,25 +498,38 @@ mod tests {
     }
 
     #[test]
-    fn completion_progress_keeps_lazer_float_rounding_at_grade_boundaries() {
-        // 972 degrees over 3 required spins: in f32, 972/360 rounds up to
-        // ~2.70000005 and the division by 3 lands at ~0.90000004, which is
-        // > 0.9 once widened (lazer awards ok). the same expression in f64
-        // rounds to exactly 0.9 and would fall through to meh
-        let progress = super::completion_progress(972.0, 3);
-        assert!(
-            progress > 0.9,
-            "f32 arithmetic must clear the ok boundary, got {progress}"
-        );
-        let f64_progress = 972.0f64 / 360.0 / 3.0;
-        assert!(
-            f64_progress <= 0.9,
-            "f64 arithmetic would sit on the boundary, got {f64_progress}"
-        );
+    fn stable_grades_use_integer_half_spin_thresholds() {
+        use HitGrade::{Great, Meh, Miss, Ok};
+        // Reference: danser spinner.go getRequirement{Great,Ok,Meh}.
+        // Aenbharr's three-half-turn requirement is the real-play repro:
+        // two scored halves are Ok, three are still Ok, four are Great.
+        for (scored, required, expected) in [
+            (0, 0, Great),
+            (0, 3, Meh),
+            (1, 3, Meh),
+            (2, 3, Ok),
+            (3, 3, Ok),
+            (4, 3, Great),
+            (1, 10, Miss),
+            (2, 10, Meh),
+            (8, 10, Meh),
+            (9, 10, Ok),
+            (10, 10, Ok),
+            (11, 10, Great),
+            (i64::from(i32::MAX), i32::MAX, Ok),
+            (i64::from(i32::MAX) + 1, i32::MAX, Great),
+            (0, i32::MIN, Great),
+        ] {
+            assert_eq!(
+                super::stable_final_grade(scored, required),
+                expected,
+                "{scored} scored halves, {required} required"
+            );
+        }
     }
 
     #[test]
-    fn enough_spins_complete_the_spinner_with_a_great() {
+    fn cursor_spins_do_not_determine_the_stable_final_grade() {
         // od 5, duration 2000 -> spins_required 5, bonus gap 2, max bonus 5
         let beatmap = spinner_map(2000.0, 5.0);
         // 8 revolutions in 45-degree steps while holding left
@@ -532,13 +550,17 @@ mod tests {
         assert!(spins >= 5, "at least the required spins completed, got {spins}");
         assert_eq!(spins.min(7), spins, "spin events cap at required + 2");
         let final_event = timeline.events.last().unwrap();
-        assert_eq!(final_event.kind, JudgementKind::SpinnerFinal(HitGrade::Great));
+        // danser @ 8331b0ff judges this input Hit100: its disc accelerates
+        // and caps velocity, while lazer's cursor-spin counter clears five
+        // revolutions. Verified with the synthetic oracle (final-pass
+        // report); this was Great before the stable grade fix.
+        assert_eq!(final_event.kind, JudgementKind::SpinnerFinal(HitGrade::Ok));
         // stable resolves at update times: no frame lands between the
         // spinner's end (3000) and wrap's trailing frame, so the final
         // result fires there -- finalize's own flush clamps the rotation
         // segment at end_time, so the late landing loses nothing
         assert_eq!(final_event.time, 100_000.0);
-        assert_eq!(timeline.totals.count_300, 1);
+        assert_eq!(timeline.totals.count_100, 1);
         // combo: only the final result increments
         assert_eq!(timeline.totals.max_combo, 1);
         let _ = bonus;
@@ -593,8 +615,8 @@ mod tests {
         );
         assert_eq!(
             timeline.events.last().unwrap().kind,
-            JudgementKind::SpinnerFinal(HitGrade::Great),
-            "the flushed rotation must cross the great threshold"
+            JudgementKind::SpinnerFinal(HitGrade::Miss),
+            "presentation's flushed fifth spin does not advance stable's disc (danser: Miss)"
         );
     }
 
@@ -611,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn direction_reversal_cannot_cheese_spins() {
+    fn direction_reversal_accumulates_disc_rotation_but_no_lazer_spins() {
         // spinnerspinhistory.cs:41-50: swinging +-half turns never reaches a
         // full spin because current_spin_max tracks the absolute extreme
         let beatmap = spinner_map(2000.0, 5.0);
@@ -637,21 +659,22 @@ mod tests {
             .all(|e| e.kind != JudgementKind::SpinnerSpin));
         assert_eq!(
             timeline.events.last().unwrap().kind,
-            JudgementKind::SpinnerFinal(HitGrade::Miss)
+            // Stable sums absolute disc rotation; danser grades this
+            // oscillating input Hit50 even though no lazer spin completes.
+            JudgementKind::SpinnerFinal(HitGrade::Meh)
         );
     }
 
     #[test]
-    fn partial_progress_grades_ok_and_meh() {
-        // spins_required 5 (1800 degrees): 4.7 revolutions at steps_per_rev
-        // 16 rounds up to 76 steps of 22.5 degrees = 1710 degrees = 0.95 ->
-        // ok; 4.1 revolutions rounds up to 66 steps = 1485 degrees = 0.825 ->
-        // meh
+    fn partial_cursor_progress_uses_the_disc_grade() {
+        // These cursor paths reach 95% / 82.5% of lazer's five-spin
+        // requirement. Danser grades BOTH Hit50 from the slower disc;
+        // the first was incorrectly Ok under the old completion fractions.
         let beatmap = spinner_map(2000.0, 5.0);
         let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 4.7, 16, Buttons::LEFT_1))).unwrap();
         assert_eq!(
             timeline.events.last().unwrap().kind,
-            JudgementKind::SpinnerFinal(HitGrade::Ok)
+            JudgementKind::SpinnerFinal(HitGrade::Meh)
         );
 
         let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 4.1, 16, Buttons::LEFT_1))).unwrap();
@@ -671,6 +694,24 @@ mod tests {
             timeline.events.last().unwrap().kind,
             JudgementKind::SpinnerFinal(HitGrade::Great)
         );
+    }
+
+    #[test]
+    fn sustained_rotation_earns_a_stable_great() {
+        let beatmap = spinner_map(2000.0, 5.0);
+        let mut frames = spin_frames(1000.0, 8.0, 8, Buttons::LEFT_1);
+        // 375rpm over 1280ms gives the disc time to accelerate; the
+        // otherwise identical 750rpm / 640ms input above only earns Ok.
+        // Both grades were checked through danser's unmodified ruleset.
+        for f in &mut frames {
+            f.time = 1000.0 + (f.time - 1000.0) * 2.0;
+        }
+        let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
+        assert_eq!(
+            timeline.events.last().unwrap().kind,
+            JudgementKind::SpinnerFinal(HitGrade::Great)
+        );
+        assert_eq!(timeline.totals.count_300, 1);
     }
 
     #[test]
