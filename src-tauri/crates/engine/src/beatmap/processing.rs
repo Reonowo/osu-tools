@@ -38,6 +38,12 @@ pub struct ProcessedBeatmap {
     /// the last f32 bit for fractional circle sizes, see
     /// `stable_radius_from_circle_size`
     pub stable_radius: f32,
+    /// the decoded break periods, copied through verbatim. processing has
+    /// nothing to do to them; they are here because the HP drain windows
+    /// and the drain-rate search's gap arithmetic read them
+    /// (`score::health`) and `ScoreContext` is a `Copy` bag of raw
+    /// difficulty scalars that a `Vec` does not belong in
+    pub breaks: Vec<crate::formats::beatmap::BreakPeriod>,
     pub objects: Vec<ProcessedObject>,
 }
 
@@ -258,6 +264,7 @@ pub fn process_beatmap(map: &Beatmap) -> Result<ProcessedBeatmap> {
         fade_in,
         windows,
         stable_radius: stable_radius_from_circle_size(map.circle_size),
+        breaks: map.breaks.clone(),
         objects,
     };
     crate::beatmap::stacking::apply_stacking(&mut processed);
@@ -570,6 +577,27 @@ mod tests {
             difficulty_points: Vec::new(),
             hit_objects,
         }
+    }
+
+    #[test]
+    fn breaks_reach_the_processed_beatmap_verbatim() {
+        use crate::formats::beatmap::BreakPeriod;
+        let mut map = base_map(vec![circle(1000.0, Vec2::new(100.0, 100.0), true, 0)]);
+        map.breaks = vec![
+            BreakPeriod {
+                start_time: 2000.0,
+                end_time: 5000.5,
+            },
+            BreakPeriod {
+                start_time: 9000.0,
+                end_time: 12_000.0,
+            },
+        ];
+        let processed = process_beatmap(&map).unwrap();
+        assert_eq!(processed.breaks, map.breaks, "copied through, never filtered");
+
+        // and a map with no breaks carries an empty list, not a missing one
+        assert!(process_beatmap(&base_map(Vec::new())).unwrap().breaks.is_empty());
     }
 
     fn circle(start_time: f64, pos: Vec2, new_combo: bool, combo_offset: i32) -> HitObject {
