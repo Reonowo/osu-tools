@@ -16,12 +16,73 @@ use crate::settings::{
 };
 use crate::skin::{SkinEntry, SkinEra, SkinLocator, SkinManifest, SkinSource};
 use crate::state::AppState;
+use engine::beatmap::ProcessedBeatmap;
 use engine::formats::osr::FIRST_LAZER_VERSION;
-use engine::simulation::simulate;
+use engine::replay::frames::ReplayFrame;
+use engine::score::{DrainRateSearch, HealthCurve, ScoreContext};
+use engine::simulation::{simulate, JudgementTimeline};
 
 fn join_err(task: &str, e: tauri::Error) -> IpcError {
     IpcError::Internal {
         message: format!("{task} task failed: {e}"),
+    }
+}
+
+/// everything one re-judgement needs off the session, taken under the lock
+/// in a single place so the three commands that re-simulate -- apply, the
+/// history step, revert-all -- cannot drift apart on what they carry out of
+/// it. the drain-rate search rides along because it is the session's rather
+/// than the call's: it depends on the map and the score context alone, so an
+/// edit re-folds over it instead of repeating it
+struct Resimulation {
+    processed: Arc<ProcessedBeatmap>,
+    snapshot: Vec<ReplayFrame>,
+    score_context: ScoreContext,
+    search: Option<DrainRateSearch>,
+}
+
+impl Resimulation {
+    fn take(session: &SessionState) -> Resimulation {
+        Resimulation {
+            processed: Arc::clone(&session.processed),
+            snapshot: session.document.frames().to_vec(),
+            score_context: session.score_context,
+            search: session.drain_search.clone(),
+        }
+    }
+
+    /// the feedback loop behind every landed edit: re-judge the frame stream
+    /// and re-fold its HP, off the session lock and in ONE blocking task,
+    /// because the fold reads the very timeline the simulation just produced.
+    ///
+    /// `noun` names the stream in the refusal message, which differs per
+    /// command: the edited one, the resulting one, the baseline
+    async fn run(self, noun: &str) -> Result<(JudgementTimeline, HealthCurve), IpcError> {
+        let Resimulation {
+            processed,
+            snapshot,
+            score_context,
+            search,
+        } = self;
+        let folded = tauri::async_runtime::spawn_blocking(move || {
+            let timeline = simulate(&processed, &snapshot)?;
+            // a simulatable session always carries the search; recomputing it
+            // here rather than unwrapping keeps the fold total if it ever does
+            // not, at the cost of one search on a path nothing reaches
+            let search =
+                search.unwrap_or_else(|| engine::score::drain_rate_search(&processed, &score_context));
+            let health =
+                engine::score::derive_health_with_search(&processed, &timeline, &score_context, search);
+            Ok::<_, engine::EngineError>((timeline, health))
+        })
+        .await;
+        match folded {
+            Ok(Ok(pair)) => Ok(pair),
+            Ok(Err(e)) => Err(IpcError::InvalidEdit {
+                message: format!("{noun} exceeded simulation limits: {e}"),
+            }),
+            Err(e) => Err(join_err("simulation", e)),
+        }
     }
 }
 
@@ -521,7 +582,7 @@ pub async fn apply_edit(
     let frame_ops = edit::ops_touch_frames(&ops);
 
     // phase 1: gate and mutate under the lock, snapshot for simulation
-    let (report, snapshot, processed) = {
+    let (report, resimulation) = {
         let mut guard = state.session.lock().expect("session lock");
         let session = guard.as_mut().ok_or(IpcError::StaleSession)?;
         if session.epoch != epoch || session.revision != base_revision {
@@ -544,21 +605,14 @@ pub async fn apply_edit(
             sync_labels(session, Some(label));
             return Ok(assemble_delta(session, None, None));
         }
-        let snapshot = session.document.frames().to_vec();
-        (report, snapshot, Arc::clone(&session.processed))
+        (report, Resimulation::take(session))
     };
 
     // phase 2: re-simulate off the lock -- the feedback loop that shows a
     // miss turning into a 300. a join failure (the blocking task panicked or
     // was cancelled) must reach phase 3 like any simulation refusal, so the
     // mutation rolls back instead of surviving as hidden backend state
-    let sim = match tauri::async_runtime::spawn_blocking(move || simulate(&processed, &snapshot)).await {
-        Ok(Ok(timeline)) => Ok(timeline),
-        Ok(Err(e)) => Err(IpcError::InvalidEdit {
-            message: format!("the edited replay exceeded simulation limits: {e}"),
-        }),
-        Err(e) => Err(join_err("simulation", e)),
-    };
+    let sim = resimulation.run("the edited replay").await;
 
     // phase 3: publish, or roll the mutation back so a failed apply_edit
     // leaves the document untouched
@@ -568,11 +622,11 @@ pub async fn apply_edit(
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok(timeline) => {
+        Ok((timeline, health)) => {
             session.document.commit_last();
             session.revision += 1;
             sync_labels(session, Some(label));
-            session.simulation = crate::scene::SimulationDto::authoritative(&timeline);
+            session.simulation = crate::scene::SimulationDto::authoritative(&timeline, &health);
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -600,7 +654,7 @@ async fn history_step(
     epoch: u64,
     direction: HistoryDirection,
 ) -> Result<EditDelta, IpcError> {
-    let (report, snapshot, processed) = {
+    let (report, resimulation) = {
         let mut guard = state.session.lock().expect("session lock");
         let session = guard.as_mut().ok_or(IpcError::StaleSession)?;
         if session.epoch != epoch {
@@ -622,19 +676,12 @@ async fn history_step(
             let frames = edit::frame_changes(&report, session.document.frames());
             return Ok(assemble_delta(session, frames, None));
         }
-        let snapshot = session.document.frames().to_vec();
-        (report, snapshot, Arc::clone(&session.processed))
+        (report, Resimulation::take(session))
     };
 
     // a join failure recovers exactly like a simulation refusal: the step
     // must be replayed the other way, not left installed behind an error
-    let sim = match tauri::async_runtime::spawn_blocking(move || simulate(&processed, &snapshot)).await {
-        Ok(Ok(timeline)) => Ok(timeline),
-        Ok(Err(e)) => Err(IpcError::InvalidEdit {
-            message: format!("the resulting replay exceeded simulation limits: {e}"),
-        }),
-        Err(e) => Err(join_err("simulation", e)),
-    };
+    let sim = resimulation.run("the resulting replay").await;
 
     let mut guard = state.session.lock().expect("session lock");
     let session = guard.as_mut().ok_or(IpcError::StaleSession)?;
@@ -642,10 +689,10 @@ async fn history_step(
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok(timeline) => {
+        Ok((timeline, health)) => {
             session.revision += 1;
             move_history_label(session, &direction);
-            session.simulation = crate::scene::SimulationDto::authoritative(&timeline);
+            session.simulation = crate::scene::SimulationDto::authoritative(&timeline, &health);
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -690,7 +737,7 @@ pub async fn redo(state: State<'_, AppState>, epoch: u64) -> Result<EditDelta, I
 /// history eviction cannot strand it. itself one undoable step
 #[tauri::command]
 pub async fn revert_all(state: State<'_, AppState>, epoch: u64) -> Result<EditDelta, IpcError> {
-    let (report, snapshot, processed) = {
+    let (report, resimulation) = {
         let mut guard = state.session.lock().expect("session lock");
         let session = guard.as_mut().ok_or(IpcError::StaleSession)?;
         if session.epoch != epoch {
@@ -707,18 +754,11 @@ pub async fn revert_all(state: State<'_, AppState>, epoch: u64) -> Result<EditDe
             let frames = edit::frame_changes(&report, session.document.frames());
             return Ok(assemble_delta(session, frames, None));
         }
-        let snapshot = session.document.frames().to_vec();
-        (report, snapshot, Arc::clone(&session.processed))
+        (report, Resimulation::take(session))
     };
 
     // a join failure rolls the revert back exactly like a simulation refusal
-    let sim = match tauri::async_runtime::spawn_blocking(move || simulate(&processed, &snapshot)).await {
-        Ok(Ok(timeline)) => Ok(timeline),
-        Ok(Err(e)) => Err(IpcError::InvalidEdit {
-            message: format!("the baseline replay exceeded simulation limits: {e}"),
-        }),
-        Err(e) => Err(join_err("simulation", e)),
-    };
+    let sim = resimulation.run("the baseline replay").await;
 
     let mut guard = state.session.lock().expect("session lock");
     let session = guard.as_mut().ok_or(IpcError::StaleSession)?;
@@ -726,11 +766,11 @@ pub async fn revert_all(state: State<'_, AppState>, epoch: u64) -> Result<EditDe
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok(timeline) => {
+        Ok((timeline, health)) => {
             session.document.commit_last();
             session.revision += 1;
             sync_labels(session, Some("revert all".into()));
-            session.simulation = crate::scene::SimulationDto::authoritative(&timeline);
+            session.simulation = crate::scene::SimulationDto::authoritative(&timeline, &health);
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -2540,6 +2580,69 @@ Name: Audible
         assert!(get_settings(app.state()).recents.is_empty());
     }
 
+    /// the HP curve an authoritative simulation carries, or the empty slice
+    fn hp_curve(simulation: &crate::scene::SimulationDto) -> &[[f64; 2]] {
+        match simulation {
+            crate::scene::SimulationDto::Authoritative { hp_curve, .. } => hp_curve,
+            other => panic!("expected an authoritative simulation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_hp_curve_rides_every_landed_edit_off_the_sessions_one_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+
+        let loaded = hp_curve(&scene.simulation).to_vec();
+        assert!(!loaded.is_empty(), "an authoritative scene ships its HP curve");
+        assert_eq!(loaded[0][1], 1.0, "HP starts full");
+
+        // the search is the session's, taken once at load: an edit re-runs
+        // the fold over it and never searches again
+        let state = app.state::<AppState>();
+        let search = {
+            let guard = state.session.lock().expect("session lock");
+            guard
+                .as_ref()
+                .expect("a scene is installed")
+                .drain_search
+                .clone()
+                .expect("a simulatable session caches its drain-rate search")
+        };
+
+        // a press on the first circle turns its miss into a hit, which is a
+        // different play and so a different curve
+        let object = scene.render_plan.objects[0].clone();
+        let delta = tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![crate::edit::EditOp::InsertFrames {
+                frames: vec![crate::scene::FrameDto {
+                    time: object.start_time,
+                    x: object.position[0],
+                    y: object.position[1],
+                    buttons: 1,
+                }],
+            }],
+            "press".into(),
+        ))
+        .unwrap();
+        let edited = hp_curve(&delta.simulation.expect("frame edits re-simulate")).to_vec();
+        assert_ne!(edited, loaded, "a changed judgement changes the curve");
+
+        // and undo puts the original curve back, still off the same search
+        let undone = tauri::async_runtime::block_on(undo(app.state(), scene.epoch)).unwrap();
+        assert_eq!(hp_curve(&undone.simulation.expect("undo re-simulates")), &loaded[..]);
+
+        let after = {
+            let guard = state.session.lock().expect("session lock");
+            guard.as_ref().unwrap().drain_search.clone().unwrap()
+        };
+        assert_eq!(after, search, "no edit rewrites the cached search");
+    }
+
     #[test]
     fn apply_edit_returns_an_authoritative_delta() {
         let dir = tempfile::tempdir().unwrap();
@@ -3159,8 +3262,9 @@ Name: Audible
         let dir = tempfile::tempdir().unwrap();
         let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
         let scene = editable_scene(&app, dir.path(), 0, 20151228);
-        assert!(
-            !scene.integrity.as_ref().unwrap().life_bar_present,
+        assert_eq!(
+            scene.integrity.as_ref().unwrap().life_bar_graph,
+            crate::scene::LifeBarGraphDto::Absent,
             "the synthetic source carries no graph, so the report starts absent"
         );
 
@@ -3185,10 +3289,14 @@ Name: Audible
             false,
         ))
         .unwrap();
-        assert!(
-            reopened.integrity.as_ref().unwrap().life_bar_present,
-            "the regenerated graph reads back as a present life bar"
-        );
+        // and the regenerated graph reads back as a graph the report can
+        // score -- every sample of it, since the file it describes is the
+        // very play this simulation just re-derived
+        let compared = reopened.integrity.as_ref().unwrap().life_bar_graph;
+        let crate::scene::LifeBarGraphDto::Compared { matched, total, .. } = compared else {
+            panic!("the regenerated graph reads back as a present life bar, got {compared:?}");
+        };
+        assert!(total > 0 && matched == total, "{matched} of {total} samples match");
     }
 
     #[test]
@@ -3330,6 +3438,7 @@ Name: Audible
                     converged: true,
                 },
                 samples: Vec::new(),
+                points: Vec::new(),
             },
         })
         .unwrap_err();

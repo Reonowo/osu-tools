@@ -81,7 +81,7 @@ pub struct IncompletenessDto {
 
 /// the integrity report (spec, integrity report section): per-field
 /// header-vs-simulated rows, the combo-section cross-check triple, and the
-/// life-bar presence note. the replay hash is deliberately excluded --
+/// life bar graph comparison. the replay hash is deliberately excluded --
 /// its formula varies across client generations, so a mismatch there would
 /// not distinguish tampering from version skew
 #[derive(Debug, Clone, Serialize)]
@@ -89,7 +89,33 @@ pub struct IncompletenessDto {
 pub struct IntegrityDto {
     pub rows: Vec<IntegrityRowDto>,
     pub cross_check: CrossCheckDto,
-    pub life_bar_present: bool,
+    pub life_bar_graph: LifeBarGraphDto,
+}
+
+/// the header's life bar graph scored against the loaded file's own
+/// simulated samples (`engine::score::compare_life_bar_graph`).
+///
+/// named for the GRAPH throughout, never "life bar" alone: that reads as the
+/// HUD element, which since the HP bar landed is a real thing on screen
+/// (`CONTEXT.md` -- life bar graph).
+///
+/// a COUNT and never a verdict: genuine plays land one sample short on a
+/// katu placement the corpus already records, so "48 of 51" is information
+/// about the header, not an accusation about it
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum LifeBarGraphDto {
+    /// the header carried no graph field at all
+    Absent,
+    /// it carried one, and no sample could be read out of it -- which is
+    /// what a lazer-written replay leaves behind
+    Empty,
+    Compared {
+        matched: u32,
+        total: u32,
+        /// the header's last value is `0`: stable's own record of a fail
+        header_failed: bool,
+    },
 }
 
 /// one compared field; `perfect` rides as 0/1 so every row shares a shape
@@ -191,6 +217,19 @@ pub enum SimulationDto {
     Authoritative {
         events: Vec<JudgementEventDto>,
         totals: TotalsDto,
+        /// the HP curve as `[time, fraction]` breakpoints -- the engine's
+        /// own piecewise-linear fold, in pairs rather than objects because
+        /// a long play carries thousands of them and the frontend reads
+        /// them positionally either way (`lib/hp.ts`).
+        ///
+        /// EMPTY when the drain-rate search did not settle, which only a
+        /// crafted map reaches: the escape result's zero rate and unit
+        /// multipliers make the curve a record of the play's misses rather
+        /// than of its HP, and an empty curve reads as a full bar
+        /// everywhere -- which is what the HP surfaces should draw when
+        /// there is no drain rate to draw. the export dialog is where the
+        /// unsettled search is reported
+        hp_curve: Vec<[f64; 2]>,
     },
     NotSimulated {
         reason: NotSimulatedReason,
@@ -198,7 +237,7 @@ pub enum SimulationDto {
 }
 
 impl SimulationDto {
-    pub fn authoritative(timeline: &JudgementTimeline) -> SimulationDto {
+    pub fn authoritative(timeline: &JudgementTimeline, health: &engine::score::HealthCurve) -> SimulationDto {
         SimulationDto::Authoritative {
             events: timeline.events.iter().map(JudgementEventDto::from).collect(),
             totals: TotalsDto {
@@ -207,6 +246,11 @@ impl SimulationDto {
                 count_50: timeline.totals.count_50,
                 count_miss: timeline.totals.count_miss,
                 max_combo: timeline.totals.max_combo,
+            },
+            hp_curve: if health.search.converged {
+                health.points.iter().map(|p| [p.time, p.fraction]).collect()
+            } else {
+                Vec::new()
             },
         }
     }
@@ -389,9 +433,22 @@ impl IntegrityDto {
                 count_miss: header.count_miss,
                 count_50: header.count_50,
             },
-            // an empty life graph carries no information either way, so
-            // "present" means non-empty
-            life_bar_present: header.life_graph.as_deref().is_some_and(|graph| !graph.is_empty()),
+            life_bar_graph: header.life_graph.as_deref().map_or(LifeBarGraphDto::Absent, |graph| {
+                let comparison = engine::score::compare_life_bar_graph(graph, &derived.health.samples);
+                // a graph carrying no readable pair says nothing either way,
+                // whether it is the empty string a lazer client writes or a
+                // torn one -- either way there is nothing to count
+                if comparison.total() == 0 {
+                    return LifeBarGraphDto::Empty;
+                }
+                LifeBarGraphDto::Compared {
+                    // both are bounded by the header string's own length,
+                    // which the decode caps well inside u32
+                    matched: comparison.matched as u32,
+                    total: comparison.total() as u32,
+                    header_failed: comparison.header_failed,
+                }
+            }),
         }
     }
 }
@@ -511,6 +568,27 @@ mod tests {
         );
     }
 
+    /// a health curve carrying only what the wire reads: the search's
+    /// converged flag and the breakpoints
+    fn test_health(converged: bool, points: &[(f64, f64)]) -> engine::score::HealthCurve {
+        engine::score::HealthCurve {
+            search: engine::score::DrainRateSearch {
+                rate: 0.03,
+                normal_multiplier: 1.0,
+                combo_end_multiplier: 1.0,
+                hp_after_perfect_play: vec![200.0],
+                max_combo: 1,
+                iterations: 4,
+                converged,
+            },
+            samples: vec![engine::score::LifeBarSample { time: 0.0, value: 1.0 }],
+            points: points
+                .iter()
+                .map(|&(time, fraction)| engine::score::HealthPoint { time, fraction })
+                .collect(),
+        }
+    }
+
     #[test]
     fn the_simulation_union_is_status_tagged() {
         let timeline = JudgementTimeline {
@@ -530,8 +608,15 @@ mod tests {
             },
             spinner_scoring: Vec::new(),
         };
-        let v = serde_json::to_value(SimulationDto::authoritative(&timeline)).unwrap();
+        let health = test_health(true, &[(0.0, 1.0), (1030.0, 1.0), (1030.0, 0.8)]);
+        let v = serde_json::to_value(SimulationDto::authoritative(&timeline, &health)).unwrap();
         assert_eq!(v["status"], "authoritative");
+        let fields: std::collections::HashSet<&str> =
+            v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            fields,
+            ["status", "events", "totals", "hpCurve"].into_iter().collect()
+        );
         assert_eq!(
             v["totals"],
             json!({ "count300": 0, "count100": 0, "count50": 1, "countMiss": 0, "maxCombo": 1 })
@@ -539,6 +624,15 @@ mod tests {
         assert_eq!(v["events"][0]["objectIndex"], 0);
         assert_eq!(v["events"][0]["comboAfter"], 1);
         assert_eq!(v["events"][0]["kind"]["grade"], "meh");
+        // the curve rides as [time, fraction] pairs, the jump's two points
+        // sharing their millisecond
+        assert_eq!(v["hpCurve"], json!([[0.0, 1.0], [1030.0, 1.0], [1030.0, 0.8]]));
+
+        // an unsettled search ships no curve at all: the escape result's
+        // zero rate would draw a bar that only misses move
+        let unsettled = test_health(false, &[(0.0, 1.0), (1030.0, 0.8)]);
+        let v = serde_json::to_value(SimulationDto::authoritative(&timeline, &unsettled)).unwrap();
+        assert_eq!(v["hpCurve"], json!([]));
 
         let v = serde_json::to_value(SimulationDto::NotSimulated {
             reason: NotSimulatedReason::UnsupportedMods,
@@ -652,25 +746,14 @@ mod tests {
             total_score: 300,
             sections: 105,
             sections_without_burst: 2,
-            health: engine::score::HealthCurve {
-                search: engine::score::DrainRateSearch {
-                    rate: 0.03,
-                    normal_multiplier: 1.0,
-                    combo_end_multiplier: 1.0,
-                    hp_after_perfect_play: vec![200.0],
-                    max_combo: 1,
-                    iterations: 4,
-                    converged: true,
-                },
-                samples: vec![engine::score::LifeBarSample { time: 0.0, value: 1.0 }],
-            },
+            health: test_health(true, &[(0.0, 1.0)]),
         };
         let report = IntegrityDto::compare(&header, &derived);
         let v = serde_json::to_value(&report).unwrap();
 
         let fields: std::collections::HashSet<&str> =
             v.as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(fields, ["rows", "crossCheck", "lifeBarPresent"].into_iter().collect());
+        assert_eq!(fields, ["rows", "crossCheck", "lifeBarGraph"].into_iter().collect());
 
         // rows cover every compared field, in a fixed render order, with the
         // hash deliberately absent
@@ -706,13 +789,37 @@ mod tests {
             v["crossCheck"],
             serde_json::json!({ "sections": 105, "gekiKatsu": 103, "sectionsWithoutBurst": 2, "countMiss": 2, "count50": 0 })
         );
-        assert_eq!(v["lifeBarPresent"], true);
+        // the header's one pair scores against the one simulated sample: both
+        // read `1` at t=0, so the graph matches in full and records no fail
+        assert_eq!(
+            v["lifeBarGraph"],
+            serde_json::json!({ "status": "compared", "matched": 1, "total": 1, "headerFailed": false })
+        );
 
-        // an empty life graph reads as absent
+        // a header describing a different play than the frames reads as fewer
+        // matched than total, never as a verdict
+        header.life_graph = Some("0|0.4,".into());
+        assert_eq!(
+            serde_json::to_value(&IntegrityDto::compare(&header, &derived).life_bar_graph).unwrap(),
+            serde_json::json!({ "status": "compared", "matched": 0, "total": 1, "headerFailed": false })
+        );
+
+        // a header whose graph ends at zero carries stable's own record of a
+        // fail, whatever the samples say
+        header.life_graph = Some("0|1,1000|0,".into());
+        assert_eq!(
+            serde_json::to_value(&IntegrityDto::compare(&header, &derived).life_bar_graph).unwrap()["headerFailed"],
+            serde_json::json!(true)
+        );
+
+        // present-but-unreadable and absent are their own states, neither
+        // pretending to a count
         header.life_graph = Some(String::new());
-        assert!(!IntegrityDto::compare(&header, &derived).life_bar_present);
+        assert_eq!(IntegrityDto::compare(&header, &derived).life_bar_graph, LifeBarGraphDto::Empty);
+        header.life_graph = Some(",,".into());
+        assert_eq!(IntegrityDto::compare(&header, &derived).life_bar_graph, LifeBarGraphDto::Empty);
         header.life_graph = None;
-        assert!(!IntegrityDto::compare(&header, &derived).life_bar_present);
+        assert_eq!(IntegrityDto::compare(&header, &derived).life_bar_graph, LifeBarGraphDto::Absent);
     }
 
     #[test]

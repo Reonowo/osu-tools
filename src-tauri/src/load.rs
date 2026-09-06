@@ -46,6 +46,12 @@ pub struct SessionState {
     /// the stable-faithful score-derivation inputs, captured once at load
     /// from the decoded beatmap (raw hp/od/cs, object count, drain length)
     pub score_context: ScoreContext,
+    /// stable's map-load drain-rate search, cached for the session. it
+    /// depends on the MAP and the score context only -- never on the frames
+    /// -- so an edit re-runs the health fold over it rather than searching
+    /// again. present exactly when `simulatable` is true; there is nothing
+    /// to fold for a scene with no authoritative timeline
+    pub drain_search: Option<engine::score::DrainRateSearch>,
     /// what a video export stages from, captured here because the load is
     /// the one moment every path below is already resolved -- for an `.osz`
     /// scene they point into the extraction lease this session holds alive
@@ -177,37 +183,44 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     // mismatch wins as the reason: the geometry may be wrong, so even a
     // nomod timeline would be fiction. unsupported mods still render with
     // nomod geometry -- the spec's persistent-banner path
-    let (processed, simulation, integrity) = if source.mismatch {
+    let (processed, simulation, integrity, drain_search) = if source.mismatch {
         (
             process_beatmap(&source.map)?,
             SimulationDto::NotSimulated {
                 reason: NotSimulatedReason::BeatmapMismatch,
             },
             None,
+            None,
         )
     } else if let Some(pipeline) = pipeline_for(mods) {
         let processed = process_with_mods(&source.map, &*pipeline)?;
         let timeline = simulate(&processed, document.frames())?;
-        let simulation = SimulationDto::authoritative(&timeline);
+        // the search is the session's, folded here and handed back to every
+        // later edit; the fold itself is all that re-runs per edit
+        let search = engine::score::drain_rate_search(&processed, &score_context);
+        let health =
+            engine::score::derive_health_with_search(&processed, &timeline, &score_context, search.clone());
+        let simulation = SimulationDto::authoritative(&timeline, &health);
         // pre-lazer authoritative scenes only: a lazer-native play simulated
         // under the legacy profile would flag honest mismatches (TODO.md's
         // lazer-native item), so those ship no report rather than false
         // alarms. the derivation itself can only fail on difficulty values
         // no decode produces; a failure withholds the report, never the load
         let integrity = if header.version < engine::formats::osr::FIRST_LAZER_VERSION {
-            engine::score::derive_score(&processed, &timeline, &score_context)
+            engine::score::derive_score_with_health(&processed, &timeline, &score_context, health)
                 .ok()
                 .map(|derived| crate::scene::IntegrityDto::compare(&header, &derived))
         } else {
             None
         };
-        (processed, simulation, integrity)
+        (processed, simulation, integrity, Some(search))
     } else {
         (
             process_beatmap(&source.map)?,
             SimulationDto::NotSimulated {
                 reason: NotSimulatedReason::UnsupportedMods,
             },
+            None,
             None,
         )
     };
@@ -279,6 +292,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
             redo_labels: Vec::new(),
             simulation: cached_simulation,
             score_context,
+            drain_search,
             export_source,
         },
         origin: BeatmapOrigin {
@@ -755,7 +769,11 @@ mod tests {
             report.rows.iter().all(|row| row.field != "replayMd5"),
             "the hash is deliberately never compared"
         );
-        assert!(!report.life_bar_present, "the synthetic header carries no life graph");
+        assert_eq!(
+            report.life_bar_graph,
+            crate::scene::LifeBarGraphDto::Absent,
+            "the synthetic header carries no life graph"
+        );
 
         // unsupported mods: no simulation to compare against
         let (_dir2, osr_path, osu_path, _md5) = fixture_setup(16);
