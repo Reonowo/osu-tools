@@ -5,10 +5,11 @@ use engine::formats::beatmap::decode_beatmap_path;
 use engine::formats::osr::decode_osr;
 use engine::replay::frames::convert_frames;
 use engine::score::{
-    derive_health, drain_rate_search, format_graph_number, life_bar_graph, max_achievable_combo,
-    peppy_stars, section_tally, total_score, ScoreContext, NOMOD_SCORE_MULTIPLIER,
+    compare_life_bar_graph, derive_health, drain_rate_search, format_graph_number, life_bar_graph,
+    max_achievable_combo, peppy_stars, section_tally, total_score, ScoreContext, NOMOD_SCORE_MULTIPLIER,
 };
-use engine::simulation::simulate;
+use engine::simulation::score::JudgementKind;
+use engine::simulation::{simulate, JudgementEvent};
 
 /// human-ratified deliberate divergences in the local corpus -- a visible
 /// exception ledger, never a silent allowlist. each entry names the replay
@@ -423,48 +424,76 @@ fn local_corpus_life_bar_samples_match_the_headers() {
             continue;
         }
 
-        let mut header_samples: Vec<(i64, &str)> = graph
-            .split(',')
-            .filter(|pair| !pair.is_empty())
-            .filter_map(|pair| {
-                let (time, value) = pair.split_once('|')?;
-                Some((time.trim().parse::<i64>().ok()?, value.trim()))
+        // the curve oracle: a life bar sample is a READING of the continuous
+        // HP curve, never a second derivation. evaluating the curve at each
+        // sample's own millisecond and dividing by that object's
+        // perfect-play divisor must reproduce the sample through the
+        // writer's own rounding -- if it does not, the HP bar and the
+        // header's graph are describing different plays
+        let sampling: Vec<&JudgementEvent> = timeline
+            .events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    JudgementKind::Circle(_)
+                        | JudgementKind::SliderAggregate(_)
+                        | JudgementKind::SpinnerFinal(_)
+                )
             })
             .collect();
-        // a failed play: stable stops judging at the fail and writes nothing
-        // past it, so everything after the header's first zero is compared
-        // against a curve that deliberately keeps going (decision 2)
-        if header_samples.last().is_some_and(|&(_, value)| value == "0") {
-            if let Some(first_zero) = header_samples.iter().position(|&(_, value)| value == "0") {
-                eprintln!(
-                    "corpus: {name}: header ends at a fail; comparing its first {} samples only",
-                    first_zero + 1
-                );
-                header_samples.truncate(first_zero + 1);
+        if sampling.len() == curve.samples.len() {
+            for (sample, event) in curve.samples.iter().zip(&sampling) {
+                let Some(read) = curve.life_bar_value_at(f64::from(sample.time), event.object_index) else {
+                    continue;
+                };
+                if format_graph_number(read) != format_graph_number(sample.value) {
+                    failures.push(format!(
+                        "{name}: the curve reads {} at t={} where the sample records {}",
+                        format_graph_number(read),
+                        sample.time,
+                        format_graph_number(sample.value)
+                    ));
+                }
             }
+        } else {
+            failures.push(format!(
+                "{name}: {} object-level judgements against {} life bar samples -- the curve cannot be \
+                 paired with them",
+                sampling.len(),
+                curve.samples.len()
+            ));
         }
 
-        let mut exact = 0usize;
-        for &(time, value) in &header_samples {
-            // nearest by absolute time distance, first on a tie
-            let nearest = curve
-                .samples
-                .iter()
-                .min_by(|a, b| {
-                    let da = (f64::from(a.time) - time as f64).abs();
-                    let db = (f64::from(b.time) - time as f64).abs();
-                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .expect("emptiness handled above");
-            let dt = (f64::from(nearest.time) - time as f64).abs();
+        // the whole comparison procedure is engine code (`compare_life_bar_graph`):
+        // the parse, the truncation at a failed header's first zero, the
+        // nearest-sample-by-time rule with its first-wins tie, and the
+        // writer's own formatting. this test owns only the ledger, the time
+        // offset reporting and the figure
+        let comparison = compare_life_bar_graph(graph, &curve.samples);
+        if comparison.malformed > 0 {
+            failures.push(format!(
+                "{name}: {} header life bar pairs could not be read",
+                comparison.malformed
+            ));
+        }
+        if comparison.header_failed {
+            eprintln!(
+                "corpus: {name}: header ends at a fail; comparing its first {} samples only",
+                comparison.total()
+            );
+        }
+
+        for pair in &comparison.pairs {
+            let (time, value) = (pair.header_time, pair.header_value);
+            let dt = pair.offset().unwrap_or(f64::NAN);
             if dt == 0.0 {
                 dt_zero += 1;
             }
             dt_max = dt_max.max(dt);
 
-            let simulated = format_graph_number(nearest.value);
-            if simulated == value {
-                exact += 1;
+            let simulated = pair.nearest.as_ref().map_or("<none>", |n| n.value.as_str());
+            if pair.matches() {
                 if let Some(r) = RATIFIED_SAMPLE_DIVERGENCES
                     .iter()
                     .find(|r| r.stem == name && r.header_time == time)
@@ -495,7 +524,8 @@ fn local_corpus_life_bar_samples_match_the_headers() {
                 )),
             }
         }
-        total_header += header_samples.len();
+        let exact = comparison.matched;
+        total_header += comparison.total();
         total_exact += exact;
 
         // INFORMATIONAL, never asserted: whether the whole regenerated
@@ -513,7 +543,7 @@ fn local_corpus_life_bar_samples_match_the_headers() {
         eprintln!(
             "corpus: {name}: {exact}/{} header samples exact ({} simulated samples), regenerated string \
              {} the header's",
-            header_samples.len(),
+            comparison.total(),
             curve.samples.len(),
             if regenerated == graph { "equals" } else { "differs from" }
         );
@@ -667,6 +697,44 @@ fn synthetic_full_combo_on_the_fixture_map() {
             "a full combo never falls below the perfect curve (sample at {})",
             sample.time
         );
+    }
+
+    // and the continuous curve under those samples, on the same committed
+    // path: it starts full, every jump it carries sits at a judgement's own
+    // millisecond, and it never reads below the perfect-play divisor where a
+    // sample was taken -- which is the curve's half of "a full combo tracks
+    // the perfect play"
+    assert_eq!(curve.points.first().map(|p| p.fraction), Some(1.0), "HP starts full");
+    assert!(
+        curve.points.windows(2).all(|pair| pair[0].time <= pair[1].time),
+        "the breakpoints are in time order"
+    );
+    for pair in curve.points.windows(2) {
+        if pair[0].time == pair[1].time {
+            assert!(
+                timeline.events.iter().any(|e| e.time == pair[0].time),
+                "a jump at {} belongs to no judgement",
+                pair[0].time
+            );
+        }
+    }
+    // reading the curve at a sample's own millisecond reproduces that
+    // sample: on this full combo every reading is the ceiling, so the curve
+    // never falls under the perfect play the search simulated. the reading
+    // is compared through the writer's rounding, which is the only precision
+    // a life bar value has -- the raw ratio sits a hair under 1 on two of
+    // these objects, because the fold drains to each judgement's own
+    // millisecond while the perfect pass drains object to object
+    for (index, sample) in curve.samples.iter().enumerate() {
+        let read = curve
+            .life_bar_value_at(f64::from(sample.time), index)
+            .expect("every object on this map has a live divisor");
+        assert_eq!(
+            format_graph_number(read),
+            format_graph_number(sample.value),
+            "the curve and the sample for object {index} disagree"
+        );
+        assert_eq!(format_graph_number(read), "1");
     }
 }
 
