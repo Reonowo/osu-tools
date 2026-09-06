@@ -180,3 +180,59 @@ export function rulerTicks(window: TimeWindow, targetCount: number): number[] {
 	}
 	return ticks;
 }
+
+/** the overview strip's HP fill as two svg path strings: the area under the
+ * curve and its top edge alone.
+ *
+ * built from `lib/hp.ts`'s resampled columns, so the shape is a step per pixel
+ * column and every coordinate is already a whole device pixel — which is why
+ * it lives here with the tiers' other pixel geometry rather than in `hp.ts`,
+ * whose business is reading the curve, not drawing it */
+export interface HpFillPaths {
+	/** the closed area, filled from the strip's bottom edge. empty when no
+	 * column carries a value */
+	area: string;
+	/** the same top boundary as an open polyline, for the 1 px edge stroke */
+	edge: string;
+}
+
+/** rounds a path coordinate: two decimals is finer than a css pixel and keeps
+ * the path string from carrying seventeen digits per column */
+function coord(value: number): string {
+	return String(Math.round(value * 100) / 100);
+}
+
+export function hpFillPath(columns: readonly (number | null)[], height: number): HpFillPaths {
+	const area: string[] = [];
+	const edge: string[] = [];
+	let open = false;
+
+	const close = (end: number) => {
+		if (!open) return;
+		area.push(`L ${coord(end)} ${coord(height)} Z`);
+		open = false;
+	};
+	for (let column = 0; column < columns.length; column++) {
+		const value = columns[column];
+		if (value === null) {
+			close(column);
+			continue;
+		}
+		const top = Math.min(Math.max((1 - value) * height, 0), height);
+		// the stroke is centred on its path, so the edge sits half a pixel
+		// inside the area's own top rather than half-clipped at either bound
+		const stroke = Math.min(Math.max(top, 0.5), height - 0.5);
+		if (open) {
+			area.push(`L ${coord(column)} ${coord(top)}`);
+			edge.push(`L ${coord(column)} ${coord(stroke)}`);
+		} else {
+			open = true;
+			area.push(`M ${coord(column)} ${coord(height)}`, `L ${coord(column)} ${coord(top)}`);
+			edge.push(`M ${coord(column)} ${coord(stroke)}`);
+		}
+		area.push(`L ${coord(column + 1)} ${coord(top)}`);
+		edge.push(`L ${coord(column + 1)} ${coord(stroke)}`);
+	}
+	close(columns.length);
+	return { area: area.join(" "), edge: edge.join(" ") };
+}

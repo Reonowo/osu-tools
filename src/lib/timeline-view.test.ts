@@ -3,6 +3,7 @@ import {
 	bracketPixels,
 	clampSpan,
 	detailSpanForWheel,
+	hpFillPath,
 	laneTimeAtPixel,
 	laneTransform,
 	rulerTicks,
@@ -372,5 +373,26 @@ describe("lane hit inversion", () => {
 
 	test("a degenerate view yields no transform", () => {
 		expect(laneTransform({ start: 0, end: 100 }, { start: 50, end: 50 }, 800, 1)).toBeNull();
+	});
+});
+
+describe("hpFillPath", () => {
+	test("no column carrying a value draws nothing", () => {
+		expect(hpFillPath([null, null], 26)).toEqual({ area: "", edge: "" });
+		expect(hpFillPath([], 26)).toEqual({ area: "", edge: "" });
+	});
+
+	test("a full column reaches the top and an empty one stays at the floor", () => {
+		const { area, edge } = hpFillPath([1, 0], 26);
+		// opens at the bottom edge, rises to the top of the first column, steps
+		// down to the floor for the second, and closes back at the bottom
+		expect(area).toBe("M 0 26 L 0 0 L 1 0 L 1 26 L 2 26 L 2 26 Z");
+		// the stroke is inset half a pixel at both bounds
+		expect(edge).toBe("M 0 0.5 L 1 0.5 L 1 25.5 L 2 25.5");
+	});
+
+	test("a gap breaks the fill into separate runs", () => {
+		const { area } = hpFillPath([1, null, 1], 10);
+		expect(area).toBe("M 0 10 L 0 0 L 1 0 L 1 10 Z M 2 10 L 2 0 L 3 0 L 3 10 Z");
 	});
 });
