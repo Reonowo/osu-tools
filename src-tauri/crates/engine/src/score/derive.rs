@@ -3,13 +3,17 @@
 
 use crate::beatmap::ProcessedBeatmap;
 use crate::error::Result;
-use crate::score::{is_perfect, peppy_stars, section_tally, total_score, ScoreContext, NOMOD_SCORE_MULTIPLIER};
+use crate::score::{
+    derive_health, is_perfect, life_bar_graph, peppy_stars, section_tally, total_score, HealthCurve,
+    ScoreContext, NOMOD_SCORE_MULTIPLIER,
+};
 use crate::simulation::JudgementTimeline;
 
 /// every derived value at simulation width, before narrowing. carries the
-/// section triple alongside the header fields so the integrity report's
-/// cross-check and the export overlay come from one derivation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// section triple and the whole health curve alongside the header fields so
+/// the integrity report's cross-check, the export overlay and a later HUD
+/// all come from one derivation
+#[derive(Debug, Clone, PartialEq)]
 pub struct DerivedScore {
     pub count_300: u32,
     pub count_100: u32,
@@ -22,6 +26,11 @@ pub struct DerivedScore {
     pub total_score: u64,
     pub sections: u32,
     pub sections_without_burst: u32,
+    /// the life bar samples and the drain-rate search behind them. the
+    /// search runs here rather than only at export because the integrity
+    /// report reads this same derivation at load; it is cheap at the 3 to 65
+    /// passes real maps need
+    pub health: HealthCurve,
 }
 
 /// derives everything from one simulation pass. the mod multiplier is
@@ -46,13 +55,14 @@ pub fn derive_score(
         total_score: total_score(timeline, processed, stars, NOMOD_SCORE_MULTIPLIER),
         sections: tally.sections,
         sections_without_burst: tally.sections_without_burst,
+        health: derive_health(processed, timeline, ctx),
     })
 }
 
 /// the derived fields at their `.osr` on-disk widths, ready to overlay onto
 /// a header. constructed only through [`DerivedFields::narrow`], so a value
 /// that cannot fit its field never silently wraps into a lie
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedFields {
     pub count_300: u16,
     pub count_100: u16,
@@ -63,6 +73,15 @@ pub struct DerivedFields {
     pub max_combo: u16,
     pub perfect: bool,
     pub total_score: u32,
+    /// the regenerated life bar graph, already thinned and formatted. the
+    /// one field here with no on-disk width to overflow -- it is written as
+    /// an osu! string, so narrowing cannot fail on it
+    pub life_bar: String,
+    /// whether the drain-rate search behind that graph settled. NOT a header
+    /// field: it rides here so the export summary can say the life bar was
+    /// regenerated without a converged search rather than claiming more than
+    /// it knows (`limits::MAX_HEALTH_DRAIN_SEARCH_ITERATIONS`)
+    pub life_bar_converged: bool,
 }
 
 /// a derived value exceeded its on-disk width; `field` uses the wire
@@ -74,7 +93,9 @@ pub struct OverflowField {
 
 impl DerivedFields {
     /// writes every derived value onto a header in one place, so the
-    /// regenerating export cannot half-apply the set
+    /// regenerating export cannot half-apply the set. the life bar graph is
+    /// part of the set: a frame-dirty export never carries the source's,
+    /// which describes frames that no longer exist
     pub fn overlay_onto(&self, header: &mut crate::formats::osr::OsrHeader) {
         header.count_300 = self.count_300;
         header.count_100 = self.count_100;
@@ -85,6 +106,7 @@ impl DerivedFields {
         header.max_combo = self.max_combo;
         header.perfect = self.perfect;
         header.total_score = self.total_score;
+        header.life_graph = Some(self.life_bar.clone());
     }
 
     pub fn narrow(score: &DerivedScore) -> core::result::Result<Self, OverflowField> {
@@ -101,6 +123,8 @@ impl DerivedFields {
             max_combo: u16_field(score.max_combo, "maxCombo")?,
             perfect: score.perfect,
             total_score: u32::try_from(score.total_score).map_err(|_| OverflowField { field: "totalScore" })?,
+            life_bar: life_bar_graph(&score.health.samples),
+            life_bar_converged: score.health.search.converged,
         })
     }
 }
@@ -122,7 +146,74 @@ mod tests {
             total_score,
             sections: 25,
             sections_without_burst: 0,
+            health: health_curve(&[(0.0, 1.0), (3000.0, 0.86)]),
         }
+    }
+
+    /// a curve carrying only what narrowing reads: the samples and the
+    /// search's converged flag
+    fn health_curve(samples: &[(f32, f32)]) -> HealthCurve {
+        HealthCurve {
+            search: crate::score::DrainRateSearch {
+                rate: 0.03,
+                normal_multiplier: 1.0,
+                combo_end_multiplier: 1.0,
+                hp_after_perfect_play: vec![200.0],
+                max_combo: 111,
+                iterations: 7,
+                converged: true,
+            },
+            samples: samples
+                .iter()
+                .map(|&(time, value)| crate::score::LifeBarSample { time, value })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn narrowing_writes_the_thinned_graph_and_carries_the_converged_flag() {
+        let fields = DerivedFields::narrow(&wide(100, 1000)).unwrap();
+        assert_eq!(fields.life_bar, "0|1,3000|0.86,");
+        assert!(fields.life_bar_converged);
+
+        // a search that did not settle still produces a graph; the flag is
+        // what tells the summary so
+        let mut unsettled = wide(100, 1000);
+        unsettled.health.search.converged = false;
+        assert!(!DerivedFields::narrow(&unsettled).unwrap().life_bar_converged);
+
+        // and a curve with no samples narrows to the empty string rather
+        // than failing -- a string has no on-disk width to overflow
+        let mut empty = wide(100, 1000);
+        empty.health.samples.clear();
+        assert_eq!(DerivedFields::narrow(&empty).unwrap().life_bar, "");
+    }
+
+    #[test]
+    fn the_overlay_writes_the_regenerated_graph_onto_the_header() {
+        let fields = DerivedFields::narrow(&wide(100, 1000)).unwrap();
+        let mut header = crate::formats::osr::OsrHeader {
+            mode: crate::formats::GameMode::Osu,
+            version: 20240101,
+            beatmap_md5: None,
+            player_name: None,
+            replay_md5: None,
+            count_300: 0,
+            count_100: 0,
+            count_50: 0,
+            count_geki: 0,
+            count_katsu: 0,
+            count_miss: 0,
+            total_score: 0,
+            max_combo: 0,
+            perfect: false,
+            mods: 0,
+            life_graph: Some("the source's own graph".into()),
+            timestamp_ticks: 0,
+            online_score_id: 0,
+        };
+        fields.overlay_onto(&mut header);
+        assert_eq!(header.life_graph.as_deref(), Some("0|1,3000|0.86,"));
     }
 
     #[test]
