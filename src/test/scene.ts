@@ -65,6 +65,7 @@ export function testScene(overrides: Partial<LoadedScene> = {}): LoadedScene {
 		},
 		simulation: {
 			status: "authoritative",
+			hpCurve: [],
 			events: [
 				{
 					time: 980,

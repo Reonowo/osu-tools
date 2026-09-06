@@ -109,6 +109,7 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 			tintIdleMarkers: false,
 			hideCursor: false,
 			keyOverlay: true,
+			hpBar: true,
 			displayLength: 800,
 			playfieldGrid: 0
 		}),

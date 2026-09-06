@@ -23,6 +23,7 @@ export const DEFAULT_OVERLAYS: OverlaySettings = {
 	tintIdleMarkers: false,
 	hideCursor: false,
 	keyOverlay: true,
+	hpBar: true,
 	displayLength: 800,
 	// off: a reference grid the user did not ask for must not appear over
 	// their replay
@@ -71,7 +72,8 @@ export const DEFAULT_TIMELINE: TimelineSettings = {
 	hitWindowBands: true,
 	tethers: true,
 	nestedMarks: true,
-	severityTicks: true
+	severityTicks: true,
+	hpCurve: true
 };
 
 /** the master folded into every granular flag, which is what the renderer

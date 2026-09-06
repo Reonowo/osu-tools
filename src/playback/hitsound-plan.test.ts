@@ -82,6 +82,7 @@ function sceneOf(objects: RenderObject[], events: JudgementEventDto[]): LoadedSc
 		renderPlan: { ...base.renderPlan, objects },
 		simulation: {
 			status: "authoritative",
+			hpCurve: [],
 			events,
 			totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0 }
 		}

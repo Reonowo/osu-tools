@@ -21,6 +21,7 @@ describe("effectiveOverlays, the edit-mode force-draw fold", () => {
 		tintIdleMarkers: false,
 		hideCursor: true,
 		keyOverlay: false,
+		hpBar: true,
 		displayLength: 800,
 		playfieldGrid: 0
 	};

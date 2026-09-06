@@ -55,8 +55,21 @@ export interface IntegrityReport {
 		countMiss: number;
 		count50: number;
 	};
-	lifeBarPresent: boolean;
+	lifeBarGraph: LifeBarGraphReport;
 }
+
+/** mirrors scene.rs `LifeBarGraphDto`: how the header's life bar graph
+ * scored against the loaded file's own simulated samples. named for the GRAPH
+ * throughout, never "life bar" alone — that reads as the HUD element, which
+ * since the HP bar landed is a real thing on screen (`CONTEXT.md`).
+ *
+ * a count and never a verdict — genuine plays land one sample short on a katu
+ * placement the corpus records — and it describes the LOADED FILE, like every
+ * other integrity row, never the edited document */
+export type LifeBarGraphReport =
+	| { status: "absent" }
+	| { status: "empty" }
+	| { status: "compared"; matched: number; total: number; headerFailed: boolean };
 
 /// one compared field; `perfect` rides as 0/1 under the shared shape
 export interface IntegrityRow {
@@ -202,8 +215,22 @@ export interface TotalsDto {
 }
 
 export type SimulationDto =
-	| { status: "authoritative"; events: JudgementEventDto[]; totals: TotalsDto }
+	| { status: "authoritative"; events: JudgementEventDto[]; totals: TotalsDto; hpCurve: HpCurve }
 	| { status: "notSimulated"; reason: "unsupportedMods" | "beatmapMismatch" };
+
+/** the engine's HP curve as it rides the wire: `[time, fraction]` breakpoints
+ * in time order, the fraction being HP over 200 — never the header's life bar
+ * ratio, whose divisor is each object's own perfect-play HP.
+ *
+ * piecewise linear between two points, and a pair sharing a millisecond is a
+ * judgement's jump (the first value is before it, the second after). HP
+ * before the first point is full; `lib/hp.ts` is the only thing that reads
+ * this, and it re-derives on every landed edit.
+ *
+ * EMPTY when the drain-rate search did not settle (crafted maps only), which
+ * reads as a full bar everywhere — the export dialog is where that is
+ * reported */
+export type HpCurve = readonly (readonly [number, number])[];
 
 export interface RenderPlan {
 	playfield: { width: number; height: number };
@@ -347,6 +374,10 @@ export interface OverlaySettings {
 	tintIdleMarkers: boolean;
 	hideCursor: boolean;
 	keyOverlay: boolean;
+	/** the watch HUD's HP bar. an overlay preference for where it sits in the
+	 * dialog, beside the key overlay — the bar is watch HUD rather than
+	 * analysis chrome (`docs/adr/0008`), and off means no HP is evaluated */
+	hpBar: boolean;
 	/** ms; lazer's ReplayAnalysisDisplayLength (200-2000, default 800) */
 	displayLength: number;
 	/** the playfield grid's spacing in osu!px, `0` meaning off. a plain
@@ -437,6 +468,9 @@ export interface TimelineSettings {
 	tethers: boolean;
 	nestedMarks: boolean;
 	severityTicks: boolean;
+	/** the overview strip's HP fill and its fail-point mark together: the mark
+	 * says where the fill reached zero, so neither is toggled alone */
+	hpCurve: boolean;
 }
 
 /** one key an action answers to, as it is persisted. the hotkey string is the

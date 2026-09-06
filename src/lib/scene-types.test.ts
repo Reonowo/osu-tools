@@ -43,6 +43,7 @@ describe("scene contract mirror", () => {
 		const sims: SimulationDto[] = [
 			{
 				status: "authoritative",
+				hpCurve: [],
 				events: [
 					{
 						time: 1030,
@@ -134,6 +135,7 @@ describe("scene contract mirror", () => {
 			tintIdleMarkers: true,
 			hideCursor: true,
 			keyOverlay: false,
+			hpBar: true,
 			displayLength: 1200,
 			playfieldGrid: 16
 		};
