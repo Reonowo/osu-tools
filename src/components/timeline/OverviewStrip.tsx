@@ -8,13 +8,14 @@
 // re-render. only the discrete pieces (bounds, severity ticks, the bracket's
 // edit-mode gate) come from the store via useViewerStore
 
-import { useEffect, useMemo, useRef, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, type PointerEvent } from "react";
+import { resampleHpColumns } from "@/lib/hp";
 import { audioExtendedBounds, fractionFor, timeFor } from "@/lib/timeline";
-import { bracketPixels } from "@/lib/timeline-view";
+import { bracketPixels, hpFillPath } from "@/lib/timeline-view";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore } from "@/state/store";
 import { Playhead, playheadTransform } from "./Playhead";
-import { useTrackMetrics } from "./use-track-metrics";
+import { useObservedWidth, useTrackMetrics } from "./use-track-metrics";
 
 // tick height means severity, not grade: at whole-replay zoom this strip is a
 // navigation surface for rough patches, so a miss towers, a meh reads at
@@ -28,6 +29,11 @@ const TICK_CLASS: Record<"ok" | "meh" | "miss", string> = {
 	ok: "absolute bottom-0 w-[1.5px] top-[65%] bg-[#88b300]"
 };
 
+// the strip's own height in css pixels, which the HP fill's svg is drawn in
+// user space against so its 1px top edge stays one device pixel rather than
+// being stretched by a viewBox
+const STRIP_HEIGHT = 26;
+
 export function OverviewStrip() {
 	const derived = useViewerStore((s) => s.derived);
 	const timelineBounds = useViewerStore((s) => s.timelineBounds);
@@ -35,8 +41,20 @@ export function OverviewStrip() {
 	const mode = useViewerStore((s) => s.mode);
 	const detailSpanMs = useViewerStore((s) => s.detailSpanMs);
 	const showSeverityTicks = useViewerStore((s) => s.timeline.severityTicks);
+	const showHpCurve = useViewerStore((s) => s.timeline.hpCurve);
 
 	const track = useTrackMetrics();
+	// the fill is rebuilt on a resize, a scene or a landed edit -- never per
+	// frame -- so it reads an observed width in state rather than the rAF
+	// loops' ref
+	const observed = useObservedWidth();
+	const attachTrack = useCallback(
+		(element: HTMLElement | null) => {
+			track.attach(element);
+			observed.observe(element);
+		},
+		[track.attach, observed.observe]
+	);
 	const playedRef = useRef<HTMLDivElement>(null);
 	const fillRef = useRef<HTMLDivElement>(null);
 	const bracketRef = useRef<HTMLDivElement>(null);
@@ -100,6 +118,16 @@ export function OverviewStrip() {
 				: [],
 		[derived, bounds.minTime, bounds.maxTime, showSeverityTicks]
 	);
+	// the HP fill, resampled to one value per pixel column of the OBSERVED
+	// width with each column taking its minimum, so a dip narrower than a
+	// column survives the whole-replay zoom
+	const hpFill = useMemo(() => {
+		const columns = Math.round(observed.width);
+		if (!showHpCurve || derived === null || columns <= 0) return null;
+		const paths = hpFillPath(resampleHpColumns(derived.hp.curve, bounds, columns), STRIP_HEIGHT);
+		return paths.area === "" ? null : paths;
+	}, [showHpCurve, derived, bounds.minTime, bounds.maxTime, observed.width]);
+	const failPoint = showHpCurve ? (derived?.hp.failPoint ?? null) : null;
 	const leadInWidth = fractionFor(bounds, 0) * 100;
 	// task 15's detail lanes render on mode === "edit"; the bracket must never
 	// advertise a zoom window over lanes that aren't on screen, so it shares
@@ -114,7 +142,7 @@ export function OverviewStrip() {
 	if (derived === null) return null;
 	return (
 		<div
-			ref={track.attach}
+			ref={attachTrack}
 			// touch-none carries over from Timeline.tsx: without it, a touch drag
 			// fights the browser's own scroll/gesture handling instead of staying
 			// a clean pointer-capture seek
@@ -141,9 +169,29 @@ export function OverviewStrip() {
 				className="absolute inset-y-0 left-0 bg-[repeating-linear-gradient(45deg,rgba(255,255,255,.035)_0_3px,transparent_3px_6px)]"
 				style={{ width: `${leadInWidth}%` }}
 			/>
-			{/* 2: played tint, rAF-driven */}
+			{/* 2: HP fill, static per scene, delta and width. under the tint and
+			the ticks deliberately -- it is the backdrop those read against, not
+			a layer competing with them */}
+			{hpFill !== null && (
+				<svg
+					aria-hidden
+					className="pointer-events-none absolute top-0 left-0"
+					width={observed.width}
+					height={STRIP_HEIGHT}
+				>
+					<path d={hpFill.area} fill="rgba(255,255,255,.06)" />
+					<path
+						d={hpFill.edge}
+						fill="none"
+						stroke="rgba(255,255,255,.22)"
+						strokeWidth={1}
+						shapeRendering="crispEdges"
+					/>
+				</svg>
+			)}
+			{/* 3: played tint, rAF-driven */}
 			<div ref={playedRef} className="absolute inset-y-0 left-0 bg-primary/5" />
-			{/* 3: severity ticks, static per scene. the drop variant is an extra
+			{/* 4: severity ticks, static per scene. the drop variant is an extra
 			element on the tick, never a second mark class: a square cap centred
 			on the tick's top end, inheriting the tick's own background so colour
 			stays grade identity. only ok/meh ticks can carry it (derive.ts), so
@@ -153,11 +201,28 @@ export function OverviewStrip() {
 					{tick.drop && <div className="absolute -left-[0.75px] -top-[1.5px] h-[3px] w-[3px] bg-inherit" />}
 				</div>
 			))}
-			{/* 4: progress rail, fill is rAF-driven */}
+			{/* 5: the fail point, static per scene and delta: where the HP curve
+			first reached zero, which is where stable would have ended the play.
+			a full-height hairline with a square cap at the BOTTOM edge -- the
+			mirror of the drop mark's top cap, so it reads as a different kind of
+			mark from a miss tick rather than a taller one. the red is the miss
+			tick's own literal above, not the destructive token: the two must
+			stay the same red whatever a theme does. the cap's own offset is
+			centred on THIS mark's 2px width ((3 - 2) / 2), where the drop mark's
+			0.75px centres it on a 1.5px tick */}
+			{failPoint !== null && (
+				<div
+					className="pointer-events-none absolute inset-y-0 w-0.5 bg-[#ed1121]"
+					style={{ left: `${fractionFor(bounds, failPoint) * 100}%` }}
+				>
+					<div className="absolute -bottom-[1.5px] -left-[0.5px] h-[3px] w-[3px] bg-inherit" />
+				</div>
+			)}
+			{/* 6: progress rail, fill is rAF-driven */}
 			<div className="absolute inset-x-0 bottom-0 h-0.5 bg-border">
 				<div ref={fillRef} className="absolute inset-y-0 left-0 bg-primary" />
 			</div>
-			{/* 5: zoom bracket, edit-mode only, rAF-driven (translated from the
+			{/* 7: zoom bracket, edit-mode only, rAF-driven (translated from the
 			track's left edge; the loop writes transform + a width that only
 			changes with the zoom) */}
 			{showBracket && (
@@ -166,7 +231,7 @@ export function OverviewStrip() {
 					className="pointer-events-none absolute inset-y-0 left-0 border-x border-primary/60 bg-primary/[.07]"
 				/>
 			)}
-			{/* 6: playhead, rAF-driven */}
+			{/* 8: playhead, rAF-driven */}
 			<Playhead ref={playheadRef} />
 		</div>
 	);

@@ -4,7 +4,7 @@
 // inside the loop would force a layout flush sixty times a second, so the
 // width is observed once and parked in a ref the loop can read for free
 
-import { useCallback, useRef, type RefObject } from "react";
+import { useCallback, useRef, useState, type RefObject } from "react";
 
 export interface TrackMetrics {
 	/** attach to the track element. a ref callback rather than a ref object so
@@ -39,4 +39,32 @@ export function useTrackMetrics(): TrackMetrics {
 	}, []);
 
 	return { attach, element, widthPx };
+}
+
+/** the same observed width as react STATE, for a layer that is rebuilt when
+ * the track resizes rather than read every frame. deliberately separate from
+ * `useTrackMetrics`: putting the width in state there would re-render both
+ * tiers on every resize tick, and the rAF loops that read `widthPx` want it
+ * free of react entirely. compose the two ref callbacks on the same element */
+export interface ObservedWidth {
+	observe: (element: HTMLElement | null) => void;
+	/** css pixels; `0` until the element exists */
+	width: number;
+}
+
+export function useObservedWidth(): ObservedWidth {
+	const [width, setWidth] = useState(0);
+	const observerRef = useRef<ResizeObserver | null>(null);
+
+	const observe = useCallback((next: HTMLElement | null) => {
+		observerRef.current?.disconnect();
+		if (next === null) return;
+		// measured here for the same reason useTrackMetrics does: the
+		// observer's first callback only lands after the first paint
+		setWidth(next.getBoundingClientRect().width);
+		observerRef.current ??= new ResizeObserver((entries) => setWidth(entries[0].contentRect.width));
+		observerRef.current.observe(next);
+	}, []);
+
+	return { observe, width };
 }
