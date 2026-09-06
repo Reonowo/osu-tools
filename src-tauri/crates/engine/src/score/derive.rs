@@ -41,6 +41,21 @@ pub fn derive_score(
     timeline: &JudgementTimeline,
     ctx: &ScoreContext,
 ) -> Result<DerivedScore> {
+    let health = derive_health(processed, timeline, ctx);
+    derive_score_with_health(processed, timeline, ctx, health)
+}
+
+/// the same derivation over a health fold the caller already holds.
+///
+/// the seam exists for the load path, which needs the HP curve for the
+/// viewer AND these fields for the integrity report: folding twice would
+/// repeat stable's map-load drain-rate search, which is the expensive half
+pub fn derive_score_with_health(
+    processed: &ProcessedBeatmap,
+    timeline: &JudgementTimeline,
+    ctx: &ScoreContext,
+    health: HealthCurve,
+) -> Result<DerivedScore> {
     let tally = section_tally(processed, timeline);
     let stars = peppy_stars(ctx)?;
     Ok(DerivedScore {
@@ -55,7 +70,7 @@ pub fn derive_score(
         total_score: total_score(timeline, processed, stars, NOMOD_SCORE_MULTIPLIER),
         sections: tally.sections,
         sections_without_burst: tally.sections_without_burst,
-        health: derive_health(processed, timeline, ctx),
+        health,
     })
 }
 
@@ -151,7 +166,8 @@ mod tests {
     }
 
     /// a curve carrying only what narrowing reads: the samples and the
-    /// search's converged flag
+    /// search's converged flag. the breakpoint list is nothing narrowing
+    /// looks at -- it is the viewer's half of the fold -- so it stays empty
     fn health_curve(samples: &[(f32, f32)]) -> HealthCurve {
         HealthCurve {
             search: crate::score::DrainRateSearch {
@@ -167,6 +183,7 @@ mod tests {
                 .iter()
                 .map(|&(time, value)| crate::score::LifeBarSample { time, value })
                 .collect(),
+            points: Vec::new(),
         }
     }
 

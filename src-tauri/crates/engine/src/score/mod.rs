@@ -16,10 +16,11 @@ mod peppy;
 mod scorev1;
 mod sections;
 
-pub use derive::{derive_score, DerivedFields, DerivedScore, OverflowField};
+pub use derive::{derive_score, derive_score_with_health, DerivedFields, DerivedScore, OverflowField};
 pub use health::{
-    derive_health, drain_rate_search, format_graph_number, life_bar_graph, DrainRateSearch, HealthCurve,
-    LifeBarSample,
+    compare_life_bar_graph, derive_health, derive_health_with_search, drain_rate_search,
+    format_graph_number, life_bar_graph, DrainRateSearch, HealthCurve, HealthPoint, LifeBarComparison,
+    LifeBarPair, LifeBarSample, NearestSample,
 };
 pub use hash::{invariant_date_string, replay_hash};
 pub use peppy::peppy_stars;
