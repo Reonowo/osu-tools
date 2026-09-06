@@ -11,15 +11,22 @@
 
 mod derive;
 mod hash;
+mod health;
 mod peppy;
 mod scorev1;
 mod sections;
 
 pub use derive::{derive_score, DerivedFields, DerivedScore, OverflowField};
+pub use health::{
+    derive_health, drain_rate_search, format_graph_number, life_bar_graph, DrainRateSearch, HealthCurve,
+    LifeBarSample,
+};
 pub use hash::{invariant_date_string, replay_hash};
 pub use peppy::peppy_stars;
 pub use scorev1::{stable_slider_point_values, total_score};
-pub use sections::{is_perfect, max_achievable_combo, section_tally, SectionTally};
+pub use sections::{
+    combo_end_additions, is_perfect, max_achievable_combo, section_tally, ComboEndAddition, SectionTally,
+};
 
 /// the NoMod legacy score multiplier -- the only row of the mod multiplier
 /// table shipping while mod simulation stays gated (TODO.md)
