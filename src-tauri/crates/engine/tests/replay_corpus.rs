@@ -17,20 +17,31 @@ use engine::simulation::simulate;
 /// the entry comes back for human review
 struct RatifiedDivergence {
     stem: &'static str,
-    /// simulated total score minus the header's; every other field must stay exact
-    score_delta: i64,
+    /// simulated minus header for (geki, katu, total score); zeros require
+    /// exact agreement, and counts/max combo are always checked separately
+    derived_delta: (i64, i64, i64),
     mechanism: &'static str,
     record: &'static str,
 }
 
-const RATIFIED_DIVERGENCES: &[RatifiedDivergence] = &[RatifiedDivergence {
-    stem: "L033---cosmobousou-p---denpa-shoujo",
-    score_delta: -19_580,
-    mechanism: "intra-frame ordering: a head-miss deadline and a tail point 2ms apart land on one \
+const RATIFIED_DIVERGENCES: &[RatifiedDivergence] = &[
+    RatifiedDivergence {
+        stem: "L033---cosmobousou-p---denpa-shoujo",
+        derived_delta: (0, 0, -19_580),
+        mechanism: "intra-frame ordering: a head-miss deadline and a tail point 2ms apart land on one \
                 replay frame and apply in walk order, not due-time order, costing one combo unit \
                 over the closing run",
-    record: "ratified 2026-08-12; .scratch/engine-parity-pass/issues/05 closing comment",
-}];
+        record: "ratified 2026-08-12; .scratch/engine-parity-pass/issues/05 closing comment",
+    },
+    RatifiedDivergence {
+        stem: "L203---44000---pumpmycrunkbeetz",
+        derived_delta: (0, -1, 0),
+        mechanism: "grade-placement residual: both engine and danser derive katu 15 against the \
+                header's 16, with the other seven fields exact; the precise lost judgement \
+                remains unresolved, so this accepts only the observed delta, not a general tolerance",
+        record: "accepted 2026-09-05 bounded-pass decision; docs/engine-parity.md (L203)",
+    },
+];
 
 /// spec parity rule 2: the .osr header's counts and max combo are the oracle.
 /// corpus layout: fixtures/replays/local/<name>.osr with a sibling
@@ -94,10 +105,15 @@ fn local_nomod_replays_self_verify() {
         );
         let ratification = RATIFIED_DIVERGENCES.iter().find(|r| r.stem == name);
         if simulated != header {
-            // the ledger covers total score only; a ratified stem whose
+            // the ledger covers derived fields only; a ratified stem whose
             // counts diverge means the record no longer describes reality
             let stale = ratification
-                .map(|r| format!(" (a ratified score-only divergence is on record -- review it: {})", r.record))
+                .map(|r| {
+                    format!(
+                        " (a ratified derived-field divergence is on record -- review it: {})",
+                        r.record
+                    )
+                })
                 .unwrap_or_default();
             failures.push(format!(
                 "{name}: simulated totals {simulated:?} diverge from the header's {header:?}{stale}"
@@ -126,30 +142,28 @@ fn local_nomod_replays_self_verify() {
         );
         match ratification {
             Some(r) => {
-                let score_delta = derived.2 as i64 - header_derived.2 as i64;
-                if (derived.0, derived.1) != (header_derived.0, header_derived.1) {
-                    failures.push(format!(
-                        "{name}: geki/katu ({}, {}) diverge from the header's ({}, {}); the ratified \
-                         record covers total score only -- review it: {}",
-                        derived.0, derived.1, header_derived.0, header_derived.1, r.record
-                    ));
-                } else if score_delta == r.score_delta {
+                let delta = (
+                    i64::from(derived.0) - i64::from(header_derived.0),
+                    i64::from(derived.1) - i64::from(header_derived.1),
+                    derived.2 as i64 - header_derived.2 as i64,
+                );
+                if delta == r.derived_delta {
                     eprintln!(
-                        "corpus: {name}: ratified divergence stands (score {:+}; {}; {})",
-                        r.score_delta, r.mechanism, r.record
+                        "corpus: {name}: ratified divergence stands (geki/katu/score {delta:?}; {}; {})",
+                        r.mechanism, r.record
                     );
                     ratified += 1;
-                } else if score_delta == 0 {
+                } else if delta == (0, 0, 0) {
                     failures.push(format!(
-                        "{name}: the ratified score divergence ({:+}) no longer reproduces -- the \
+                        "{name}: the ratified derived divergence {:?} no longer reproduces -- the \
                          ledger entry is stale; review it: {}",
-                        r.score_delta, r.record
+                        r.derived_delta, r.record
                     ));
                 } else {
                     failures.push(format!(
-                        "{name}: score delta {score_delta:+} differs from the ratified {:+} -- new \
+                        "{name}: geki/katu/score delta {delta:?} differs from the ratified {:?} -- new \
                          behaviour is hiding behind the record; review it: {}",
-                        r.score_delta, r.record
+                        r.derived_delta, r.record
                     ));
                 }
                 continue;
