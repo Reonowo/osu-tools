@@ -107,9 +107,14 @@ export function ToolPalette() {
 	const blocked = gate !== null && !gate.editable ? gate.reason : null;
 
 	return (
+		/* the positioning lives on Viewport's slide wrapper, which is what
+		travels; this box only has to be the palette. the chrome marker stays
+		HERE rather than on the wrapper so an exiting palette -- inert, and so
+		skipped by hit testing -- lets a click through to the playfield instead
+		of the walk finding a marker on a box that is on its way out */
 		<div
 			data-viewport-chrome=""
-			className="absolute top-3 left-3 flex flex-col gap-1 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]"
+			className="flex flex-col gap-1 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]"
 		>
 			<ToggleGroup
 				orientation="vertical"
@@ -229,9 +234,10 @@ export function CoordinateReadout() {
 	if (scene === null || derived === null) return null;
 
 	return (
+		/* positioned by Viewport's slide wrapper, as the palette is */
 		<div
 			data-viewport-chrome=""
-			className="absolute right-3 bottom-3 flex items-center gap-2.5 rounded-lg border border-border bg-surface-panel/90 px-2.5 py-[5px] font-mono text-[10px] text-[#71717a] backdrop-blur-[8px]"
+			className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-panel/90 px-2.5 py-[5px] font-mono text-[10px] text-[#71717a] backdrop-blur-[8px]"
 		>
 			<span>
 				x{" "}

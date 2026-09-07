@@ -6,8 +6,10 @@
 // pure and lives in renderer/playfield.ts -- this is the dom half (the edit
 // tools' dom half lives next door in use-edit-tools.ts)
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { PlayerView } from "@/components/PlayerView";
+import { useShellPresence } from "@/lib/use-presence";
+import { cn } from "@/lib/utils";
 import { spacePan } from "@/playback/space-pan";
 import {
 	anchoredZoomPan,
@@ -25,8 +27,44 @@ import { ViewportContextMenu } from "./ViewportContextMenu";
 import { WatchHud } from "./WatchHud";
 import { ZoomControls } from "./ZoomControls";
 
+/** one edit-mode overlay travelling off its own edge -- lazer's Toolbar, one
+ * instance per corner. the wrapper is always in the dom and only its translate
+ * and opacity move, so a viewport that first paints in edit mode shows the
+ * control in place; presence keeps the control mounted through the slide out
+ * and marks the wrapper `inert`, which is what lets a click where the palette
+ * WAS reach the playfield. the timing and the travel are index.css's */
+function ViewportChrome({
+	open,
+	edge,
+	className,
+	children
+}: {
+	open: boolean;
+	/** which side it lives on, and so which way it leaves */
+	edge: "left" | "right";
+	/** where the control sits, which is the corner it travels from */
+	className: string;
+	children: ReactNode;
+}) {
+	// `translate` rather than `opacity`: the two run for the same 500ms on the
+	// way out, and the slide is what the region IS
+	const presence = useShellPresence(open, "translate");
+	return (
+		<div
+			data-motion-row="shell"
+			data-open={open ? "" : undefined}
+			inert={presence.exiting || undefined}
+			onTransitionEnd={presence.onTransitionEnd}
+			className={cn("shell-viewport-chrome", `shell-viewport-chrome-${edge}`, className)}
+		>
+			{presence.mounted && children}
+		</div>
+	);
+}
+
 export function Viewport() {
 	const mode = useViewerStore((s) => s.mode);
+	const editing = mode === "edit";
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	// the cursor-path tools: pointer capture and event translation only; the
@@ -173,12 +211,15 @@ export function Viewport() {
 			{mode === "edit" && <ViewportContextMenu containerRef={containerRef} />}
 			<WatchHud />
 			<ZoomControls onStep={stepZoom} />
-			{mode === "edit" && (
-				<>
-					<ToolPalette />
-					<CoordinateReadout />
-				</>
-			)}
+			{/* in from their own sides over the palette slide while fading in over
+			a quarter of it, out the same way but fading on InQuint so each stays
+			opaque as it goes and reads as leaving rather than dissolving */}
+			<ViewportChrome open={editing} edge="left" className="absolute top-3 left-3">
+				<ToolPalette />
+			</ViewportChrome>
+			<ViewportChrome open={editing} edge="right" className="absolute right-3 bottom-3">
+				<CoordinateReadout />
+			</ViewportChrome>
 		</div>
 	);
 }

@@ -22,6 +22,8 @@ import { smoothedHpAt } from "@/lib/hp";
 import { selectMotion } from "@/lib/motion";
 import { scoreAt } from "@/lib/score";
 import { countAtOrBefore, statsAt } from "@/lib/timeline";
+import { useShellPresence } from "@/lib/use-presence";
+import { cn } from "@/lib/utils";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore } from "@/state/store";
 
@@ -106,6 +108,15 @@ export function WatchHud() {
 	// the HP bar's own mode gate, folded once here rather than re-read at each
 	// of its three sites (the loop's branch, the effect's deps and the jsx)
 	const hpActive = mode === "watch" && hpVisible;
+	const keyActive = mode === "watch" && keyVisible;
+
+	// the two watch-only mounts fade rather than drop on a mode switch. each
+	// wrapper is always in the dom and only its opacity moves; the element
+	// inside is presence-gated, and while it leaves the loops above stop
+	// writing to it (their own flags are already false), so it fades holding
+	// its last reading rather than snapping to a rest value
+	const hpMount = useShellPresence(authoritative && hpActive, "opacity");
+	const keyMount = useShellPresence(keyActive, "opacity");
 
 	// the score needs a curve to read: null is a fold that never ran, which the
 	// panel answers with the header's own total and which the HUD -- having no
@@ -218,7 +229,7 @@ export function WatchHud() {
 	}, [scene, derived, authoritative, hpActive, comboVisible, accuracyVisible, scoreActive, scoreCurve, popActive]);
 
 	useEffect(() => {
-		if (mode !== "watch" || !keyVisible || scene === null || derived === null) return;
+		if (!keyActive || scene === null || derived === null) return;
 		const frames = scene.frames;
 		const edges = derived.edges;
 		let raf = 0;
@@ -238,33 +249,45 @@ export function WatchHud() {
 		};
 		raf = requestAnimationFrame(loop);
 		return () => cancelAnimationFrame(raf);
-	}, [mode, keyVisible, scene, derived]);
+	}, [keyActive, scene, derived]);
 
 	if (scene === null) return null;
 
 	return (
 		<>
-			{authoritative && hpActive && (
-				/* top-left with the HUD's own margin. no miss flash (the popup and
-				the overview strip already mark misses), no fill-up animation (HP is
-				full at time zero, so there is nothing to fill up from) and no
-				perfect-play ghost -- that needs a second curve out of the search */
-				<div className="pointer-events-none absolute top-3.5 left-4 flex w-[40%] items-center gap-2">
-					<div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[.12]">
+			{/* top-left with the HUD's own margin. no miss flash (the popup and
+			the overview strip already mark misses), no fill-up animation (HP is
+			full at time zero, so there is nothing to fill up from) and no
+			perfect-play ghost -- that needs a second curve out of the search.
+			the wrapper is the mount FADE and is always in the dom, so a scene
+			opening in watch mode shows the bar in place; no `inert`, since the
+			whole cluster is pointer-events-none and holds nothing focusable */}
+			<div
+				data-motion-row="shell"
+				onTransitionEnd={hpMount.onTransitionEnd}
+				className={cn(
+					"shell-hud-mount pointer-events-none absolute top-3.5 left-4 flex w-[40%] items-center gap-2",
+					authoritative && hpActive ? "opacity-100" : "opacity-0"
+				)}
+			>
+				{hpMount.mounted && (
+					<>
+						<div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[.12]">
+							<div
+								ref={hpFillRef}
+								className="h-full w-full rounded-full"
+								style={{ backgroundColor: HP_FILL }}
+							/>
+						</div>
 						<div
-							ref={hpFillRef}
-							className="h-full w-full rounded-full"
-							style={{ backgroundColor: HP_FILL }}
-						/>
-					</div>
-					<div
-						ref={hpReadoutRef}
-						className="text-[10px] font-semibold tracking-[.1em] text-white/40 uppercase tabular-nums"
-					>
-						100%
-					</div>
-				</div>
-			)}
+							ref={hpReadoutRef}
+							className="text-[10px] font-semibold tracking-[.1em] text-white/40 uppercase tabular-nums"
+						>
+							100%
+						</div>
+					</>
+				)}
+			</div>
 			{authoritative && comboVisible && (
 				<div
 					ref={comboBoxRef}
@@ -301,9 +324,21 @@ export function WatchHud() {
 					</>
 				)}
 			</div>
-			{mode === "watch" && keyVisible && (
-				<div className="pointer-events-none absolute top-1/2 right-4 flex -translate-y-1/2 flex-col gap-[3px]">
-					{KEYS.map((key, i) => (
+			{/* the mount fade sits OUTSIDE the indexed subtree on purpose: the
+			loop above indexes into each tile's children by position, so a
+			wrapper anywhere inside a tile would shift that indexing. no `inert`,
+			for the reason the HP cluster has none: pointer-events-none with
+			nothing focusable inside it */}
+			<div
+				data-motion-row="shell"
+				onTransitionEnd={keyMount.onTransitionEnd}
+				className={cn(
+					"shell-hud-mount pointer-events-none absolute top-1/2 right-4 flex -translate-y-1/2 flex-col gap-[3px]",
+					keyActive ? "opacity-100" : "opacity-0"
+				)}
+			>
+				{keyMount.mounted &&
+					KEYS.map((key, i) => (
 						<KeyTile
 							key={key.label}
 							label={key.label}
@@ -312,8 +347,7 @@ export function WatchHud() {
 							}}
 						/>
 					))}
-				</div>
-			)}
+			</div>
 		</>
 	);
 }
