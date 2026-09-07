@@ -72,7 +72,7 @@ export type SettingsPrefKey =
  * lazer does (VolumeSettings.cs). a key in this map means "exactly one
  * category owns it", and the master owns none */
 export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]> = {
-	general: ["interface.motion", "interface.comboPop"],
+	general: ["interface.motion", "interface.comboPop", "interface.shellTransitions", "interface.popupTransitions"],
 	// the two `gameplay.*` keys are not a typo: the audio category renders
 	// them, and the prefs group they persist under was left alone so no
 	// settings file needs migrating (AudioCategory.tsx says why they moved).

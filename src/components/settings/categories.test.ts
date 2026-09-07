@@ -128,7 +128,12 @@ describe("category registry", () => {
 		// beside it is the bespoke control it always was. asserted as the exact
 		// list rather than as a predicate over it, which an empty array would
 		// satisfy just as happily
-		expect([...CATEGORY_PREFS.general].sort()).toEqual(["interface.comboPop", "interface.motion"]);
+		expect([...CATEGORY_PREFS.general].sort()).toEqual([
+			"interface.comboPop",
+			"interface.motion",
+			"interface.popupTransitions",
+			"interface.shellTransitions"
+		]);
 	});
 
 	test("every registry entry is a category the dialog can render", () => {

@@ -27,6 +27,18 @@ export const MOTION_TOGGLES: { key: keyof InterfaceSettings; label: string; desc
 		label: "combo counter pop",
 		description:
 			"the watch HUD's combo counter scales up on every increment and flashes red on a break. the pop's phase is the replay's own time, so a seek lands mid-pop and a pause holds it"
+	},
+	{
+		key: "shellTransitions",
+		label: "shell transitions",
+		description:
+			"the shell's own regions move when the mode or the panel changes — the side panel slides and the viewport makes room, the timeline's edit tier reveals, the tool palette and coordinate readout slide in from their edges, the HP bar and key overlay fade — plus the shell's own fade when a replay opens"
+	},
+	{
+		key: "popupTransitions",
+		label: "popup transitions",
+		description:
+			"anything summoned above the shell moves on its way in and out — dialogs and the dim behind them, popovers, the context menu, tooltips — and so does a content switch inside one, like the settings dialog's category body"
 	}
 ];
 
@@ -115,10 +127,11 @@ export function GeneralCategory({
 							</ToggleGroup>
 						</TooltipTrigger>
 						<TooltipContent side="left">
-							the master for the app's own animation — the combo pop, and every dialog, popover and hover
-							transition in the chrome. `system` follows your OS reduce-motion setting as it changes; on
-							and off override it. the playfield's gameplay effects have their own master in the gameplay
-							category, and loading spinners keep spinning either way
+							the master for the app's own animation — the combo pop, the shell's own regions, and every
+							dialog, popover and hover transition in the chrome. `system` follows your OS reduce-motion
+							setting as it changes; on and off override it. the rows below split the rest of it and keep
+							their own settings while this is off. the playfield's gameplay effects have their own master
+							in the gameplay category, and loading spinners keep spinning either way
 						</TooltipContent>
 					</Tooltip>
 				</div>
