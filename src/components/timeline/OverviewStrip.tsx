@@ -12,6 +12,8 @@ import { useCallback, useEffect, useMemo, useRef, type PointerEvent } from "reac
 import { resampleHpColumns } from "@/lib/hp";
 import { audioExtendedBounds, fractionFor, timeFor } from "@/lib/timeline";
 import { bracketPixels, hpFillPath } from "@/lib/timeline-view";
+import { useShellPresence } from "@/lib/use-presence";
+import { cn } from "@/lib/utils";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore } from "@/state/store";
 import { Playhead, playheadTransform } from "./Playhead";
@@ -133,6 +135,12 @@ export function OverviewStrip() {
 	// advertise a zoom window over lanes that aren't on screen, so it shares
 	// that same gate rather than a condition of its own
 	const showBracket = mode === "edit";
+	// the bracket is the other half of the edit tier and fades with the lanes'
+	// reveal. presence keeps it mounted through the fade OUT, which is what
+	// keeps the loop above writing its position while it leaves -- and keeps
+	// the loop skipping the bracket maths entirely once it is gone, which is
+	// the null check it already had
+	const bracket = useShellPresence(showBracket, "opacity");
 
 	function seekFromPointer(e: PointerEvent<HTMLDivElement>) {
 		const rect = track.element.current!.getBoundingClientRect();
@@ -224,13 +232,26 @@ export function OverviewStrip() {
 			</div>
 			{/* 7: zoom bracket, edit-mode only, rAF-driven (translated from the
 			track's left edge; the loop writes transform + a width that only
-			changes with the zoom) */}
-			{showBracket && (
-				<div
-					ref={bracketRef}
-					className="pointer-events-none absolute inset-y-0 left-0 border-x border-primary/60 bg-primary/[.07]"
-				/>
-			)}
+			changes with the zoom). the always-mounted wrapper is what carries
+			the fade -- there is nothing to transition from on a fresh element,
+			so a strip that first paints in edit mode shows its bracket in place.
+			no `inert`: the whole layer is pointer-events-none and holds nothing
+			focusable, so a fading bracket can eat neither a click nor a tab */}
+			<div
+				data-motion-row="shell"
+				onTransitionEnd={bracket.onTransitionEnd}
+				className={cn(
+					"shell-edit-tier pointer-events-none absolute inset-0",
+					showBracket ? "opacity-100" : "opacity-0"
+				)}
+			>
+				{bracket.mounted && (
+					<div
+						ref={bracketRef}
+						className="pointer-events-none absolute inset-y-0 left-0 border-x border-primary/60 bg-primary/[.07]"
+					/>
+				)}
+			</div>
 			{/* 8: playhead, rAF-driven */}
 			<Playhead ref={playheadRef} />
 		</div>
