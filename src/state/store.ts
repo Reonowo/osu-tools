@@ -243,10 +243,16 @@ export interface ViewerState {
 	 * the picker shows this in the same strip the fallback notice uses */
 	skinNotice: string | null;
 	/** the osrPath of the load that most recently failed with a pickBeatmap-
-	 * recoverable error (beatmapNotFound / osuDbNotFound), so a dropped
-	 * beatmap can route to openWithBeatmap even after lastError itself is
-	 * cleared (App.tsx clears lastError synchronously once its toast is
-	 * raised -- this field has its own lifetime, independent of the toast).
+	 * recoverable error, so a dropped beatmap can route to openWithBeatmap
+	 * even after lastError itself is cleared (App.tsx clears lastError
+	 * synchronously once its toast is raised -- this field has its own
+	 * lifetime, independent of the toast).
+	 *
+	 * WHICH kinds are recoverable is `describeIpcError`'s answer alone
+	 * (state/errors.ts) and deliberately not a list kept here: a kind that
+	 * gains the recovery there gains this route with it, which is how
+	 * osuDbUnreadable arrived beside beatmapNotFound and osuDbNotFound
+	 * without touching this file.
 	 * cleared at the start of every load attempt and re-set by that
 	 * attempt's outcome (to null when it isn't pickBeatmap-recoverable),
 	 * so it always reflects only the most recent attempt */

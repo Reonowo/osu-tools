@@ -33,6 +33,17 @@ export function describeIpcError(e: IpcError): { title: string; detail: string; 
 						: "set the install path in settings, or pick the beatmap manually",
 				recovery: "pickBeatmap"
 			};
+		// the install is there; its beatmap index is not usable. never phrased
+		// as an app fault -- that is exactly what "internal error" said for
+		// the four months a listing format change went unread, with no route
+		// forward offered. the reason is the reader's own (listing version and
+		// the byte its walk stopped at, or the cap that was breached)
+		case "osuDbUnreadable":
+			return {
+				title: "couldn't read osu!.db",
+				detail: `${e.path}: ${e.reason}. pick the beatmap manually`,
+				recovery: "pickBeatmap"
+			};
 		case "unsupportedMode":
 			return {
 				title: "unsupported game mode",

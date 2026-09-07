@@ -6,6 +6,9 @@ describe("ipc error mapping", () => {
 	test("recoveries", () => {
 		expect(describeIpcError({ kind: "beatmapNotFound", md5: "abc" }).recovery).toBe("pickBeatmap");
 		expect(describeIpcError({ kind: "osuDbNotFound", searched: [] }).recovery).toBe("pickBeatmap");
+		expect(describeIpcError({ kind: "osuDbUnreadable", path: "C:\\a", reason: "why" }).recovery).toBe(
+			"pickBeatmap"
+		);
 		expect(describeIpcError({ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" }).recovery).toBe(
 			"offerMismatch"
 		);
@@ -17,6 +20,22 @@ describe("ipc error mapping", () => {
 		expect(d.detail).toContain("MAX_OSZ_ENTRIES");
 		const db = describeIpcError({ kind: "osuDbNotFound", searched: ["C:\\a", "C:\\b"] });
 		expect(db.detail).toContain("C:\\a");
+	});
+
+	test("an unreadable osu!.db names the file, the reason, and the way out", () => {
+		// the install exists; the listing does not read. the toast must be
+		// about the file rather than about the app, and must say the beatmap
+		// can still be picked by hand
+		const d = describeIpcError({
+			kind: "osuDbUnreadable",
+			path: "E:\\osu!\\osu!.db",
+			reason: "osu!.db version 20260711 (walk stopped at byte 1353): boom"
+		});
+		expect(d.title).toBe("couldn't read osu!.db");
+		expect(d.detail).toContain("E:\\osu!\\osu!.db");
+		expect(d.detail).toContain("20260711");
+		expect(d.detail).toContain("pick the beatmap manually");
+		expect(d.recovery).toBe("pickBeatmap");
 	});
 
 	test("editor error kinds map to copy", () => {

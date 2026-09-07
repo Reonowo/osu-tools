@@ -1254,6 +1254,18 @@ describe("pendingRecovery (openers.ts routes a dropped beatmap through this, not
 		expect(store.getState().pendingRecovery).toBe("C:\\r.osr");
 	});
 
+	test("osuDbUnreadable is pickBeatmap-recoverable too", async () => {
+		// an install whose listing cannot be read routes exactly like a
+		// missing one: the picker is the way to the beatmap either way
+		const store = createViewerStore(
+			deps({
+				loadReplay: reject({ kind: "osuDbUnreadable", path: "C:\\osu!\\osu!.db", reason: "truncated" })
+			})
+		);
+		await store.getState().openReplay("C:\\r.osr");
+		expect(store.getState().pendingRecovery).toBe("C:\\r.osr");
+	});
+
 	test("a dropped beatmap after beatmapNotFound reaches openWithBeatmap with the recorded osrPath", async () => {
 		// mirrors installDropHandler's routing (src/lib/openers.ts): reads
 		// pendingRecovery, not lastError, to decide where a dropped beatmap goes
