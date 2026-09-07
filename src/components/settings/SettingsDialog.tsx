@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useContentFade } from "@/lib/use-content-fade";
 import { cn } from "@/lib/utils";
 import { useViewerStore } from "@/state/store";
 import { AnalysisCategory } from "./AnalysisCategory";
@@ -31,8 +32,13 @@ import { SkinCategory } from "./SkinCategory";
 // in a different tailwind-merge modifier scope than these plain utilities and
 // land later at higher specificity (:is(.dark *)) -- so they win the cascade
 // unless ours are marked important. TabRail.tsx documents the same three
-// mechanisms at length
-const NAV_ITEM_BASE = "h-8 flex-none gap-2 px-2";
+// mechanisms at length.
+//
+// chrome-indicator-colour: the highlight fades across rather than flipping,
+// the same motion the top bar's mode toggle takes. this one is under the POPUP
+// row, not the shell's -- a transition is gated by the surface it happens in,
+// and the nav column lives inside a dialog (lib/motion.ts)
+const NAV_ITEM_BASE = "chrome-indicator-colour h-8 flex-none gap-2 px-2";
 const NAV_ITEM_ACTIVE = "bg-primary/[.13]! text-primary! border-transparent!";
 const NAV_ITEM_INACTIVE = "text-[#71717a]!";
 
@@ -47,6 +53,13 @@ export function SettingsDialog({
 	onClose: () => void;
 }) {
 	const isOpen = category !== null;
+	// the body-fade rule, shared with the side panel's tab body
+	// (lib/content-fade.ts): a category change inside an OPEN dialog fades, the
+	// dialog's own entry does not. it also answers which category is on screen
+	// while the dialog is LEAVING -- base-ui keeps a closing popup mounted for
+	// its whole exit, so a null `category` falling back to the first one here
+	// would swap the body under the user for the length of the fade
+	const body = useContentFade(category, SETTINGS_CATEGORIES[0].id);
 	const setOverlay = useViewerStore((s) => s.setOverlay);
 	const overlays = useViewerStore((s) => s.overlays);
 	const setAudio = useViewerStore((s) => s.setAudio);
@@ -131,9 +144,10 @@ export function SettingsDialog({
 
 				<Tabs
 					orientation="vertical"
-					// null only ever reaches here on a closed dialog, whose panel
-					// subtree is unmounted anyway; the fallback keeps Tabs controlled
-					value={category ?? SETTINGS_CATEGORIES[0].id}
+					// the category being SHOWN rather than the one being asked for:
+					// they differ only while the dialog is leaving, which is exactly
+					// when a fallback to the first category would be visible
+					value={body.shown}
 					onValueChange={(value) => onCategoryChange(value as SettingsCategory)}
 					className="min-h-0 gap-4"
 				>
@@ -144,7 +158,8 @@ export function SettingsDialog({
 							<TabsTrigger
 								key={id}
 								value={id}
-								className={cn(NAV_ITEM_BASE, id === category ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE)}
+								data-motion-row="popup"
+								className={cn(NAV_ITEM_BASE, id === body.shown ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE)}
 							>
 								<Icon aria-hidden="true" />
 								{label}
@@ -169,38 +184,47 @@ export function SettingsDialog({
 					    scrollbar. one shared viewport, so every category opens at its
 					    top rather than wherever it was last left */}
 					<div className="h-[26rem] max-h-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
-						<TabsContent value="general">
-							<GeneralCategory saving={saving} onPickInstall={() => void pickInstall()} />
-						</TabsContent>
-						<TabsContent value="gameplay">
-							<GameplayCategory />
-						</TabsContent>
-						<TabsContent value="skin">
-							<SkinCategory
-								onBrowseFolder={() => void pickSkinFolder()}
-								onImportArchive={() => void pickSkinArchive()}
-							/>
-						</TabsContent>
-						<TabsContent value="audio">
-							<AudioCategory
-								draftOffset={draftOffset}
-								onDraftOffsetChange={setDraftOffset}
-								onCommitOffset={commitOffset}
-							/>
-						</TabsContent>
-						<TabsContent value="analysis">
-							<AnalysisCategory
-								draftLength={draftLength}
-								onDraftChange={setDraftLength}
-								onCommit={commitLength}
-							/>
-						</TabsContent>
-						<TabsContent value="editing">
-							<EditingCategory />
-						</TabsContent>
-						<TabsContent value="keybinds">
-							<KeybindsCategory />
-						</TabsContent>
+						{/* keyed on the category so the fade restarts on every switch;
+						the wrapper is inside the scroll viewport so the frame itself
+						never moves, which is the whole point of fading the body */}
+						<div
+							key={body.shown}
+							data-motion-row="popup"
+							className={cn(body.fading && "chrome-content-fade")}
+						>
+							<TabsContent value="general">
+								<GeneralCategory saving={saving} onPickInstall={() => void pickInstall()} />
+							</TabsContent>
+							<TabsContent value="gameplay">
+								<GameplayCategory />
+							</TabsContent>
+							<TabsContent value="skin">
+								<SkinCategory
+									onBrowseFolder={() => void pickSkinFolder()}
+									onImportArchive={() => void pickSkinArchive()}
+								/>
+							</TabsContent>
+							<TabsContent value="audio">
+								<AudioCategory
+									draftOffset={draftOffset}
+									onDraftOffsetChange={setDraftOffset}
+									onCommitOffset={commitOffset}
+								/>
+							</TabsContent>
+							<TabsContent value="analysis">
+								<AnalysisCategory
+									draftLength={draftLength}
+									onDraftChange={setDraftLength}
+									onCommit={commitLength}
+								/>
+							</TabsContent>
+							<TabsContent value="editing">
+								<EditingCategory />
+							</TabsContent>
+							<TabsContent value="keybinds">
+								<KeybindsCategory />
+							</TabsContent>
+						</div>
 					</div>
 				</Tabs>
 			</DialogContent>
