@@ -182,15 +182,21 @@ export function TopBar({
 					}}
 					className="h-7 rounded-lg border border-border bg-[#131316] p-0.5"
 				>
+					{/* chrome-indicator-colour: the highlight fades across rather than
+					flipping, so the toggle moves like the panel slide it triggers.
+					data-motion-row shell, because this mark lives in the shell
+					(index.css) */}
 					<ToggleGroupItem
 						value="watch"
-						className="h-6 rounded-md px-[11px] text-[11.5px] font-semibold text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+						data-motion-row="shell"
+						className="chrome-indicator-colour h-6 rounded-md px-[11px] text-[11.5px] font-semibold text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground"
 					>
 						watch
 					</ToggleGroupItem>
 					<ToggleGroupItem
 						value="edit"
-						className="h-6 rounded-md px-[11px] text-[11.5px] font-semibold text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+						data-motion-row="shell"
+						className="chrome-indicator-colour h-6 rounded-md px-[11px] text-[11.5px] font-semibold text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground"
 					>
 						edit
 					</ToggleGroupItem>

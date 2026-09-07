@@ -57,7 +57,15 @@ const RAIL_CONTROL_BASE =
 // needs it for the matching reason on the inactive side (dark:text-muted-foreground)
 const RAIL_CONTROL_ACTIVE = "bg-primary/[.13]! text-primary! border-transparent!";
 const RAIL_CONTROL_INACTIVE = "text-[#71717a]!";
-const RAIL_INDICATOR = "pointer-events-none absolute -left-1.5 top-2.5 bottom-2.5 w-0.5 rounded-[1px] bg-primary";
+// lazer's own SidebarIconButton indicator: it stays mounted in BOTH states and
+// moves between them -- 4px and faded, 18px and shown -- rather than appearing
+// and disappearing, which is what makes a rapid pair of clicks reverse from
+// wherever the bar has got to. centred by translate rather than by top/bottom
+// insets now that the height is the thing that animates
+const RAIL_INDICATOR =
+	"shell-rail-indicator pointer-events-none absolute top-1/2 -left-1.5 w-0.5 -translate-y-1/2 rounded-[1px] bg-primary";
+const RAIL_INDICATOR_ACTIVE = "h-[18px] opacity-100";
+const RAIL_INDICATOR_INACTIVE = "h-[4px] opacity-0";
 
 /** what a rail-tab click means. base-ui's Tab guards its own click handling
  * on !active, so for the selected tab this handler is the only thing that
@@ -92,7 +100,11 @@ function RailTrigger({ id, label, Icon }: (typeof PANEL_TABS)[number]) {
 						className={cn(RAIL_CONTROL_BASE, active ? RAIL_CONTROL_ACTIVE : RAIL_CONTROL_INACTIVE)}
 					>
 						<Icon className="size-4" />
-						{active && <span className={RAIL_INDICATOR} />}
+						<span
+							data-motion-row="shell"
+							data-active={active ? "" : undefined}
+							className={cn(RAIL_INDICATOR, active ? RAIL_INDICATOR_ACTIVE : RAIL_INDICATOR_INACTIVE)}
+						/>
 					</TabsTrigger>
 				}
 			/>
@@ -152,7 +164,14 @@ export function TabRail() {
 							className={cn(RAIL_CONTROL_BASE, panelOpen ? RAIL_CONTROL_ACTIVE : RAIL_CONTROL_INACTIVE)}
 						>
 							<PanelRight className="size-4" />
-							{panelOpen && <span className={RAIL_INDICATOR} />}
+							<span
+								data-motion-row="shell"
+								data-active={panelOpen ? "" : undefined}
+								className={cn(
+									RAIL_INDICATOR,
+									panelOpen ? RAIL_INDICATOR_ACTIVE : RAIL_INDICATOR_INACTIVE
+								)}
+							/>
 						</button>
 					}
 				/>
