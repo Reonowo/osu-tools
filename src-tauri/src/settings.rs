@@ -631,6 +631,17 @@ pub struct InterfacePrefs {
     /// the combo counter's pop and break flash, the first animation under the
     /// master. gated by it and keeps its own setting while it is off
     pub combo_pop: bool,
+    /// the SHELL's own regions moving: the side panel's slide, the timeline's
+    /// edit tier revealing, the tool palette's and coordinate readout's
+    /// slide, the watch HUD's mounts fading, the rail's and mode toggle's
+    /// active marks, and the shell's fade on load
+    pub shell_transitions: bool,
+    /// everything summoned ABOVE the shell and dismissed back out of it --
+    /// dialogs and their dim, popovers, the context menu, tooltips -- plus
+    /// any content switch inside one, the settings dialog's category body
+    /// included. a transition is gated by the SURFACE it happens in, which is
+    /// why the settings nav column rides here and not with the shell
+    pub popup_transitions: bool,
 }
 
 impl Default for InterfacePrefs {
@@ -640,6 +651,8 @@ impl Default for InterfacePrefs {
             // gets less motion without ever opening this dialog
             motion: None,
             combo_pop: true,
+            shell_transitions: true,
+            popup_transitions: true,
         }
     }
 }
@@ -820,6 +833,8 @@ mod tests {
             interface: InterfacePrefs {
                 motion: Some(false),
                 combo_pop: false,
+                shell_transitions: false,
+                popup_transitions: true,
             },
             keybinds: keybinds([("selectTool", json!({ "hotkey": "К", "codes": ["KeyV"] }))]),
             skin: SkinLocator::Stable {
@@ -935,9 +950,11 @@ mod tests {
             settings.interface,
             InterfacePrefs {
                 motion: None,
-                combo_pop: true
+                combo_pop: true,
+                shell_transitions: true,
+                popup_transitions: true
             },
-            "interface motion follows the OS until the user says otherwise, and the combo pop ships on"
+            "interface motion follows the OS until the user says otherwise, and every row under it ships on"
         );
     }
 
@@ -1006,7 +1023,12 @@ mod tests {
                 // the tri-state master rides as a nullable bool: an explicit
                 // choice is the bool, and null is "follow the OS", which only
                 // the frontend can resolve
-                "interface": { "motion": false, "comboPop": false },
+                "interface": {
+                    "motion": false,
+                    "comboPop": false,
+                    "shellTransitions": false,
+                    "popupTransitions": true,
+                },
                 "keybinds": { "selectTool": [{ "hotkey": "К", "codes": ["KeyV"] }] },
                 // the discriminated locator: both the KIND of location and the
                 // path, so a folder skin and a stable one that happen to share
@@ -1077,7 +1099,12 @@ mod tests {
                     "hpCurve": true,
                 },
                 // a fresh install follows the OS rather than deciding for it
-                "interface": { "motion": null, "comboPop": true },
+                "interface": {
+                    "motion": null,
+                    "comboPop": true,
+                    "shellTransitions": true,
+                    "popupTransitions": true,
+                },
                 "keybinds": {},
                 // a fresh install draws the app's own look, and that look is a
                 // selectable row rather than a "nothing selected" state

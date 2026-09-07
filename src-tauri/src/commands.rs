@@ -2134,6 +2134,8 @@ Name: Audible
         let interface = crate::settings::InterfacePrefs {
             motion: Some(false),
             combo_pop: false,
+            shell_transitions: false,
+            popup_transitions: true,
         };
         // the overrides travel opaquely: this crate never asks what
         // `selectTool` is or whether two actions want one key
@@ -2189,6 +2191,11 @@ Name: Audible
         assert_eq!(
             updated.keybinds, keybinds,
             "a rebinding round-trips through the command unchanged"
+        );
+        assert_eq!(updated.interface, interface);
+        assert!(
+            updated.interface.popup_transitions,
+            "a motion row left on survives a master switched off, exactly as an effect row does"
         );
 
         // persisted in sanitized form, not just published
