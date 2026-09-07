@@ -31,6 +31,7 @@ const IPC_ERROR_KINDS = new Set([
 	"beatmapNotFound",
 	"beatmapMismatch",
 	"osuDbNotFound",
+	"osuDbUnreadable",
 	"unsupportedMode",
 	"resourceLimit",
 	"io",

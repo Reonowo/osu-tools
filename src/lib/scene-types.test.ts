@@ -107,6 +107,7 @@ describe("scene contract mirror", () => {
 			{ kind: "beatmapNotFound", md5: "abc" },
 			{ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" },
 			{ kind: "osuDbNotFound", searched: ["C:\\osu!"] },
+			{ kind: "osuDbUnreadable", path: "C:\\osu!\\osu!.db", reason: "truncated" },
 			{ kind: "unsupportedMode", mode: "Taiko" },
 			{ kind: "resourceLimit", cap: "MAX_OSZ_ENTRIES", limit: 1, actual: 2 },
 			{ kind: "io", message: "denied" },

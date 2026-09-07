@@ -376,6 +376,7 @@ export type IpcError =
 	| { kind: "beatmapNotFound"; md5: string }
 	| { kind: "beatmapMismatch"; expectedMd5: string; actualMd5: string }
 	| { kind: "osuDbNotFound"; searched: string[] }
+	| { kind: "osuDbUnreadable"; path: string; reason: string }
 	| { kind: "unsupportedMode"; mode: string }
 	| { kind: "resourceLimit"; cap: string; limit: number; actual: number }
 	| { kind: "io"; message: string }
