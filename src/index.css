@@ -3,6 +3,11 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+/* app-chrome motion, for a class that wants to opt IN rather than be covered
+   by the blanket rule below -- `motion:duration-200` and the like. matches
+   only while interface motion resolves on, which the app root writes onto
+   <html> (lib/motion.ts) */
+@custom-variant motion (&:is([data-motion="on"] *));
 
 @theme inline {
 	--font-heading: var(--font-sans);
@@ -169,6 +174,38 @@
 	input,
 	textarea {
 		@apply select-text;
+	}
+	/* interface motion's master, applied through the one root attribute the
+	app writes (lib/motion.ts). one blanket rule rather than a class per
+	animation: it covers the ~30 existing Tailwind transition-*, duration-*
+	and animate-in/out sites without touching any of them, and a future
+	animation is covered the day it is written.
+
+	`animation-duration: 0ms` rather than `animation: none`: an element whose
+	exit animation is removed outright never fires animationend, and the
+	dialogs that wait for it to unmount would stay on screen forever. at 0ms
+	the event still fires, on the next frame.
+
+	two exclusions, both deliberate, both written into the selector rather
+	than given a louder rule back, so there is one place to read and no
+	specificity duel.
+
+	loading spinners: a spinner that does not spin reads as a hung app, not as
+	calm chrome.
+
+	`data-hud-motion`: the watch HUD is on the OTHER SIDE of this boundary.
+	docs/adr/0009 splits the HUD's own motion -- a function of the replay's
+	timeline -- from chrome motion, which is wall-clock by nature, and says
+	this rule does not reach the former. the key tile's press transition is
+	HUD, so it carries the marker and keeps moving; the combo pop is the other
+	half of that boundary and is gated by its own row instead */
+	[data-motion="off"] *:not(.animate-spin):not([data-hud-motion]),
+	[data-motion="off"] *:not(.animate-spin):not([data-hud-motion])::before,
+	[data-motion="off"] *:not(.animate-spin):not([data-hud-motion])::after {
+		transition-duration: 0ms !important;
+		transition-delay: 0ms !important;
+		animation-duration: 0ms !important;
+		animation-delay: 0ms !important;
 	}
 	::-webkit-scrollbar {
 		width: 8px;

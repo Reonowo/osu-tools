@@ -11,6 +11,7 @@ import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { StartScreen } from "@/components/StartScreen";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { invokeSetViewerPrefs } from "@/lib/ipc";
+import { motionAttribute, selectMotion } from "@/lib/motion";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
 import { installFocusModality } from "@/playback/focus-modality";
@@ -32,6 +33,7 @@ export default function App() {
 	const [videoExportOpen, setVideoExportOpen] = useState(false);
 	const scene = useViewerStore((s) => s.scene);
 	const lastError = useViewerStore((s) => s.lastError);
+	const motionEnabled = useViewerStore(selectMotion);
 
 	// registered here rather than with the other global bindings: those mount
 	// with AppShell, which exists only once a scene is loaded, and both of these
@@ -68,6 +70,29 @@ export default function App() {
 	// focus-modality.ts); app-rooted because every guard consumer -- the
 	// playback shortcuts and the edit tools' keydown -- assumes it is live
 	useEffect(() => installFocusModality(window), []);
+
+	// the OS reduce-motion query, tracked live rather than read once: the
+	// master's `system` state has to follow the system setting as it changes,
+	// which is the whole difference between deferring to the OS and copying it
+	// at startup. reported into the store, where lib/motion.ts's one resolver
+	// folds it with the stored preference
+	useEffect(() => {
+		const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const report = () => viewerStore.getState().setOsReducesMotion(query.matches);
+		report();
+		query.addEventListener("change", report);
+		return () => query.removeEventListener("change", report);
+	}, []);
+
+	// the resolved answer, onto <html> beside index.html's `dark` class. one
+	// attribute is the whole plumbing: index.css's rule covers every chrome
+	// transition and animation under it, so no component takes a motion prop
+	// and a new animation is covered the day it is written. the JS-driven
+	// animations that cannot read css read the same answer off the store
+	// (lib/motion.ts's selectMotion)
+	useEffect(() => {
+		document.documentElement.dataset.motion = motionAttribute(motionEnabled);
+	}, [motionEnabled]);
 
 	// the webview's own page zoom, and nothing in this app is ever meant to
 	// resize that way. both of its gestures belong to the viewer instead:
