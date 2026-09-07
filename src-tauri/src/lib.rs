@@ -13,6 +13,7 @@ pub mod osz;
 pub mod scene;
 pub mod settings;
 pub mod skin;
+pub mod songs_dir;
 pub mod stable;
 pub mod state;
 pub mod video;
