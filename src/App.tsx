@@ -11,7 +11,7 @@ import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { StartScreen } from "@/components/StartScreen";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { invokeSetViewerPrefs } from "@/lib/ipc";
-import { motionAttribute, selectMotion } from "@/lib/motion";
+import { rootMotionAttributes } from "@/lib/motion";
 import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
 import { installFocusModality } from "@/playback/focus-modality";
@@ -33,7 +33,8 @@ export default function App() {
 	const [videoExportOpen, setVideoExportOpen] = useState(false);
 	const scene = useViewerStore((s) => s.scene);
 	const lastError = useViewerStore((s) => s.lastError);
-	const motionEnabled = useViewerStore(selectMotion);
+	const interfacePrefs = useViewerStore((s) => s.interface);
+	const osReducesMotion = useViewerStore((s) => s.osReducesMotion);
 
 	// registered here rather than with the other global bindings: those mount
 	// with AppShell, which exists only once a scene is loaded, and both of these
@@ -84,15 +85,21 @@ export default function App() {
 		return () => query.removeEventListener("change", report);
 	}, []);
 
-	// the resolved answer, onto <html> beside index.html's `dark` class. one
-	// attribute is the whole plumbing: index.css's rule covers every chrome
-	// transition and animation under it, so no component takes a motion prop
-	// and a new animation is covered the day it is written. the JS-driven
-	// animations that cannot read css read the same answer off the store
-	// (lib/motion.ts's selectMotion)
+	// the resolved answers, onto <html> beside index.html's `dark` class. three
+	// attributes are the whole plumbing: `data-motion` is the master, which
+	// index.css's blanket rule and the `motion:` variant key on, and the two
+	// siblings are the shell and popup rows ALREADY FOLDED with it, which the
+	// per-row rules pair with an element's own `data-motion-row` marker. so no
+	// component takes a motion prop and a new animation is covered the day it
+	// is written. the JS-driven animations that cannot read css read the same
+	// answers off the store (lib/motion.ts's select* helpers)
 	useEffect(() => {
-		document.documentElement.dataset.motion = motionAttribute(motionEnabled);
-	}, [motionEnabled]);
+		const { motion, shell, popup } = rootMotionAttributes(interfacePrefs, osReducesMotion);
+		const root = document.documentElement;
+		root.dataset.motion = motion;
+		root.dataset.shellMotion = shell;
+		root.dataset.popupMotion = popup;
+	}, [interfacePrefs, osReducesMotion]);
 
 	// the webview's own page zoom, and nothing in this app is ever meant to
 	// resize that way. both of its gestures belong to the viewer instead:
