@@ -2,6 +2,7 @@
 //! score-info trailer capture, and capped lzma-alone decompression.
 
 use crate::error::{resource_limit, EngineError, Result};
+use crate::formats::binary::Reader;
 use crate::formats::GameMode;
 use crate::limits;
 use crate::math::dotnet_double_to_i32_unchecked;
@@ -120,111 +121,6 @@ pub const FIRST_LAZER_VERSION: u32 = 30_000_000;
 /// payload is discarded
 const FIRST_LAZER_SCORE_INFO_VERSION: u32 = 30000001;
 
-struct Reader<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
-    }
-
-    fn fail(&self, what: &str) -> EngineError {
-        EngineError::ReplayParse(format!(
-            "unexpected end of file reading {what} at offset {}",
-            self.pos
-        ))
-    }
-
-    fn take(&mut self, n: usize, what: &str) -> Result<&'a [u8]> {
-        let end = self
-            .pos
-            .checked_add(n)
-            .filter(|&e| e <= self.bytes.len())
-            .ok_or_else(|| self.fail(what))?;
-        let slice = &self.bytes[self.pos..end];
-        self.pos = end;
-        Ok(slice)
-    }
-
-    fn u8(&mut self, what: &str) -> Result<u8> {
-        Ok(self.take(1, what)?[0])
-    }
-
-    fn u16(&mut self, what: &str) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.take(2, what)?.try_into().unwrap()))
-    }
-
-    fn u32(&mut self, what: &str) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4, what)?.try_into().unwrap()))
-    }
-
-    fn u64(&mut self, what: &str) -> Result<u64> {
-        Ok(u64::from_le_bytes(self.take(8, what)?.try_into().unwrap()))
-    }
-
-    fn i32(&mut self, what: &str) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.take(4, what)?.try_into().unwrap()))
-    }
-
-    fn i64(&mut self, what: &str) -> Result<i64> {
-        Ok(i64::from_le_bytes(self.take(8, what)?.try_into().unwrap()))
-    }
-
-    fn uleb128(&mut self, what: &str) -> Result<u64> {
-        let oversized = || EngineError::ReplayParse(format!("oversized uleb128 reading {what}"));
-        let mut result: u64 = 0;
-        let mut shift = 0u32;
-        loop {
-            let byte = self.u8(what)?;
-            let payload = u64::from(byte & 0x7f);
-            // the tenth byte of an encoding lands at shift 63, where only the
-            // lowest payload bit still fits in a u64. shifting a wider payload
-            // in would discard the overflow silently -- `2u64 << 63` is `0`,
-            // not a panic -- and hand back a truncated length that then
-            // desynchronises every field read after it. the continuation-bit
-            // check below never catches this on its own, because a tenth byte
-            // that *terminates* returns before `shift` is ever incremented past
-            // 63, so the width has to be checked here, before the shift
-            if payload > (u64::MAX >> shift) {
-                return Err(oversized());
-            }
-            result |= payload << shift;
-            if byte & 0x80 == 0 {
-                return Ok(result);
-            }
-            shift += 7;
-            if shift >= 64 {
-                return Err(oversized());
-            }
-        }
-    }
-
-    fn osu_string(&mut self, what: &str) -> Result<Option<String>> {
-        match self.u8(what)? {
-            0x00 => Ok(None),
-            0x0b => {
-                let len = self.uleb128(what)?;
-                let len = usize::try_from(len).map_err(|_| self.fail(what))?;
-                let bytes = self.take(len, what)?;
-                // lossy, deliberately: a malformed header string must not fail
-                // the whole decode. the cost is that such a string does not
-                // survive a pristine byte round-trip, which is documented as a
-                // deliberate divergence on PayloadSource::VerbatimCompressed
-                Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
-            }
-            other => Err(EngineError::ReplayParse(format!(
-                "invalid string prefix 0x{other:02x} reading {what}"
-            ))),
-        }
-    }
-
-    fn remaining(&self) -> &'a [u8] {
-        &self.bytes[self.pos..]
-    }
-}
-
 pub fn decode_osr(bytes: &[u8]) -> Result<OsrFile> {
     if bytes.len() as u64 > limits::MAX_OSR_FILE_BYTES {
         return Err(resource_limit(
@@ -233,7 +129,9 @@ pub fn decode_osr(bytes: &[u8]) -> Result<OsrFile> {
             bytes.len() as u64,
         ));
     }
-    let mut r = Reader::new(bytes);
+    // the shared primitives, constructed with the replay-parse variant: a
+    // truncated `.osr` must never read as some other codec's problem
+    let mut r = Reader::new(bytes, EngineError::ReplayParse);
     let mode = match r.u8("mode")? {
         0 => GameMode::Osu,
         1 => GameMode::Taiko,
