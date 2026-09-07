@@ -8,6 +8,12 @@ pub enum EngineError {
     BeatmapParse(String),
     #[error("failed to parse replay: {0}")]
     ReplayParse(String),
+    /// stable's beatmap listing (`osu!.db`) could not be walked. its own
+    /// variant rather than a `BeatmapParse`: the file is the client's index,
+    /// not a beatmap, and the app turns this into "couldn't read osu!.db,
+    /// pick the beatmap manually" -- copy that would be a lie about a `.osu`
+    #[error("failed to parse osu!.db: {0}")]
+    StableListingParse(String),
     #[error("resource limit exceeded: {cap} (limit {limit}, actual {actual})")]
     ResourceLimit {
         cap: &'static str,

@@ -21,6 +21,7 @@
 //! | [`MAX_SLIDER_NESTED_OBJECTS`] | 1,000,000 | bounds the slider events (head + ticks + repeats + tail) `beatmap::slider_events` may generate for a single slider. lazer imposes no such cap: tick count is `length / tick_distance` per span and span count is read straight from the file, so a crafted `.osu` can declare a slider whose event generation alone is unbounded (e.g. i32::MAX slides, or a tick distance of 1e-9 -- rosu-map's clamps bound tick distance only through beat length and multiplier, and the 100000 length ceiling still admits ~1e14 ticks at the extreme). real maps, aspire included, sit in the low tens of thousands. this is a policy ceiling, not a parity limit; checked as events are pushed so rejection is O(cap) not O(declared) | `beatmap::slider_events::tests::nested_object_cap_boundary` and `beatmap::slider_events::tests::huge_span_counts_hit_the_cap_instead_of_spinning` |
 //! | [`MAX_TOTAL_SLIDER_NESTED_OBJECTS`] | 2,000,000 | the map-wide sum of slider nested objects retained by `beatmap::processing::process_beatmap`. [`MAX_SLIDER_NESTED_OBJECTS`] bounds one slider's events, but every built slider's objects stay resident while the next builds, and a 32 MiB file has room for hundreds of thousands of slider lines whose declared repeat counts each sit just under that per-slider cap -- fresh per-slider budgets alone would let total retention reach tens of GiB and die on allocation instead of returning `ResourceLimit`. charged cumulatively after each slider builds, so the transient overshoot is at most one per-slider cap | `beatmap::processing::tests::total_nested_object_cap_boundary` |
 //! | [`MAX_TOTAL_SLIDER_PATH_VERTICES`] | 4,000,000 | the map-wide sum of flattened path vertices retained by `beatmap::processing::process_beatmap`, closing the same aggregate gap for [`MAX_SLIDER_PATH_VERTICES`]: each processed slider retains its full piecewise-linear path (plus a cumulative-length entry per vertex), and many per-slider-cap paths from one file would otherwise accumulate unbounded. charged cumulatively after each slider builds, same overshoot bound as the nested-object cap | `beatmap::processing::tests::total_path_vertex_cap_boundary` |
+//! | [`MAX_OSU_DB_BYTES`] | 256 MiB | raw `osu!.db` byte length, checked in `formats::stable_listing::decode_stable_listing` before a single byte is walked. the app crate charges the same file's DECLARED length before reading it, through the capped file reader, so the lookup never allocates an oversized buffer on the way to this check -- and surfaces the breach as its own `OsuDbUnreadable` outcome (the picker) rather than a generic cap toast, since an over-large library is an inconvenience rather than an app fault | `formats::stable_listing::tests::osu_db_byte_size_cap_boundary` (through the cap-parameterised entry point, so no test allocates 256 MiB) and `...::max_osu_db_bytes_constant_matches_limits_module` |
 //! | [`MAX_OSR_FILE_BYTES`] | 32 MiB | raw `.osr` file byte length, checked in `formats::osr::decode_osr` before any framing is parsed | `formats::osr::tests::osr_file_size_cap_boundary` |
 //! | [`MAX_LZMA_DECOMPRESSED_BYTES`] | 128 MiB | the lzma-alone replay frame payload's decompressed size, enforced three ways in `formats::osr::decompress_lzma_capped`: a header precheck against the stream's declared uncompressed size, a `CappedWriter` bound on bytes actually produced, and lzma-rs's own `memlimit` guarding its internal dictionary buffer | `formats::osr::tests::lzma_bomb_declared_size_hits_cap` (declared-size precheck), `...::lzma_decompressed_size_cap_boundary` (accept-at-cap via the real decode path, which is also `CappedWriter`'s accept branch), `...::lzma_capped_writer_is_the_sole_guard_for_small_dict_sentinel_streams` (`CappedWriter`'s reject branch, on the one stream shape where neither of the other two layers can fire), `...::lzma_inflated_dict_size_hits_internal_memlimit` (lzma-rs's own memlimit) |
 //! | [`MAX_REPLAY_FRAMES`] | 4,000,000 | parsed replay frame count, checked in `formats::osr::parse_actions` | `formats::osr::tests::frame_count_cap_boundary` |
@@ -232,6 +233,20 @@ pub const MAX_TOTAL_SLIDER_PATH_VERTICES: usize = 4_000_000;
 /// that while keeping the worst case -- a file of nothing but one-byte keys --
 /// to a bounded map rather than an allocation abort
 pub const MAX_SKIN_INI_BYTES: u64 = 1024 * 1024;
+
+/// raw `osu!.db` byte length, checked in
+/// `formats::stable_listing::decode_stable_listing` before a single byte is
+/// walked.
+///
+/// like [`MAX_SKIN_INI_BYTES`] this is the codec's only allocation axis: the
+/// only thing it retains is three strings per entry, and an entry costs over
+/// a hundred bytes on the wire, so one cap on the input bounds the walk, the
+/// entry vector and every string in it. measured on a real 20,833-beatmap
+/// library, the file is 22 MB at ~1.06 KB per entry, so 256 MiB admits about
+/// 240,000 beatmaps -- an order of magnitude past the largest libraries
+/// anyone runs -- while keeping the folded md5 map the app builds from it in
+/// the tens of megabytes at the very worst
+pub const MAX_OSU_DB_BYTES: u64 = 256 * 1024 * 1024;
 
 pub const MAX_OSR_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_LZMA_DECOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;
