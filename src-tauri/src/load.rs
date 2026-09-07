@@ -738,8 +738,14 @@ pub fn load_replay_auto(
         // diagnosis -- the one that lists where it looked and says to set the
         // path in settings -- is both honest and the more actionable of the
         // two, and both kinds reach the same picker anyway (state/errors.ts).
-        // anything else (a resource cap, an unparseable osu!.db) keeps its
-        // own diagnosis regardless
+        //
+        // anything else keeps its own diagnosis regardless, and an
+        // UNREADABLE listing is the case that matters: it is a fact about the
+        // install that every fresh open of every replay will also hit, so
+        // reporting it as "beatmap not found" would tell the user their
+        // pairing went stale when what actually happened is that their
+        // library index cannot be read at all. it reaches the same picker
+        // either way, so there is nothing to buy by hiding it
         Err(IpcError::OsuDbNotFound { .. }) if tried_association => {
             Err(IpcError::BeatmapNotFound { md5: header_md5 })
         }
@@ -1618,6 +1624,72 @@ mod tests {
         match reopen_without_install(&stale) {
             Err(IpcError::BeatmapNotFound { md5: m }) => assert_eq!(m, md5),
             other => panic!("expected BeatmapNotFound, got {other:?}"),
+        }
+    }
+
+    /// the remap is gated on the install being MISSING. an install that is
+    /// present but whose listing cannot be read keeps its own diagnosis on
+    /// every route, association or not -- it is a fact about the install that
+    /// every fresh open will hit too, and telling the user their hand-pairing
+    /// went stale would send them to repair the wrong thing
+    #[test]
+    fn an_unreadable_listing_is_never_remapped_to_beatmap_not_found() {
+        let (dir, osr_path, osu_path, md5) = fixture_setup(0);
+        let install = tempfile::tempdir().unwrap();
+        let cache_root = dir.path().join("cache");
+
+        // a garbage listing, and a listing so large the cap refuses it before
+        // a byte is read -- the two shapes the outcome covers
+        let garbage = {
+            let mut bytes = 20260711i32.to_le_bytes().to_vec();
+            bytes.extend_from_slice(b"not a listing at all");
+            bytes
+        };
+        let db = install.path().join("osu!.db");
+
+        // the association is stale (the file it names is gone), so the walk
+        // reaches the stable lookup with tried_association set -- exactly the
+        // condition that folds a missing install into beatmapNotFound
+        std::fs::remove_file(&osu_path).unwrap();
+        let stale = SavedBeatmap {
+            path: Some(osu_path),
+            dir: Some(dir.path().to_path_buf()),
+            md5: Some(md5.clone()),
+            ..SavedBeatmap::default()
+        };
+
+        for tried_association in [false, true] {
+            for over_cap in [false, true] {
+                if over_cap {
+                    let file = std::fs::File::create(&db).unwrap();
+                    file.set_len(engine::limits::MAX_OSU_DB_BYTES + 1).unwrap();
+                } else {
+                    std::fs::write(&db, &garbage).unwrap();
+                }
+                let saved = if tried_association {
+                    stale.clone()
+                } else {
+                    SavedBeatmap::default()
+                };
+                let outcome = load_replay_auto(
+                    &osr_path,
+                    &saved,
+                    Some(install.path()),
+                    &[],
+                    &ListingCache::default(),
+                    &cache_root,
+                );
+                match outcome {
+                    Err(IpcError::OsuDbUnreadable { path, reason }) => {
+                        assert_eq!(path, db.display().to_string());
+                        assert!(!reason.is_empty());
+                    }
+                    other => panic!(
+                        "association={tried_association} over_cap={over_cap}: \
+                         expected OsuDbUnreadable, got {other:?}"
+                    ),
+                }
+            }
         }
     }
 
