@@ -191,12 +191,26 @@ pub fn db_entry(hash: &str, folder: &str, file: &str) -> DbBeatmap {
 /// builds <root>/osu!.db plus <root>/songs/<folder>/<file> holding
 /// `bytes`; returns the md5 the db records for it
 pub fn fake_install(root: &std::path::Path, folder: &str, file: &str, bytes: &[u8]) -> String {
+    fake_install_versioned(root, folder, file, bytes, 20191106)
+}
+
+/// `fake_install` at an explicit listing version. osu-db is a DEV-only
+/// dependency now -- the production listing reader is the engine's own codec
+/// -- and its writer is what lets a test put the app's cache, fold and lookup
+/// over every layout gate stable has shipped rather than only the current one
+pub fn fake_install_versioned(
+    root: &std::path::Path,
+    folder: &str,
+    file: &str,
+    bytes: &[u8],
+    version: u32,
+) -> String {
     let md5 = format!("{:x}", md5::compute(bytes));
     let map_dir = root.join("Songs").join(folder);
     std::fs::create_dir_all(&map_dir).unwrap();
     std::fs::write(map_dir.join(file), bytes).unwrap();
     let listing = Listing {
-        version: 20191106,
+        version,
         folder_count: 1,
         unban_date: None,
         player_name: Some("test".into()),
@@ -205,4 +219,13 @@ pub fn fake_install(root: &std::path::Path, folder: &str, file: &str, bytes: &[u
     };
     listing.save(root.join("osu!.db")).unwrap();
     md5
+}
+
+/// reads a fake install's listing back through osu-db, hands it to `edit`,
+/// and rewrites it -- for the cases that need a row the writer's own helpers
+/// cannot express, like an entry with a null folder name
+pub fn mangle_listing(db_path: &std::path::Path, edit: impl FnOnce(&mut Listing)) {
+    let mut listing = Listing::from_file(db_path).unwrap();
+    edit(&mut listing);
+    listing.save(db_path).unwrap();
 }
