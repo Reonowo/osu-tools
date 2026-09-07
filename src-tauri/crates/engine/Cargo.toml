@@ -14,7 +14,8 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
-osu-db = { version = "0.3", default-features = false }
+# 0.2.1 is newer than 0.3.0 (see the app crate's manifest); pinned together
+osu-db = { version = "0.2.1", default-features = false }
 # float_roundtrip: without it serde_json's fast float path can land 1 ulp off the
 # value .net wrote, which shows up as spurious "deviation" against fixtures that
 # the port actually reproduces bit-for-bit

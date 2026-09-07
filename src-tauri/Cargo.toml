@@ -37,7 +37,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 engine = { path = "crates/engine" }
 dunce = "1"
-osu-db = { version = "0.3", default-features = false }
 md5 = "0.8"
 
 # deflate only: .osz members are stored or deflated; the default feature set
@@ -53,6 +52,13 @@ sha2 = "0.10"
 [dev-dependencies]
 tempfile = "3"
 chrono = "0.4"
+# DEV-ONLY since the engine grew its own listing codec: this writes the fake
+# installs the stable tests read back through the production cache and lookup,
+# at each of stable's layout gates. 0.2.1 is NEWER than 0.3.0 -- upstream
+# merged the 20250107 osu!.db change (star ratings became int-float pairs) and
+# published it as an "un-bump", so a 0.3 requirement can never resolve to the
+# fix. the engine's dev dependency pins the same version; move them together
+osu-db = { version = "0.2.1", default-features = false }
 # staged-set gc tests stamp directory mtimes to drive the eviction order
 filetime = "0.2"
 # [dev-dependencies] -- the mock runtime for command tests; feature
