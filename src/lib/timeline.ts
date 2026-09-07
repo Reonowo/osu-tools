@@ -97,3 +97,23 @@ export function countTimedAtOrBefore(entries: readonly { time: number }[], t: nu
 	}
 	return lo;
 }
+
+/** countAtOrBefore over the `[time, value]` pair lists the engine's curves ride
+ * the wire as -- the HP curve and the score curve both (`lib/hp.ts`,
+ * `lib/score.ts`). the third shape of one search rather than a third copy of
+ * it, for the reason countTimedAtOrBefore is here.
+ *
+ * a caller wanting "the last pair at or before t" takes this minus one, which
+ * lands at -1 for an empty list, for a t before the first pair, and for a NaN
+ * t -- the comparison is false either way, so a poisoned clock reads as before
+ * the curve rather than indexing wildly */
+export function countPairedAtOrBefore(pairs: readonly (readonly [number, number])[], t: number): number {
+	let lo = 0,
+		hi = pairs.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (pairs[mid][0] <= t) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}

@@ -10,25 +10,11 @@
 // each object's own perfect-play HP
 
 import type { HpCurve } from "./scene-types";
+import { countPairedAtOrBefore } from "./timeline";
 
 /** HP before the curve's first breakpoint, and what an absent curve reads
  * everywhere: a play starts full */
 const FULL = 1;
-
-/** the last breakpoint at or before `time`, or -1 when the curve is empty or
- * starts after it. the LAST such point is what makes a same-millisecond pair
- * read as the post-judgement value */
-function indexAt(curve: HpCurve, time: number): number {
-	if (curve.length === 0 || !(time >= curve[0][0])) return -1;
-	let lo = 0;
-	let hi = curve.length - 1;
-	while (lo < hi) {
-		const mid = (lo + hi + 1) >> 1;
-		if (curve[mid][0] <= time) lo = mid;
-		else hi = mid - 1;
-	}
-	return lo;
-}
 
 /** the HP the curve holds at `time`, as a fraction of full.
  *
@@ -37,7 +23,10 @@ function indexAt(curve: HpCurve, time: number): number {
  * that judgement — which is the HP that judgement's life bar sample was
  * recorded from (engine `HealthCurve::fraction_at`, the same rules) */
 export function hpAt(curve: HpCurve, time: number): number {
-	const index = indexAt(curve, time);
+	// the LAST breakpoint at or before `time`, which is what makes a
+	// same-millisecond pair read as the post-judgement value; -1 when the curve
+	// is empty or starts after it
+	const index = countPairedAtOrBefore(curve, time) - 1;
 	if (index < 0) return FULL;
 	const [atTime, atValue] = curve[index];
 	const next = curve[index + 1];
@@ -68,7 +57,7 @@ const HP_DAMP_WINDOWS = 6;
  * marathon as on a one-minute map */
 export function dampWindow(curve: HpCurve, time: number, tau = HP_DAMP_TAU_MS): { from: number; to: number } {
 	const window = Math.max(0, tau) * HP_DAMP_WINDOWS;
-	return { from: indexAt(curve, time - window) + 1, to: indexAt(curve, time) + 1 };
+	return { from: countPairedAtOrBefore(curve, time - window), to: countPairedAtOrBefore(curve, time) };
 }
 
 /** the exponentially weighted mean of a linear piece, in closed form.
