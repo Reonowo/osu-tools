@@ -19,8 +19,11 @@
 //! the `OSU_STABLE_DIR` environment variable; no personal path is committed
 //! anywhere. candidates are enumerated from the client's own `Data/r` and
 //! `Replays` directories and matched to their exact difficulty through the
-//! install's `osu!.db` md5 listing (re-hashed on disk, so a stale listing
-//! rejects rather than mis-matching).
+//! install's `osu!.db` md5 listing, read by the engine's own codec -- the
+//! same reader the app's stable lookup uses, so a sweep over a real library
+//! is that codec's end-to-end check -- and re-hashed on disk, so a stale
+//! listing rejects rather than mis-matching. beatmaps are assumed at
+//! `<stable-dir>\Songs`; a relocated `BeatmapDirectory` is not honoured here.
 //!
 //! this is an example, never a test: ci never sees it, and a red sweep exits
 //! 0 -- the numbers themselves are the output.
@@ -218,8 +221,9 @@ fn main() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/replays/local/sweep_manifest.json")
     });
 
+    // build_md5_index prints its own first line: which path built the index
+    // and how many entries it holds
     let by_md5 = build_md5_index(&stable_dir);
-    eprintln!("beatmap index: {} entries", by_md5.len());
 
     let mut candidates: Vec<PathBuf> = Vec::new();
     for dir in [stable_dir.join("Data").join("r"), stable_dir.join("Replays")] {
@@ -363,33 +367,57 @@ fn main() {
     }
 }
 
-/// md5 -> beatmap path, lowercased keys. fast path is the install's osu!.db
-/// via the osu-db crate; when that parse fails (the crate is dormant and a
-/// 2026 client's db format is newer than it knows -- the same limitation
-/// applies to the app's stable.rs lookup), fall back to hashing every
-/// `Songs/**/*.osu`, which is the corpus-checklist's own documented build
-/// path. matched files are re-hashed before use either way, so a stale
-/// index rejects rather than mismatching
+/// md5 -> beatmap path, lowercased keys. the primary path is the install's
+/// own `osu!.db` through the engine's listing codec -- the SAME reader the
+/// app's stable lookup uses, so a sweep against a real 22 MB library is also
+/// the production codec's end-to-end check. only when that reader refuses the
+/// listing does this fall back to hashing every `Songs/**/*.osu`, the
+/// corpus-checklist's own documented build path, so a refusal never silently
+/// shrinks the population it measures. matched files are re-hashed before use
+/// either way, so a stale index rejects rather than mismatching.
+///
+/// this does not honour a relocated `BeatmapDirectory`: it assumes `Songs`
+/// beside the listing, which the usage text states.
+///
+/// the fold below duplicates `stable::fold` in the app crate on purpose --
+/// an engine example cannot depend on the app crate, and the shared thing is
+/// the CODEC, which both call. what differs is the product: the app keeps
+/// folder and file apart for a lookup it makes once, this joins them into the
+/// path a sweep opens directly.
 fn build_md5_index(stable_dir: &Path) -> std::collections::HashMap<String, PathBuf> {
     let mut by_md5 = std::collections::HashMap::new();
     let db_path = stable_dir.join("osu!.db");
     let songs_dir = stable_dir.join("Songs");
 
-    match osu_db::listing::Listing::from_file(&db_path) {
+    // which path built the index is the first thing printed, so a reader
+    // regression shows up before any parity verdict does
+    match std::fs::read(&db_path).map_err(|e| e.to_string()).and_then(|bytes| {
+        engine::formats::stable_listing::decode_stable_listing(&bytes).map_err(|e| e.to_string())
+    }) {
         Ok(listing) => {
-            for entry in &listing.beatmaps {
+            for entry in &listing.entries {
                 if let (Some(hash), Some(folder), Some(file)) = (
-                    entry.hash.as_deref(),
+                    entry.md5.as_deref(),
                     entry.folder_name.as_deref(),
                     entry.file_name.as_deref(),
                 ) {
                     by_md5.insert(hash.to_ascii_lowercase(), songs_dir.join(folder).join(file));
                 }
             }
-            eprintln!("beatmap index: osu!.db listing ({} beatmaps)", listing.beatmaps.len());
+            eprintln!(
+                "beatmap index: engine reader over {} (version {}, {} entries, {} resolvable)",
+                db_path.display(),
+                listing.version,
+                listing.entries.len(),
+                by_md5.len()
+            );
         }
         Err(e) => {
-            eprintln!("beatmap index: osu!.db parse failed ({e}); hashing Songs/**/*.osu instead");
+            eprintln!(
+                "beatmap index: hashing {}/**/*.osu -- the engine reader refused {} ({e})",
+                songs_dir.display(),
+                db_path.display()
+            );
             let mut stack = vec![songs_dir];
             let mut hashed = 0usize;
             while let Some(dir) = stack.pop() {
@@ -410,6 +438,7 @@ fn build_md5_index(stable_dir: &Path) -> std::collections::HashMap<String, PathB
                     }
                 }
             }
+            eprintln!("beatmap index: hash fallback ({hashed} .osu files, {} entries)", by_md5.len());
         }
     }
     by_md5
@@ -419,6 +448,8 @@ fn usage(problem: &str) -> ! {
     eprintln!("sweep_replays: {problem}");
     eprintln!("usage: cargo run -p engine --release --example sweep_replays -- <stable-dir> [--manifest <path>]");
     eprintln!("       (or set OSU_STABLE_DIR instead of the positional argument)");
+    eprintln!("       beatmaps are assumed at <stable-dir>\\Songs; a relocated");
+    eprintln!("       BeatmapDirectory from osu!.<user>.cfg is not honoured here");
     std::process::exit(2);
 }
 
