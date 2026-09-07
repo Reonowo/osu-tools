@@ -85,7 +85,9 @@ export const DEFAULT_TIMELINE: TimelineSettings = {
  * for it, and every animation under it on */
 export const DEFAULT_INTERFACE: InterfaceSettings = {
 	motion: null,
-	comboPop: true
+	comboPop: true,
+	shellTransitions: true,
+	popupTransitions: true
 };
 
 /** the master folded into every granular flag, which is what the renderer

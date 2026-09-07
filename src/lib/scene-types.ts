@@ -523,6 +523,17 @@ export interface InterfaceSettings {
 	/** the combo counter's pop and break flash. gated by the master and keeps
 	 * its own setting while it is off, exactly as an effect row does */
 	comboPop: boolean;
+	/** the shell's own regions moving: the side panel's slide, the timeline's
+	 * edit tier revealing, the tool palette's and readout's slide, the watch
+	 * HUD's mounts fading, the rail's and mode toggle's active marks, and the
+	 * shell's fade on load */
+	shellTransitions: boolean;
+	/** everything summoned above the shell -- dialogs and their dim, popovers,
+	 * the context menu, tooltips -- and any content switch inside one. gated
+	 * by the SURFACE a transition happens in, which is why the settings
+	 * dialog's nav column and category body ride here rather than with the
+	 * shell that opened the dialog */
+	popupTransitions: boolean;
 }
 
 /** one key an action answers to, as it is persisted. the hotkey string is the
