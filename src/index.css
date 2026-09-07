@@ -51,7 +51,6 @@
 	--color-surface-card: var(--surface-card);
 	--color-surface-raised: var(--surface-raised);
 	--color-border-strong: var(--border-strong);
-	--ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);
 	--radius-lg: var(--radius);
@@ -59,6 +58,258 @@
 	--radius-2xl: calc(var(--radius) * 1.8);
 	--radius-3xl: calc(var(--radius) * 2.2);
 	--radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* the interface-transition vocabulary (docs/adr/0010): every duration, hold,
+   scale factor and easing the app CHROME's motion is allowed to use, each
+   named for what it means rather than for its value and each carrying the
+   lazer constant it ports. a site references a token and never writes a
+   millisecond, a bezier or a scale factor; a new chrome animation picks one
+   of these or adds one with its own citation, which is what keeps the
+   vocabulary finite and the claim "this is lazer's 600ms OutQuint" readable.
+
+   two tokens holding the same number are two tokens on purpose -- the
+   content fade and the HUD fade are both 300ms because two different lazer
+   controls say 300, and a future change to one must not drag the other.
+
+   the easings are pinned: easing-css.test.ts regenerates every --ease-* below
+   from engine/easing.ts (the verbatim port of osu-framework's
+   DefaultEasingFunction) and fails when one drifts from the curve it names.
+   OutQuad is exactly a cubic bezier; the quintics and the elastic are not,
+   so they are sampled linear() strings the test regenerates rather than
+   hand-tweaked beziers nobody can check.
+
+   `static` rather than a plain @theme: tailwind emits only the theme
+   variables something already uses, and this block is a declared VOCABULARY
+   -- a token has to be in the stylesheet before the site that will reference
+   it exists, or the first consumer silently animates over an undefined
+   variable */
+@theme static {
+	/* the side panel's slide, either direction. SettingsPanel.TRANSITION_LENGTH
+	   -- NotificationOverlay.TRANSITION_LENGTH is the same 600 for the same
+	   motion, a docked column riding in from its own edge */
+	--duration-panel-slide: 600ms;
+	/* a body fading in under a frame that stays put: the panel's on a panel-tab
+	   change, the settings dialog's on a category change. SongSelect's
+	   fade_duration, and SettingsPanel's own body fade at TRANSITION_LENGTH / 2 */
+	--duration-content-fade: 300ms;
+	/* the watch HUD's elements mounting and unmounting on a mode switch.
+	   HUDOverlay.FADE_DURATION, whose FADE_EASING is OutQuint */
+	--duration-hud-fade: 300ms;
+	/* a menu or popover appearing and leaving. OsuMenu.FADE_DURATION */
+	--duration-menu-fade: 280ms;
+	/* a menu growing to its content's height, and the timeline's edit tier
+	   revealing on the same terms. OsuMenu.UpdateSize's ResizeHeightTo */
+	--duration-menu-reveal: 300ms;
+	/* a viewport control travelling to or from its own edge -- the tool palette
+	   and the coordinate readout. Toolbar.transition_time */
+	--duration-palette-slide: 500ms;
+	/* the same control's fade IN, a quarter of its travel, so it is opaque long
+	   before it lands. Toolbar's FadeIn(transition_time / 4) */
+	--duration-palette-fade-in: 125ms;
+	/* a dialog's fade and its scale, both classes, both directions.
+	   NowPlayingOverlay.transition_length; PopupDialog.ENTER_DURATION and
+	   EXIT_DURATION are the same 500 */
+	--duration-dialog-transition: 500ms;
+	/* the confirm dialog's scale-up alone, which outlasts its own fade because
+	   the spring needs the room. PopupDialog's ScaleTo(1, 750, OutElasticHalf) */
+	--duration-confirm-scale-in: 750ms;
+	/* the dim behind a dialog. OsuGame's blocking-overlay FadeColour(..., 500) */
+	--duration-dim-fade: 500ms;
+	/* a tooltip's own fade, its own control's number rather than the menu's.
+	   OsuTooltipContainer.OsuTooltip's PopIn/PopOut */
+	--duration-tooltip-fade: 300ms;
+	/* the shell's one fade over its first frame after a replay opens.
+	   PlayerLoader's content.FadeInFromZero(500) */
+	--duration-load-fade: 500ms;
+	/* a state mark moving or colouring across: the rail's active bar, the mode
+	   toggle, the settings nav column. SidebarButton.FADE_DURATION, and
+	   OsuTabControl.TRANSITION_LENGTH for the text colour, both 500 */
+	--duration-indicator-fade: 500ms;
+
+	/* a menu waits before it fades, so a click on an item is visibly taken
+	   before the menu leaves. OsuMenu.DELAY_BEFORE_FADE_OUT */
+	--hold-menu-exit: 50ms;
+	/* a tooltip lingers longer, so a small mouse movement does not cut off a
+	   half-read one. OsuTooltip's PopOut Delay(150) */
+	--hold-tooltip-exit: 150ms;
+
+	/* where a workbench dialog scales from and back to. NowPlayingOverlay's
+	   dragContainer.ScaleTo(0.9f) */
+	--scale-dialog-from: 0.9;
+	/* the confirm dialog starts smaller, which is what makes its spring read as
+	   an announcement. PopupDialog's content.ScaleTo(0.7f) */
+	--scale-confirm-from: 0.7;
+
+	/* lazer's house curve: every transform extension defaults to Easing.None
+	   and almost every call site passes OutQuint. a cubic bezier cannot hold a
+	   quintic inside the pin test's hundredth (the old
+	   cubic-bezier(0.23, 1, 0.32, 1) is off by 0.017 at its worst), so this is
+	   sampled from the port instead */
+	--ease-out-quint: linear(
+		0,
+		0.0999,
+		0.1917,
+		0.2758,
+		0.3528,
+		0.4231,
+		0.4871,
+		0.5453,
+		0.5981,
+		0.6459,
+		0.689,
+		0.7279,
+		0.7627,
+		0.7939,
+		0.8217,
+		0.8464,
+		0.8683,
+		0.8876,
+		0.9046,
+		0.9195,
+		0.9325,
+		0.9437,
+		0.9534,
+		0.9617,
+		0.9688,
+		0.9747,
+		0.9798,
+		0.984,
+		0.9874,
+		0.9903,
+		0.9926,
+		0.9944,
+		0.9959,
+		0.997,
+		0.9979,
+		0.9985,
+		0.999,
+		0.9994,
+		0.9996,
+		0.9998,
+		0.9999,
+		0.9999,
+		1,
+		1,
+		1,
+		1,
+		1,
+		1,
+		1
+	);
+	/* the one curve that is NOT OutQuint on the way out: the toolbar's own
+	   fade-out, which holds a control opaque while it travels so it reads as
+	   leaving rather than dissolving. Toolbar's FadeOut(transition_time, InQuint) */
+	--ease-in-quint: linear(
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0.0001,
+		0.0001,
+		0.0002,
+		0.0004,
+		0.0006,
+		0.001,
+		0.0015,
+		0.0021,
+		0.003,
+		0.0041,
+		0.0056,
+		0.0074,
+		0.0097,
+		0.0126,
+		0.016,
+		0.0202,
+		0.0253,
+		0.0313,
+		0.0383,
+		0.0466,
+		0.0563,
+		0.0675,
+		0.0805,
+		0.0954,
+		0.1124,
+		0.1317,
+		0.1536,
+		0.1783,
+		0.2061,
+		0.2373,
+		0.2721,
+		0.311,
+		0.3541,
+		0.4019,
+		0.4547,
+		0.5129,
+		0.5769,
+		0.6472,
+		0.7242,
+		0.8083,
+		0.9001,
+		1
+	);
+	/* the confirm dialog's scale back down. PopupDialog's
+	   ScaleTo(0.7f, EXIT_DURATION, Easing.Out), and Easing.Out is C#'s alias
+	   for OutQuad -- which a cubic bezier holds EXACTLY, control points and
+	   all, so this one is a bezier rather than a sampling */
+	--ease-out-quad: cubic-bezier(0.3333, 0.6667, 0.6667, 1);
+	/* the spring both dialog classes scale in on, and the rail indicator's
+	   growth. overshoots past 1 and oscillates back, which no cubic bezier can
+	   express at all -- linear() is the only spelling */
+	--ease-out-elastic-half: linear(
+		0,
+		0.155,
+		0.321,
+		0.4855,
+		0.6392,
+		0.7756,
+		0.8911,
+		0.9841,
+		1.0546,
+		1.1042,
+		1.1352,
+		1.1505,
+		1.153,
+		1.1458,
+		1.1318,
+		1.1135,
+		1.0931,
+		1.0723,
+		1.0524,
+		1.0344,
+		1.0188,
+		1.0061,
+		0.9961,
+		0.9889,
+		0.9841,
+		0.9815,
+		0.9806,
+		0.981,
+		0.9824,
+		0.9845,
+		0.987,
+		0.9896,
+		0.9921,
+		0.9945,
+		0.9965,
+		0.9983,
+		0.9996,
+		1.0007,
+		1.0014,
+		1.0018,
+		1.002,
+		1.002,
+		1.0018,
+		1.0016,
+		1.0013,
+		1.0009,
+		1.0006,
+		1.0003,
+		1
+	);
 }
 
 :root {
@@ -207,6 +458,332 @@
 		animation-duration: 0ms !important;
 		animation-delay: 0ms !important;
 	}
+	/* the two ROWS under that master, one rule each, on exactly the terms the
+	blanket rule above works on -- durations to 0ms rather than animations to
+	none, for the same animationend reason.
+
+	an animated element declares which row owns it by carrying
+	`data-motion-row`; the app root writes the matching `data-shell-motion` /
+	`data-popup-motion` on <html> with the row ALREADY FOLDED into the master
+	(lib/motion.ts), so neither rule has to and-together two attributes and
+	neither can disagree with the blanket one.
+
+	the marker is read on the element itself and never on its descendants: a
+	dialog is a popup, but the buttons inside it are ordinary chrome whose
+	hover fades belong to the master alone. a region declares its own motion,
+	and a nested one declares its own */
+	[data-shell-motion="off"] [data-motion-row="shell"],
+	[data-shell-motion="off"] [data-motion-row="shell"]::before,
+	[data-shell-motion="off"] [data-motion-row="shell"]::after,
+	[data-popup-motion="off"] [data-motion-row="popup"],
+	[data-popup-motion="off"] [data-motion-row="popup"]::before,
+	[data-popup-motion="off"] [data-motion-row="popup"]::after {
+		transition-duration: 0ms !important;
+		transition-delay: 0ms !important;
+		animation-duration: 0ms !important;
+		animation-delay: 0ms !important;
+	}
+}
+
+/* the popups' own motion, in lazer's vocabulary and in nothing else
+   (docs/adr/0010, CONTEXT.md's **popup**). ONE class per kind rather than a
+   string of utilities at each call site: a popup composes two animations on
+   the one element -- a fade and a scale on different curves and, for the
+   confirm class, different durations -- which no utility spelling expresses,
+   and this is also what keeps every millisecond, bezier and scale factor in
+   the token block above rather than in a tsx file.
+
+   two animations rather than nested wrappers on purpose: base-ui keeps a
+   closing popup mounted until its animation ends, and it waits for the LONGER
+   of the two. each class keeps its two EXIT durations equal so that wait is
+   the exit either way -- the confirm's 750ms is its entry alone.
+
+   the scale rides the individual `scale` property, never `transform`: the
+   dialog's centring is tailwind's own `-translate-x-1/2 -translate-y-1/2`,
+   which in v4 compiles to the individual `translate` property, and the two
+   compose as translate x scale -- so the box scales about its own centre and
+   stays centred. writing this as a transform would fight the centring and
+   walk the dialog off the middle of the screen.
+
+   the menu reveals by CLIP rather than by scale, because lazer masks a
+   resize (OsuMenu.UpdateSize) rather than squashing its contents.
+
+   fill modes are `backwards` on entry and `forwards` on exit, never `both`.
+   an exit has to HOLD its end state until base-ui unmounts the popup, which
+   it does on animationend; an entry must NOT, because the reveal's end state
+   is a clip-path tight to the border box and holding it would clip the
+   popup's own shadow off for as long as it is open. `backwards` still covers
+   the delay a held exit uses. */
+@keyframes chrome-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@keyframes chrome-fade-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+@keyframes popup-dialog-scale-in {
+	from {
+		scale: var(--scale-dialog-from);
+	}
+	to {
+		scale: 1;
+	}
+}
+@keyframes popup-dialog-scale-out {
+	from {
+		scale: 1;
+	}
+	to {
+		scale: var(--scale-dialog-from);
+	}
+}
+@keyframes popup-confirm-scale-in {
+	from {
+		scale: var(--scale-confirm-from);
+	}
+	to {
+		scale: 1;
+	}
+}
+@keyframes popup-confirm-scale-out {
+	from {
+		scale: 1;
+	}
+	to {
+		scale: var(--scale-confirm-from);
+	}
+}
+@keyframes popup-menu-reveal {
+	from {
+		clip-path: inset(0 0 100% 0);
+	}
+	to {
+		clip-path: inset(0 0 0 0);
+	}
+}
+
+@layer components {
+	/* the SHELL's own regions (docs/adr/0010, CONTEXT.md's **shell
+	   transition**). every one of these is a css TRANSITION driven by a
+	   `data-open` state attribute on an element that is always mounted, which
+	   is what buys the two behaviours the feature turns on: an interrupted
+	   motion retargets from where it is, so a rapid double toggle reverses
+	   mid-slide, and first paint is silent by construction -- there is nothing
+	   to transition from when the shell mounts, so a replay opening straight
+	   into edit mode paints its regions in place.
+	   the two visual STATES stay tailwind utilities at the site (w-80/w-0,
+	   opacity-100/opacity-0); only the timing lives here, which is the whole
+	   of what the vocabulary governs.
+
+	   the panel's column: the width is the slide and the opacity is the body's
+	   own fade at half of it, exactly as SettingsPanel and NotificationOverlay
+	   pair them. the presence hook waits on `width`, the longer of the two */
+	.shell-panel-transition {
+		transition:
+			width var(--duration-panel-slide) var(--ease-out-quint),
+			opacity var(--duration-content-fade) var(--ease-out-quint);
+	}
+
+	/* the timeline's EDIT TIER -- the detail lanes and the overview strip's
+	   zoom bracket, one region and so one class on both of its elements. the
+	   lanes reveal by animating their grid row from 0fr to 1fr with the inner
+	   track clipped, which is a mask and not a scale and needs no measured
+	   height; the bracket fades over the same duration beside them.
+	   OsuMenu.UpdateSize's ResizeHeightTo, which is how lazer grows a menu */
+	.shell-edit-tier {
+		transition:
+			grid-template-rows var(--duration-menu-reveal) var(--ease-out-quint),
+			opacity var(--duration-menu-reveal) var(--ease-out-quint);
+	}
+
+	/* the viewport's edit chrome -- the tool palette and the coordinate
+	   readout -- which port lazer's Toolbar: each travels off its OWN edge,
+	   fades in over a quarter of that travel so it is opaque long before it
+	   lands, and fades OUT over the whole travel on InQuint, which holds it
+	   opaque while it moves so it reads as leaving rather than dissolving.
+	   the two states carry two different transition declarations, which is
+	   what an asymmetric enter and exit means in css: a declaration describes
+	   the transition INTO the state it is written on.
+
+	   the closed translate clears the control's own width plus the 0.75rem
+	   inset it sits at (top-3 left-3 / right-3 bottom-3 at the sites), so
+	   nothing of it is left hanging against the viewport's edge */
+	.shell-viewport-chrome {
+		opacity: 0;
+		transition:
+			translate var(--duration-palette-slide) var(--ease-out-quint),
+			opacity var(--duration-palette-slide) var(--ease-in-quint);
+	}
+	.shell-viewport-chrome-left {
+		translate: calc(-100% - 0.75rem) 0;
+	}
+	.shell-viewport-chrome-right {
+		translate: calc(100% + 0.75rem) 0;
+	}
+	.shell-viewport-chrome[data-open] {
+		translate: 0 0;
+		opacity: 1;
+		transition:
+			translate var(--duration-palette-slide) var(--ease-out-quint),
+			opacity var(--duration-palette-fade-in) var(--ease-out-quint);
+	}
+
+	/* the shell's own fade over its first frame, once, when a replay opens and
+	   the start screen hands over. an ANIMATION rather than a transition
+	   because it belongs to the shell's mount, and enter-only because there is
+	   no matching exit -- the start screen unmounts as it always did.
+	   PlayerLoader's content.FadeInFromZero(500).
+
+	   the regions inside are transition-driven and so paint in place under
+	   this one fade: a replay opening straight into edit mode never slides its
+	   panel and lanes into a shell that is itself fading in (docs/adr/0010) */
+	.shell-load-fade {
+		animation: chrome-fade-in var(--duration-load-fade) var(--ease-out-quint) backwards;
+	}
+
+	/* the watch HUD's MOUNTS -- the HP bar cluster and the key overlay -- which
+	   fade rather than drop on a mode switch. HUDOverlay.FADE_DURATION, whose
+	   FADE_EASING is OutQuint.
+
+	   these wrappers deliberately do NOT carry `data-hud-motion`. that marker
+	   exempts the HUD's own motion from the interface-motion master because it
+	   is a reading of the replay's timeline (docs/adr/0009); a mount fade is
+	   wall-clock chrome motion, so the master zeroes it while the key tile's
+	   press transition INSIDE keeps its marker and keeps moving */
+	.shell-hud-mount {
+		transition: opacity var(--duration-hud-fade) var(--ease-out-quint);
+	}
+
+	/* the rail's active bar, which stays mounted in BOTH states and animates
+	   between them -- 4px and faded, 18px and shown -- so retarget-on-interrupt
+	   is free and a rapid pair of clicks reverses mid-motion. lazer's own
+	   SidebarIconButton: OutElasticHalf on the way up and OutQuint on the way
+	   down, which is why the two states carry two declarations */
+	.shell-rail-indicator {
+		transition:
+			height var(--duration-indicator-fade) var(--ease-out-quint),
+			opacity var(--duration-indicator-fade) var(--ease-out-quint);
+	}
+	.shell-rail-indicator[data-active] {
+		transition:
+			height var(--duration-indicator-fade) var(--ease-out-elastic-half),
+			opacity var(--duration-indicator-fade) var(--ease-out-quint);
+	}
+
+	/* a body fading in under a frame that stays put: the panel's on a panel-tab
+	   change and the settings dialog's on a category change, one rule for both
+	   sites. an ANIMATION rather than a transition because the incoming body is
+	   a fresh element with nothing to transition from -- and it is applied only
+	   when the tab or category actually changed, never when the frame around it
+	   is itself entering, so motion never stacks on motion */
+	.chrome-content-fade {
+		animation: chrome-fade-in var(--duration-content-fade) var(--ease-out-quint) backwards;
+	}
+
+	/* the workbench dialogs -- settings, export, video export, help -- which
+	   port lazer's focused overlay: a fade with a spring that settles into
+	   place from slightly small. NowPlayingOverlay's PopIn/PopOut */
+	.popup-workbench[data-open] {
+		animation:
+			chrome-fade-in var(--duration-dialog-transition) var(--ease-out-quint) backwards,
+			popup-dialog-scale-in var(--duration-dialog-transition) var(--ease-out-elastic-half) backwards;
+	}
+	.popup-workbench[data-closed] {
+		animation:
+			chrome-fade-out var(--duration-dialog-transition) var(--ease-out-quint) forwards,
+			popup-dialog-scale-out var(--duration-dialog-transition) var(--ease-out-quint) forwards;
+	}
+
+	/* the confirm dialogs -- discard, mismatch -- which port lazer's popup
+	   dialog: a longer spring from noticeably smaller, so a decision prompt
+	   announces itself. PopupDialog's PopIn/PopOut, whose exit easing is
+	   Easing.Out, C#'s alias for OutQuad */
+	.popup-confirm[data-open] {
+		animation:
+			chrome-fade-in var(--duration-dialog-transition) var(--ease-out-quint) backwards,
+			popup-confirm-scale-in var(--duration-confirm-scale-in) var(--ease-out-elastic-half) backwards;
+	}
+	.popup-confirm[data-closed] {
+		animation:
+			chrome-fade-out var(--duration-dialog-transition) var(--ease-out-quint) forwards,
+			popup-confirm-scale-out var(--duration-dialog-transition) var(--ease-out-quad) forwards;
+	}
+
+	/* the dim behind a dialog, which arrives with it rather than snapping in
+	   under it. OsuGame's blocking-overlay FadeColour */
+	.popup-dim[data-open] {
+		animation: chrome-fade-in var(--duration-dim-fade) var(--ease-out-quint) backwards;
+	}
+	.popup-dim[data-closed] {
+		animation: chrome-fade-out var(--duration-dim-fade) var(--ease-out-quint) forwards;
+	}
+
+	/* the context menu and the open-menu popover, one motion for both.
+	   OsuMenu: fade in while revealing downward, and on the way out hold for
+	   an instant -- so a click on an item is visibly taken -- and then fade,
+	   with no reverse reveal, exactly as lazer delays its ResizeHeightTo(0)
+	   until after the fade */
+	.popup-menu[data-open] {
+		animation:
+			chrome-fade-in var(--duration-menu-fade) var(--ease-out-quint) backwards,
+			popup-menu-reveal var(--duration-menu-reveal) var(--ease-out-quint) backwards;
+	}
+	.popup-menu[data-closed] {
+		animation: chrome-fade-out var(--duration-menu-fade) var(--ease-out-quint) var(--hold-menu-exit) forwards;
+	}
+
+	/* tooltips, whose hold is longer than a menu's: a half-read tooltip must
+	   survive a small mouse movement. OsuTooltip's PopIn/PopOut. the appear
+	   DELAY is the provider's and is untouched */
+	.popup-tooltip[data-open] {
+		animation: chrome-fade-in var(--duration-tooltip-fade) var(--ease-out-quint) backwards;
+	}
+	.popup-tooltip[data-closed] {
+		animation: chrome-fade-out var(--duration-tooltip-fade) var(--ease-out-quint) var(--hold-tooltip-exit) forwards;
+	}
+}
+
+/* a state mark colouring across rather than flipping: the top bar's
+   watch/edit toggle and the settings dialog's nav column. the two live under
+   different rows -- the toggle is shell, the nav column is inside a dialog and
+   so is popup -- but the motion is one, which is what this class is.
+   OsuTabControl.TRANSITION_LENGTH for the text, SidebarButton's FADE_DURATION
+   for the fill, both 500.
+
+   UNLAYERED, deliberately, and the only rule in this file that is. both call
+   sites are base-ui primitives whose own class string already carries
+   tailwind's `transition-all` UTILITY (ui/toggle.tsx, ui/tabs.tsx), and layer
+   order beats specificity: anything written inside @layer components loses to
+   the utilities layer no matter how it is spelled, so the highlight would
+   keep flipping at tailwind's 150ms default. unlayered normal declarations
+   outrank every layer, which is exactly the reach this needs -- and the
+   master's zeroing rule keeps winning over it regardless, because an
+   `!important` declaration beats a normal one whatever layer either sits in.
+
+   the consequence, taken deliberately: these two controls' HOVER colours ride
+   the same property and so fade over the same 500ms. that is lazer's own
+   behaviour for both of them -- OsuTabControl fades hover and active alike at
+   TRANSITION_LENGTH, and SidebarButton's FADE_DURATION IS its hover fade -- and
+   it reaches only the two controls the site table names. every other button
+   and rail tile in the app keeps tailwind's 150ms, which is what the spec's
+   Out of Scope declines to sweep */
+.chrome-indicator-colour {
+	transition:
+		color var(--duration-indicator-fade) var(--ease-out-quint),
+		background-color var(--duration-indicator-fade) var(--ease-out-quint),
+		border-color var(--duration-indicator-fade) var(--ease-out-quint);
+}
+
+@layer base {
 	::-webkit-scrollbar {
 		width: 8px;
 		height: 8px;
