@@ -31,6 +31,20 @@ pub enum IpcError {
     OsuDbNotFound {
         searched: Vec<String>,
     },
+    /// the stable install was found but its listing could not be read: the
+    /// file is corrupt, past a layout the reader knows, or past its cap.
+    ///
+    /// its own kind rather than Internal, because it is a fact about the
+    /// user's install and not a fault in this app -- "internal error" is what
+    /// every user on a current client saw for four months when the listing
+    /// crate could not read the 20250107 layout, with no route forward.
+    /// `reason` carries the reader's own diagnosis (the listing version and
+    /// the byte the walk stopped at, or the cap that was breached) and the
+    /// recovery is the manual picker, exactly as for OsuDbNotFound
+    OsuDbUnreadable {
+        path: String,
+        reason: String,
+    },
     UnsupportedMode {
         mode: String,
     },
@@ -101,9 +115,15 @@ impl From<EngineError> for IpcError {
             EngineError::Io(e) => IpcError::Io {
                 message: e.to_string(),
             },
-            EngineError::InvalidArgument(message) | EngineError::ReplayEncode(message) => {
-                IpcError::Internal { message }
-            }
+            // StableListingParse joins the two below rather than getting a
+            // blanket kind of its own: the ONLY producer is the listing codec
+            // and its only consumer is the stable seam, which maps it to
+            // OsuDbUnreadable while it still knows which file it was reading
+            // (stable.rs). reaching this arm would mean an engine entry point
+            // grew a second way to raise it, which is an internal fault
+            EngineError::InvalidArgument(message)
+            | EngineError::ReplayEncode(message)
+            | EngineError::StableListingParse(message) => IpcError::Internal { message },
         }
     }
 }
@@ -186,6 +206,13 @@ mod tests {
             IpcError::from(EngineError::ReplayEncode("x".into())),
             IpcError::Internal { message: "x".into() }
         );
+        // a listing failure only ever reaches a user through the stable
+        // seam's own OsuDbUnreadable; the blanket arm keeps the conversion
+        // total without inventing a second route to the same toast
+        assert_eq!(
+            IpcError::from(EngineError::StableListingParse("x".into())),
+            IpcError::Internal { message: "x".into() }
+        );
         assert!(matches!(
             IpcError::from(EngineError::Io(std::io::Error::other("io"))),
             IpcError::Io { .. }
@@ -217,6 +244,19 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&e).unwrap(),
             json!({ "kind": "resourceLimit", "cap": "MAX_OSZ_ENTRIES", "limit": 1, "actual": 2 })
+        );
+
+        let e = IpcError::OsuDbUnreadable {
+            path: r"E:\osu!\osu!.db".into(),
+            reason: "osu!.db version 20260711 (walk stopped at byte 1353): boom".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            json!({
+                "kind": "osuDbUnreadable",
+                "path": r"E:\osu!\osu!.db",
+                "reason": "osu!.db version 20260711 (walk stopped at byte 1353): boom"
+            })
         );
     }
 
