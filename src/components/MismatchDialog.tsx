@@ -20,7 +20,10 @@ export function MismatchDialog() {
 				if (!o) dismiss();
 			}}
 		>
-			<DialogContent>
+			{/* a CONFIRM dialog: lazer's popup dialog rather than its focused
+			overlay, so it springs in from noticeably smaller -- a decision prompt
+			announces itself (ui/dialog.tsx) */}
+			<DialogContent kind="confirm">
 				<DialogHeader>
 					<DialogTitle>beatmap doesn't match this replay</DialogTitle>
 					{/* select-text: the two hashes are diagnostic copy opt-ins (index.css) */}

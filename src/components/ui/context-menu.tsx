@@ -19,10 +19,15 @@ function ContextMenuContent({ className, ...props }: ContextMenuPrimitive.Popup.
 			point); start-aligned so the popup hangs below-right of it the way
 			every desktop context menu does, collisions flipping it automatically */}
 			<ContextMenuPrimitive.Positioner align="start" side="bottom" className="isolate z-50">
+				{/* popup-menu: lazer's OsuMenu, so it fades in while revealing
+				downward and on the way out holds for an instant before fading, which
+				is what makes a click on an item visibly taken before the menu leaves
+				(index.css) */}
 				<ContextMenuPrimitive.Popup
 					data-slot="context-menu-content"
+					data-motion-row="popup"
 					className={cn(
-						"z-50 flex min-w-44 origin-(--transform-origin) flex-col rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+						"popup-menu z-50 flex min-w-44 origin-(--transform-origin) flex-col rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden",
 						className
 					)}
 					{...props}

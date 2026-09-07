@@ -34,7 +34,10 @@ export function DiscardDialog() {
 				if (!o) dismiss();
 			}}
 		>
-			<DialogContent>
+			{/* a CONFIRM dialog: lazer's popup dialog rather than its focused
+			overlay, so it springs in from noticeably smaller -- a decision prompt
+			announces itself (ui/dialog.tsx) */}
+			<DialogContent kind="confirm">
 				<DialogHeader>
 					<DialogTitle>discard your unsaved edits?</DialogTitle>
 					<DialogDescription className="space-y-2">

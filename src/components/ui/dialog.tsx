@@ -21,12 +21,27 @@ function DialogClose({ ...props }: DialogPrimitive.Close.Props) {
 	return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
 }
 
+/** the two lazer controls this app's dialogs port. a WORKBENCH dialog is a
+ * focused overlay -- settings, export, video export, help -- and settles in
+ * from slightly small; a CONFIRM dialog is lazer's popup dialog and springs
+ * from noticeably smaller, because a decision prompt announces itself. the
+ * numbers of each live in index.css beside the tokens they reference */
+export type DialogKind = "workbench" | "confirm";
+
+const DIALOG_MOTION: Record<DialogKind, string> = {
+	workbench: "popup-workbench",
+	confirm: "popup-confirm"
+};
+
 function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) {
 	return (
 		<DialogPrimitive.Backdrop
 			data-slot="dialog-overlay"
+			// data-motion-row: this is a popup surface, so the popup row owns it
+			// (lib/motion.ts). the look is untouched -- only the fade is retimed
+			data-motion-row="popup"
 			className={cn(
-				"fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+				"popup-dim fixed inset-0 isolate z-50 bg-black/10 supports-backdrop-filter:backdrop-blur-xs",
 				className
 			)}
 			{...props}
@@ -38,17 +53,27 @@ function DialogContent({
 	className,
 	children,
 	showCloseButton = true,
+	kind = "workbench",
 	...props
 }: DialogPrimitive.Popup.Props & {
 	showCloseButton?: boolean;
+	/** which lazer control this dialog moves like; workbench unless a caller
+	 * says otherwise, since the confirms are the two exceptions */
+	kind?: DialogKind;
 }) {
 	return (
 		<DialogPortal>
 			<DialogOverlay />
 			<DialogPrimitive.Popup
 				data-slot="dialog-content"
+				data-motion-row="popup"
 				className={cn(
-					"fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+					// the centring translate stays a tailwind utility, which v4
+					// compiles to the individual `translate` property -- the motion
+					// class scales through the individual `scale` property beside it,
+					// so the two compose instead of overwriting each other (index.css)
+					"fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 outline-none sm:max-w-sm",
+					DIALOG_MOTION[kind],
 					className
 				)}
 				{...props}
