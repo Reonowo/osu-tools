@@ -5,6 +5,7 @@ import {
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
+	DEFAULT_INTERFACE,
 	DEFAULT_OVERLAYS,
 	DEFAULT_TIMELINE
 } from "@/state/defaults";
@@ -64,6 +65,7 @@ const settings: Settings = {
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
+	interface: DEFAULT_INTERFACE,
 	keybinds: {},
 	skin: { kind: "bundled" },
 	video: DEFAULT_VIDEO,
@@ -144,7 +146,7 @@ describe("warningText", () => {
 	test("each warning kind gets distinct, informative copy", () => {
 		expect(warningText({ kind: "audioMissing" })).toContain("audio file missing");
 		expect(warningText({ kind: "modsNotSimulated", mods: 8 | 64 })).toBe(
-			"mods not simulated (HD DT) — judgements, combo, and accuracy are hidden"
+			"mods not simulated (HD DT) — judgements, combo, accuracy and score are hidden"
 		);
 		expect(warningText({ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" })).toContain(
 			"doesn't match the replay"

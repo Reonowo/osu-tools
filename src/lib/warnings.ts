@@ -12,7 +12,7 @@ export function warningText(w: LoadedSceneWarning): string {
 		case "audioMissing":
 			return "audio file missing — playing silently on the internal clock";
 		case "modsNotSimulated":
-			return `mods not simulated (${formatMods(w.mods)}) — judgements, combo, and accuracy are hidden`;
+			return `mods not simulated (${formatMods(w.mods)}) — judgements, combo, accuracy and score are hidden`;
 		case "beatmapMismatch":
 			return "beatmap doesn't match the replay (explicit override) — geometry may be wrong; judgements disabled";
 	}
