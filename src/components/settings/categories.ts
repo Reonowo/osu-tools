@@ -10,6 +10,7 @@ import type {
 	EditingSettings,
 	EffectSettings,
 	GameplaySettings,
+	InterfaceSettings,
 	OverlaySettings,
 	TimelineSettings
 } from "@/state/store";
@@ -43,19 +44,26 @@ export type SettingsPrefKey =
 	| `overlays.${keyof OverlaySettings}`
 	| `timeline.${keyof TimelineSettings}`
 	| `effects.${keyof EffectSettings}`
-	| `editing.${keyof EditingSettings}`;
+	| `editing.${keyof EditingSettings}`
+	| `interface.${keyof InterfaceSettings}`;
 
 /** which category renders which prefs. nothing reads this at runtime -- it
  * exists so categories.test.ts can fail when a pref is wired into the store
  * and into settings.rs but never rendered, which is invisible otherwise.
  *
- * `general` and `skin` cover no key on purpose: the install path and the skin
- * selection are bespoke controls,
- * not a per-key setter. so are `Settings.osuStablePath` and `Settings.recents`
- * -- both outside this map by design, and a naive "every Settings key has a
+ * `skin` covers no key on purpose, and `general` covers only its motion
+ * section: the install path and the skin selection are bespoke controls, not
+ * per-key setters. so are `Settings.osuStablePath` and `Settings.recents` --
+ * both outside this map by design, and a naive "every Settings key has a
  * category" assertion would fail on day one. `keybinds` covers none for the
  * same reason: `Settings.keybinds` is one sparse map behind a bespoke capture
  * control, not a set of per-key setters.
+ *
+ * the `interface.*` prefix under `general` is the clearest case for keying
+ * this map on WHERE a control appears rather than on the group it persists
+ * under: the motion prefs have a group of their own precisely so the day they
+ * earn a category of their own is a one-line change here and no settings
+ * migration anywhere.
  *
  * `Settings.volume` -- the master -- is deliberately absent too, but for a
  * different reason than it used to be. it is not "rendered elsewhere instead":
@@ -64,7 +72,7 @@ export type SettingsPrefKey =
  * lazer does (VolumeSettings.cs). a key in this map means "exactly one
  * category owns it", and the master owns none */
 export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]> = {
-	general: [],
+	general: ["interface.motion", "interface.comboPop"],
 	// the two `gameplay.*` keys are not a typo: the audio category renders
 	// them, and the prefs group they persist under was left alone so no
 	// settings file needs migrating (AudioCategory.tsx says why they moved).
@@ -102,6 +110,9 @@ export const CATEGORY_PREFS: Record<SettingsCategory, readonly SettingsPrefKey[]
 		"overlays.hideCursor",
 		"overlays.keyOverlay",
 		"overlays.hpBar",
+		"overlays.comboCounter",
+		"overlays.accuracy",
+		"overlays.score",
 		"overlays.displayLength",
 		"overlays.playfieldGrid",
 		"timeline.hitWindowBands",

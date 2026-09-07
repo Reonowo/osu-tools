@@ -10,6 +10,7 @@ import {
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
+	DEFAULT_INTERFACE,
 	DEFAULT_OVERLAYS,
 	DEFAULT_TIMELINE
 } from "../../state/defaults";
@@ -18,6 +19,7 @@ import { AUDIO_CHANNELS, AUDIO_TOGGLES, GAMEPLAY_TOGGLES } from "./AudioCategory
 import { CATEGORY_PREFS, resolveOpenCategory, SETTINGS_CATEGORIES } from "./categories";
 import { EDITING_TOGGLES } from "./EditingCategory";
 import { EFFECT_TOGGLES, SLIDER_TOGGLES } from "./GameplayCategory";
+import { MOTION_TOGGLES } from "./GeneralCategory";
 
 /** every key the four viewer-pref groups actually carry, read off the
  * DEFAULT_* objects rather than written out here: adding a pref to the store
@@ -29,7 +31,8 @@ const STORE_PREF_KEYS: string[] = [
 	...Object.keys(DEFAULT_OVERLAYS).map((key) => `overlays.${key}`),
 	...Object.keys(DEFAULT_TIMELINE).map((key) => `timeline.${key}`),
 	...Object.keys(DEFAULT_EFFECTS).map((key) => `effects.${key}`),
-	...Object.keys(DEFAULT_EDITING).map((key) => `editing.${key}`)
+	...Object.keys(DEFAULT_EDITING).map((key) => `editing.${key}`),
+	...Object.keys(DEFAULT_INTERFACE).map((key) => `interface.${key}`)
 ];
 
 const COVERED_KEYS: string[] = Object.values(CATEGORY_PREFS).flat();
@@ -40,12 +43,12 @@ const COVERED_KEYS: string[] = Object.values(CATEGORY_PREFS).flat();
  * store: without it, deleting a ToggleRow's descriptor leaves every other
  * assertion green while the pref silently loses its ui.
  *
- * the audio offset, display length, the playfield grid and background dim are
- * the entries written out by hand, because they are the rendered prefs with no
- * descriptor -- two NumberFields, a toggle group and a slider, none of them a
- * ToggleRow --
+ * the audio offset, display length, the playfield grid, background dim and the
+ * interface-motion master are the entries written out by hand, because they
+ * are the rendered prefs with no descriptor -- two NumberFields, two toggle
+ * groups and a slider, none of them a ToggleRow --
  * which is the same reason coverage is keyed on pref keys rather than on
- * descriptors (categories.ts). general renders no per-key pref at all */
+ * descriptors (categories.ts) */
 const RENDERED_PREF_KEYS: string[] = [
 	...AUDIO_CHANNELS.map(({ key }) => `audio.${key}`),
 	...AUDIO_TOGGLES.map(({ key }) => `audio.${key}`),
@@ -64,7 +67,11 @@ const RENDERED_PREF_KEYS: string[] = [
 	...TIMELINE_TOGGLES.map(({ key }) => `timeline.${key}`),
 	...EFFECT_TOGGLES.map(({ key }) => `effects.${key}`),
 	"effects.backgroundDim",
-	...EDITING_TOGGLES.map(({ key }) => `editing.${key}`)
+	...EDITING_TOGGLES.map(({ key }) => `editing.${key}`),
+	// the general category's motion section: the tri-state master is a toggle
+	// group and so has no descriptor, the rows under it do
+	"interface.motion",
+	...MOTION_TOGGLES.map(({ key }) => `interface.${key}`)
 ];
 
 describe("pref coverage", () => {
@@ -108,16 +115,20 @@ describe("category registry", () => {
 		expect(SETTINGS_CATEGORIES[0]?.id).toBe("general");
 	});
 
-	test("the bespoke categories claim no per-key pref, and say so by claiming none", () => {
+	test("the bespoke controls claim no per-key pref, and say so by claiming none", () => {
 		// general's install path and keybinds' override map are single controls
 		// over one setting each, not sets of per-key setters -- listing a key
 		// for either would make the coverage assertions above lie about what a
 		// ToggleRow-shaped category is
-		expect(CATEGORY_PREFS.general).toEqual([]);
 		expect(CATEGORY_PREFS.keybinds).toEqual([]);
 		// the skin selection is one discriminated locator behind a bespoke
 		// picker, on the same terms as the install path and the keybind map
 		expect(CATEGORY_PREFS.skin).toEqual([]);
+		// general covers its motion section and nothing else: the install path
+		// beside it is the bespoke control it always was. asserted as the exact
+		// list rather than as a predicate over it, which an empty array would
+		// satisfy just as happily
+		expect([...CATEGORY_PREFS.general].sort()).toEqual(["interface.comboPop", "interface.motion"]);
 	});
 
 	test("every registry entry is a category the dialog can render", () => {

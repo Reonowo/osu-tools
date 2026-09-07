@@ -46,6 +46,21 @@ export const OVERLAY_TOGGLES: { key: keyof OverlaySettings; label: string; descr
 		label: "show HP bar",
 		description:
 			"the play's HP while it plays, drawn at the playfield's top-left in watch mode — the app's own bar, never a skin's"
+	},
+	{
+		key: "comboCounter",
+		label: "show combo counter",
+		description: "the simulated combo at the playhead, at the playfield's bottom-left in both modes"
+	},
+	{
+		key: "accuracy",
+		label: "show accuracy",
+		description: "the simulated accuracy at the playhead, at the playfield's top-right in both modes"
+	},
+	{
+		key: "score",
+		label: "show score",
+		description: "the simulated score at the playhead, under the accuracy — the running total, not the file's"
 	}
 ];
 
