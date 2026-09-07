@@ -79,9 +79,36 @@ overrides). The manifest records, per failing replay, the header-vs-simulated
 value of every diverging field plus the two triage axes (header miss count,
 spinner presence); its full schema lives in the example's doc comment
 (`src-tauri/crates/engine/examples/sweep_replays.rs`). Beatmaps are matched
-by header md5 through `osu!.db` when the `osu-db` crate can parse it, falling
-back to hashing `Songs/**/*.osu` (matched files are re-hashed either way, so
-a stale index rejects rather than mismatching).
+by header md5 through `osu!.db`, read by the engine's own listing codec — the
+same reader the app's lookup uses, so a sweep over a real library is that
+codec's end-to-end check — falling back to hashing `Songs/**/*.osu` when the
+reader refuses the listing, so a refusal never silently shrinks the population
+(matched files are re-hashed either way, so a stale index rejects rather than
+mismatching).
+
+## Stable listing
+
+`stable/<version>/osu!.db` are real stable clients' beatmap listings cut to
+their header and one beatmap entry by `tools/slice-osu-db.py`, which walks
+the source file field by field and writes nothing unless that walk consumes
+it exactly. They are the golden input for `engine::formats::stable_listing`,
+the app's own listing reader, and for the `src-tauri/src/stable.rs` lookup
+that folds it into an md5 map.
+
+Two versions, holding the **same beatmap** on either side of the one layout
+change stable has made to this file since 2019:
+
+- `stable/20260711/` — 36 **float**-tagged star-rating pairs (`0x0c`), the
+  layout stable switched to at version 20250107
+- `stable/20231102/` — 9 **double**-tagged pairs (`0x0d`), the layout before
+  it. Cut from a truncated backup with the slicer's `--truncated-source`
+  flag; the caveat that carries is in that directory's README
+
+That pairing is what pins the reader's rule that a star-rating pair is read
+off its own value tag rather than off the listing version, so the next such
+change fails a fixture test before it fails a user's auto lookup. Each
+directory's README records provenance, contents and its own recapture
+command.
 
 ## Judgement dumps (scenario fixtures)
 
