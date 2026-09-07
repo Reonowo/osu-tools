@@ -230,6 +230,22 @@ pub enum SimulationDto {
         /// there is no drain rate to draw. the export dialog is where the
         /// unsettled search is reported
         hp_curve: Vec<[f64; 2]>,
+        /// the running scorev1 total as `[time, score]` steps -- one per
+        /// judgement that scored and one per scoring half spin at its own
+        /// increment's time, so the watch HUD's number ticks during a
+        /// spinner as the player saw it. pairs rather than objects for the
+        /// reason the HP curve is (`lib/score.ts` reads them positionally).
+        ///
+        /// unlike the HP curve this never depends on the drain-rate search:
+        /// a search that did not settle leaves the score intact.
+        ///
+        /// EMPTY and NULL are different answers, and the difference is why
+        /// this is nullable where the HP curve is not: an empty curve is a
+        /// play that scored nothing, which reads as 0 throughout, while null
+        /// is a curve that could not be folded at all (`load::score_curve_for`
+        /// -- a refused star count, which no decoded beatmap reaches) and the
+        /// surfaces fall back to the header's own total for it
+        score_curve: Option<Vec<(f64, u64)>>,
     },
     NotSimulated {
         reason: NotSimulatedReason,
@@ -237,7 +253,11 @@ pub enum SimulationDto {
 }
 
 impl SimulationDto {
-    pub fn authoritative(timeline: &JudgementTimeline, health: &engine::score::HealthCurve) -> SimulationDto {
+    pub fn authoritative(
+        timeline: &JudgementTimeline,
+        health: &engine::score::HealthCurve,
+        score: Option<&[engine::score::ScoreStep]>,
+    ) -> SimulationDto {
         SimulationDto::Authoritative {
             events: timeline.events.iter().map(JudgementEventDto::from).collect(),
             totals: TotalsDto {
@@ -252,6 +272,7 @@ impl SimulationDto {
             } else {
                 Vec::new()
             },
+            score_curve: score.map(|steps| steps.iter().map(|step| (step.time, step.score)).collect()),
         }
     }
 }
@@ -609,13 +630,19 @@ mod tests {
             spinner_scoring: Vec::new(),
         };
         let health = test_health(true, &[(0.0, 1.0), (1030.0, 1.0), (1030.0, 0.8)]);
-        let v = serde_json::to_value(SimulationDto::authoritative(&timeline, &health)).unwrap();
+        let score = [engine::score::ScoreStep {
+            time: 1030.0,
+            score: 50,
+        }];
+        let v = serde_json::to_value(SimulationDto::authoritative(&timeline, &health, Some(&score))).unwrap();
         assert_eq!(v["status"], "authoritative");
         let fields: std::collections::HashSet<&str> =
             v.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(
             fields,
-            ["status", "events", "totals", "hpCurve"].into_iter().collect()
+            ["status", "events", "totals", "hpCurve", "scoreCurve"]
+                .into_iter()
+                .collect()
         );
         assert_eq!(
             v["totals"],
@@ -627,12 +654,32 @@ mod tests {
         // the curve rides as [time, fraction] pairs, the jump's two points
         // sharing their millisecond
         assert_eq!(v["hpCurve"], json!([[0.0, 1.0], [1030.0, 1.0], [1030.0, 0.8]]));
+        // the score rides as [time, score] pairs on the same terms, the score
+        // being the RUNNING total after that step
+        assert_eq!(v["scoreCurve"], json!([[1030.0, 50]]));
+        assert_eq!(
+            v["scoreCurve"][0][1], 50,
+            "the first step carries a running total"
+        );
 
-        // an unsettled search ships no curve at all: the escape result's
-        // zero rate would draw a bar that only misses move
+        // an unsettled search ships no HP curve at all: the escape result's
+        // zero rate would draw a bar that only misses move. the score is
+        // untouched by it -- the curve depends on the timeline and the map,
+        // never on the drain search
         let unsettled = test_health(false, &[(0.0, 1.0), (1030.0, 0.8)]);
-        let v = serde_json::to_value(SimulationDto::authoritative(&timeline, &unsettled)).unwrap();
+        let v =
+            serde_json::to_value(SimulationDto::authoritative(&timeline, &unsettled, Some(&score))).unwrap();
         assert_eq!(v["hpCurve"], json!([]));
+        assert_eq!(v["scoreCurve"], json!([[1030.0, 50]]));
+
+        // an empty curve and a withheld one are different answers on the wire:
+        // the first is a play that scored nothing, the second a fold that never
+        // ran. an empty HP curve has no such partner state, which is why only
+        // this one is nullable
+        let v = serde_json::to_value(SimulationDto::authoritative(&timeline, &health, Some(&[]))).unwrap();
+        assert_eq!(v["scoreCurve"], json!([]));
+        let v = serde_json::to_value(SimulationDto::authoritative(&timeline, &health, None)).unwrap();
+        assert_eq!(v["scoreCurve"], json!(null));
 
         let v = serde_json::to_value(SimulationDto::NotSimulated {
             reason: NotSimulatedReason::UnsupportedMods,

@@ -39,6 +39,10 @@ struct Resimulation {
     snapshot: Vec<ReplayFrame>,
     score_context: ScoreContext,
     search: Option<DrainRateSearch>,
+    /// the session's cached stars, for the same reason the search is cached:
+    /// they read the map alone, so an edit re-walks the score curve over them
+    /// rather than re-deriving them
+    peppy_stars: Option<i32>,
 }
 
 impl Resimulation {
@@ -48,21 +52,24 @@ impl Resimulation {
             snapshot: session.document.frames().to_vec(),
             score_context: session.score_context,
             search: session.drain_search.clone(),
+            peppy_stars: session.peppy_stars,
         }
     }
 
     /// the feedback loop behind every landed edit: re-judge the frame stream
-    /// and re-fold its HP, off the session lock and in ONE blocking task,
-    /// because the fold reads the very timeline the simulation just produced.
+    /// and re-fold its HP and its score, off the session lock and in ONE
+    /// blocking task, because both folds read the very timeline the
+    /// simulation just produced.
     ///
     /// `noun` names the stream in the refusal message, which differs per
     /// command: the edited one, the resulting one, the baseline
-    async fn run(self, noun: &str) -> Result<(JudgementTimeline, HealthCurve), IpcError> {
+    async fn run(self, noun: &str) -> Result<Refold, IpcError> {
         let Resimulation {
             processed,
             snapshot,
             score_context,
             search,
+            peppy_stars,
         } = self;
         let folded = tauri::async_runtime::spawn_blocking(move || {
             let timeline = simulate(&processed, &snapshot)?;
@@ -73,17 +80,30 @@ impl Resimulation {
                 search.unwrap_or_else(|| engine::score::drain_rate_search(&processed, &score_context));
             let health =
                 engine::score::derive_health_with_search(&processed, &timeline, &score_context, search);
-            Ok::<_, engine::EngineError>((timeline, health))
+            let score = crate::load::score_curve_for(&timeline, &processed, peppy_stars);
+            Ok::<_, engine::EngineError>(Refold {
+                timeline,
+                health,
+                score,
+            })
         })
         .await;
         match folded {
-            Ok(Ok(pair)) => Ok(pair),
+            Ok(Ok(refold)) => Ok(refold),
             Ok(Err(e)) => Err(IpcError::InvalidEdit {
                 message: format!("{noun} exceeded simulation limits: {e}"),
             }),
             Err(e) => Err(join_err("simulation", e)),
         }
     }
+}
+
+/// what one re-judgement produces: the timeline and the two folds over it the
+/// authoritative wire type carries
+struct Refold {
+    timeline: JudgementTimeline,
+    health: HealthCurve,
+    score: Option<Vec<engine::score::ScoreStep>>,
 }
 
 /// media files ride the asset protocol; the runtime scope allowance is what
@@ -292,6 +312,7 @@ pub fn set_viewer_prefs(
     editing: EditingPrefs,
     effects: EffectPrefs,
     timeline: TimelinePrefs,
+    interface: crate::settings::InterfacePrefs,
     keybinds: KeybindOverrides,
 ) -> Result<Settings, IpcError> {
     let mut settings = state.settings.lock().expect("settings lock");
@@ -304,6 +325,7 @@ pub fn set_viewer_prefs(
     candidate.editing = editing;
     candidate.effects = effects;
     candidate.timeline = timeline;
+    candidate.interface = interface;
     candidate.keybinds = keybinds;
     candidate.sanitize();
     save_settings(&state.config_dir, &candidate)?;
@@ -622,11 +644,16 @@ pub async fn apply_edit(
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok((timeline, health)) => {
+        Ok(Refold {
+            timeline,
+            health,
+            score,
+        }) => {
             session.document.commit_last();
             session.revision += 1;
             sync_labels(session, Some(label));
-            session.simulation = crate::scene::SimulationDto::authoritative(&timeline, &health);
+            session.simulation =
+                crate::scene::SimulationDto::authoritative(&timeline, &health, score.as_deref());
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -689,10 +716,15 @@ async fn history_step(
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok((timeline, health)) => {
+        Ok(Refold {
+            timeline,
+            health,
+            score,
+        }) => {
             session.revision += 1;
             move_history_label(session, &direction);
-            session.simulation = crate::scene::SimulationDto::authoritative(&timeline, &health);
+            session.simulation =
+                crate::scene::SimulationDto::authoritative(&timeline, &health, score.as_deref());
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -766,11 +798,16 @@ pub async fn revert_all(state: State<'_, AppState>, epoch: u64) -> Result<EditDe
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok((timeline, health)) => {
+        Ok(Refold {
+            timeline,
+            health,
+            score,
+        }) => {
             session.document.commit_last();
             session.revision += 1;
             sync_labels(session, Some("revert all".into()));
-            session.simulation = crate::scene::SimulationDto::authoritative(&timeline, &health);
+            session.simulation =
+                crate::scene::SimulationDto::authoritative(&timeline, &health, score.as_deref());
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -2091,6 +2128,13 @@ Name: Audible
             hit_window_bands: false,
             ..TimelinePrefs::default()
         };
+        // the tri-state master stored verbatim beside the row it gates, for
+        // the reason the effects master is: resolving "follow the OS" is the
+        // frontend's job, and this crate has no OS query to resolve it with
+        let interface = crate::settings::InterfacePrefs {
+            motion: Some(false),
+            combo_pop: false,
+        };
         // the overrides travel opaquely: this crate never asks what
         // `selectTool` is or whether two actions want one key
         let keybinds: KeybindOverrides = [(
@@ -2119,6 +2163,7 @@ Name: Audible
             editing.clone(),
             effects.clone(),
             timeline.clone(),
+            interface.clone(),
             keybinds.clone(),
         )
         .unwrap();
@@ -2168,6 +2213,7 @@ Name: Audible
             EditingPrefs::default(),
             EffectPrefs::default(),
             TimelinePrefs::default(),
+            crate::settings::InterfacePrefs::default(),
             KeybindOverrides::new(),
         )
         .unwrap();
@@ -2197,6 +2243,7 @@ Name: Audible
             EditingPrefs::default(),
             EffectPrefs::default(),
             TimelinePrefs::default(),
+            crate::settings::InterfacePrefs::default(),
             KeybindOverrides::new(),
         )
         .unwrap_err();
@@ -2641,6 +2688,96 @@ Name: Audible
             guard.as_ref().unwrap().drain_search.clone().unwrap()
         };
         assert_eq!(after, search, "no edit rewrites the cached search");
+    }
+
+    /// the score curve an authoritative simulation carries
+    fn score_curve(simulation: &crate::scene::SimulationDto) -> &[(f64, u64)] {
+        match simulation {
+            crate::scene::SimulationDto::Authoritative { score_curve, .. } => score_curve
+                .as_deref()
+                .expect("a decodable beatmap always derives its star count"),
+            other => panic!("expected an authoritative simulation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_score_curve_rides_every_landed_edit_off_the_sessions_one_star_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let scene = editable_scene(&app, dir.path(), 0, 20151228);
+
+        // this fixture's frame stream misses everything, so the play scored
+        // nothing: an empty curve, which every reader takes as 0 throughout.
+        // it is a curve all the same -- the field is on the wire, and the
+        // edit below is what puts steps in it
+        let loaded = score_curve(&scene.simulation).to_vec();
+        assert!(
+            loaded.is_empty(),
+            "a play that scores nothing has no steps: {loaded:?}"
+        );
+
+        // the stars are the session's, derived once at load: an edit re-walks
+        // the curve over them and never derives them again
+        let state = app.state::<AppState>();
+        let stars = {
+            let guard = state.session.lock().expect("session lock");
+            guard
+                .as_ref()
+                .expect("a scene is installed")
+                .peppy_stars
+                .expect("a simulatable session caches its star count")
+        };
+
+        // a press on the first circle turns its miss into a hit, which scores
+        // where nothing scored before
+        let object = scene.render_plan.objects[0].clone();
+        let press = vec![crate::edit::EditOp::InsertFrames {
+            frames: vec![crate::scene::FrameDto {
+                time: object.start_time,
+                x: object.position[0],
+                y: object.position[1],
+                buttons: 1,
+            }],
+        }];
+        let delta =
+            tauri::async_runtime::block_on(apply_edit(app.state(), scene.epoch, 0, press, "press".into()))
+                .unwrap();
+        let edited = score_curve(&delta.simulation.expect("frame edits re-simulate")).to_vec();
+        assert!(
+            !edited.is_empty(),
+            "the landed hit scores, so the curve gains steps"
+        );
+        assert!(
+            edited.windows(2).all(|pair| pair[1].0 >= pair[0].0),
+            "the steps ride in time order"
+        );
+        assert!(
+            edited.windows(2).all(|pair| pair[1].1 > pair[0].1),
+            "every step is a strict increase -- a step that changed nothing is not a step"
+        );
+
+        // and the history steps and the revert all carry it too
+        let undone = tauri::async_runtime::block_on(undo(app.state(), scene.epoch)).unwrap();
+        assert_eq!(
+            score_curve(&undone.simulation.expect("undo re-simulates")),
+            &loaded[..]
+        );
+        let redone = tauri::async_runtime::block_on(redo(app.state(), scene.epoch)).unwrap();
+        assert_eq!(
+            score_curve(&redone.simulation.expect("redo re-simulates")),
+            &edited[..]
+        );
+        let reverted = tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+        assert_eq!(
+            score_curve(&reverted.simulation.expect("revert all re-simulates")),
+            &loaded[..]
+        );
+
+        let after = {
+            let guard = state.session.lock().expect("session lock");
+            guard.as_ref().unwrap().peppy_stars.unwrap()
+        };
+        assert_eq!(after, stars, "no edit rewrites the cached star count");
     }
 
     #[test]

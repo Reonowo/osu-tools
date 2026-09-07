@@ -52,6 +52,13 @@ pub struct SessionState {
     /// again. present exactly when `simulatable` is true; there is nothing
     /// to fold for a scene with no authoritative timeline
     pub drain_search: Option<engine::score::DrainRateSearch>,
+    /// the map's peppy stars, cached beside the search for the same reason:
+    /// the score curve's combo bonus reads them on every landed edit and they
+    /// depend on the score context alone. `None` on an unsimulatable scene,
+    /// and also where the derivation refused the map's difficulty values --
+    /// a curve withheld, never a load failed, on the same terms as the
+    /// integrity report
+    pub peppy_stars: Option<i32>,
     /// what a video export stages from, captured here because the load is
     /// the one moment every path below is already resolved -- for an `.osz`
     /// scene they point into the extraction lease this session holds alive
@@ -73,6 +80,31 @@ impl std::fmt::Debug for SessionState {
             .field("simulatable", &self.simulatable)
             .finish()
     }
+}
+
+/// the play's score curve, or `None` when the map's peppy stars could not be
+/// derived. the two callers -- this load and every landed edit -- share it, so
+/// there is one place where a withheld star count decides what happens.
+///
+/// `None` rather than an empty curve, because an EMPTY curve is a real answer:
+/// a play that scored nothing has no steps, and reads as 0 throughout. a
+/// withheld star count is a different thing entirely -- nothing was folded, so
+/// nothing is known -- and the surfaces fall back to the header for it, the
+/// same posture the integrity report takes when this same derivation refuses
+/// (`peppy_stars` can only fail on difficulty values a decode clamps out of
+/// existence, so neither is reachable in practice; they must still not lie)
+pub fn score_curve_for(
+    timeline: &engine::simulation::JudgementTimeline,
+    processed: &ProcessedBeatmap,
+    peppy_stars: Option<i32>,
+) -> Option<Vec<engine::score::ScoreStep>> {
+    let stars = peppy_stars?;
+    Some(engine::score::score_curve(
+        timeline,
+        processed,
+        stars,
+        engine::score::NOMOD_SCORE_MULTIPLIER,
+    ))
 }
 
 #[derive(Debug)]
@@ -183,12 +215,13 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     // mismatch wins as the reason: the geometry may be wrong, so even a
     // nomod timeline would be fiction. unsupported mods still render with
     // nomod geometry -- the spec's persistent-banner path
-    let (processed, simulation, integrity, drain_search) = if source.mismatch {
+    let (processed, simulation, integrity, drain_search, peppy_stars) = if source.mismatch {
         (
             process_beatmap(&source.map)?,
             SimulationDto::NotSimulated {
                 reason: NotSimulatedReason::BeatmapMismatch,
             },
+            None,
             None,
             None,
         )
@@ -198,9 +231,13 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         // the search is the session's, folded here and handed back to every
         // later edit; the fold itself is all that re-runs per edit
         let search = engine::score::drain_rate_search(&processed, &score_context);
+        // and so are the stars, for the same reason: the score curve's combo
+        // bonus needs them on every edit and they read the map alone
+        let stars = engine::score::peppy_stars(&score_context).ok();
         let health =
             engine::score::derive_health_with_search(&processed, &timeline, &score_context, search.clone());
-        let simulation = SimulationDto::authoritative(&timeline, &health);
+        let score = score_curve_for(&timeline, &processed, stars);
+        let simulation = SimulationDto::authoritative(&timeline, &health, score.as_deref());
         // pre-lazer authoritative scenes only: a lazer-native play simulated
         // under the legacy profile would flag honest mismatches (TODO.md's
         // lazer-native item), so those ship no report rather than false
@@ -213,13 +250,14 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         } else {
             None
         };
-        (processed, simulation, integrity, Some(search))
+        (processed, simulation, integrity, Some(search), stars)
     } else {
         (
             process_beatmap(&source.map)?,
             SimulationDto::NotSimulated {
                 reason: NotSimulatedReason::UnsupportedMods,
             },
+            None,
             None,
             None,
         )
@@ -293,6 +331,7 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
             simulation: cached_simulation,
             score_context,
             drain_search,
+            peppy_stars,
             export_source,
         },
         origin: BeatmapOrigin {
