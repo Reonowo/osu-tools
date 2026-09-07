@@ -211,6 +211,7 @@ pub struct Settings {
     pub editing: EditingPrefs,
     pub effects: EffectPrefs,
     pub timeline: TimelinePrefs,
+    pub interface: InterfacePrefs,
     /// sparse: only the actions the user actually rebound. an absent action
     /// keeps following the frontend's own default, which is what lets a later
     /// improvement to a default reach someone who has opened this surface
@@ -243,6 +244,7 @@ impl Default for Settings {
             editing: EditingPrefs::default(),
             effects: EffectPrefs::default(),
             timeline: TimelinePrefs::default(),
+            interface: InterfacePrefs::default(),
             keybinds: KeybindOverrides::new(),
             skin: SkinLocator::default(),
             video: VideoExportPrefs::default(),
@@ -487,6 +489,13 @@ pub struct OverlayPrefs {
     /// HUD, not analysis chrome (`docs/adr/0008`), and off means the curve is
     /// never evaluated at all
     pub hp_bar: bool,
+    /// the watch HUD's combo counter, its accuracy and its score: one row per
+    /// element, never a pair, because a row that hides two things is not a row
+    /// for either. same terms as `hp_bar` -- each off means that element's
+    /// lookup is not run at all
+    pub combo_counter: bool,
+    pub accuracy: bool,
+    pub score: bool,
     /// ms of replay either side of `now` the analysis overlays cover
     pub display_length: f64,
     /// the playfield grid's spacing in osu!px, one of `GRID_SPACINGS`, `0`
@@ -505,6 +514,9 @@ impl Default for OverlayPrefs {
             hide_cursor: false,
             key_overlay: true,
             hp_bar: true,
+            combo_counter: true,
+            accuracy: true,
+            score: true,
             display_length: DISPLAY_LENGTH_DEFAULT,
             // off: a grid the user never asked for must not appear over their
             // replay
@@ -595,6 +607,41 @@ pub struct TimelinePrefs {
     /// mark says where the fill reached zero, so hiding one without the
     /// other would leave a mark over nothing
     pub hp_curve: bool,
+}
+
+/// the app chrome's own animation. deliberately its own group rather than a
+/// member of an existing one: it governs the INTERFACE, not the replay, and
+/// giving it a prefix of its own means the day it earns a settings category
+/// of its own is a category change with no settings migration (the coverage
+/// map is keyed on where a control appears, not on which group it persists
+/// under).
+///
+/// never the playfield's effects, which have their own master under
+/// `EffectPrefs`, and never the HP bar's damp, which is a reading of the
+/// play rather than motion of the chrome
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct InterfacePrefs {
+    /// the master, TRI-STATE: `Some(true)` on, `Some(false)` off, and `None`
+    /// -- the default -- following the OS reduce-motion setting live. a
+    /// stored choice wins over the OS, which is why this is an option rather
+    /// than a bool the frontend pre-resolves: resolving it here would freeze
+    /// whatever the OS said the moment it was written
+    pub motion: Option<bool>,
+    /// the combo counter's pop and break flash, the first animation under the
+    /// master. gated by it and keeps its own setting while it is off
+    pub combo_pop: bool,
+}
+
+impl Default for InterfacePrefs {
+    fn default() -> InterfacePrefs {
+        InterfacePrefs {
+            // follow the OS: a user who asked their system for less motion
+            // gets less motion without ever opening this dialog
+            motion: None,
+            combo_pop: true,
+        }
+    }
 }
 
 impl Default for TimelinePrefs {
@@ -744,6 +791,9 @@ mod tests {
                 hide_cursor: true,
                 key_overlay: false,
                 hp_bar: false,
+                combo_counter: false,
+                accuracy: false,
+                score: false,
                 display_length: 1200.0,
                 playfield_grid: 16,
             },
@@ -766,6 +816,10 @@ mod tests {
                 nested_marks: false,
                 severity_ticks: true,
                 hp_curve: false,
+            },
+            interface: InterfacePrefs {
+                motion: Some(false),
+                combo_pop: false,
             },
             keybinds: keybinds([("selectTool", json!({ "hotkey": "К", "codes": ["KeyV"] }))]),
             skin: SkinLocator::Stable {
@@ -834,6 +888,10 @@ mod tests {
         assert_eq!(settings.volume, 100);
         assert!(settings.overlays.key_overlay, "the key overlay ships enabled");
         assert!(settings.overlays.hp_bar, "the HP bar ships enabled");
+        assert!(
+            settings.overlays.combo_counter && settings.overlays.accuracy && settings.overlays.score,
+            "every watch HUD readout ships enabled"
+        );
         assert_eq!(settings.overlays.display_length, DISPLAY_LENGTH_DEFAULT);
         assert!(!settings.overlays.cursor_path);
         assert!(settings.editing.snap_to_lattice, "snapping ships enabled");
@@ -873,6 +931,14 @@ mod tests {
             },
             "every timeline layer ships visible"
         );
+        assert_eq!(
+            settings.interface,
+            InterfacePrefs {
+                motion: None,
+                combo_pop: true
+            },
+            "interface motion follows the OS until the user says otherwise, and the combo pop ships on"
+        );
     }
 
     #[test]
@@ -911,6 +977,9 @@ mod tests {
                     "hideCursor": true,
                     "keyOverlay": false,
                     "hpBar": false,
+                    "comboCounter": false,
+                    "accuracy": false,
+                    "score": false,
                     "displayLength": 1200.0,
                     "playfieldGrid": 16,
                 },
@@ -934,6 +1003,10 @@ mod tests {
                     "severityTicks": true,
                     "hpCurve": false,
                 },
+                // the tri-state master rides as a nullable bool: an explicit
+                // choice is the bool, and null is "follow the OS", which only
+                // the frontend can resolve
+                "interface": { "motion": false, "comboPop": false },
                 "keybinds": { "selectTool": [{ "hotkey": "К", "codes": ["KeyV"] }] },
                 // the discriminated locator: both the KIND of location and the
                 // path, so a folder skin and a stable one that happen to share
@@ -977,6 +1050,9 @@ mod tests {
                     "hideCursor": false,
                     "keyOverlay": true,
                     "hpBar": true,
+                    "comboCounter": true,
+                    "accuracy": true,
+                    "score": true,
                     "displayLength": 800.0,
                     "playfieldGrid": 0,
                 },
@@ -1000,6 +1076,8 @@ mod tests {
                     "severityTicks": true,
                     "hpCurve": true,
                 },
+                // a fresh install follows the OS rather than deciding for it
+                "interface": { "motion": null, "comboPop": true },
                 "keybinds": {},
                 // a fresh install draws the app's own look, and that look is a
                 // selectable row rather than a "nothing selected" state
