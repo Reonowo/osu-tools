@@ -142,8 +142,9 @@ export function ReplayPanel() {
 							</div>
 						))}
 					</div>
-					{/* max combo rides with the live stats, not the header card: the
-					simulation recounts it on every edit */}
+					{/* max combo and the score ride with the simulated stats, not the header
+					card: the simulation recounts one and re-folds the other on every
+					edit */}
 					<div className="mt-[7px] flex items-center gap-1.5 text-[11px]">
 						<span className="text-[#a1a1aa]">max combo</span>
 						<span className="ml-auto flex items-baseline gap-1.5 select-text">
@@ -151,23 +152,27 @@ export function ReplayPanel() {
 							<span className="text-[#e4e4e7] tabular-nums">{stats.maxCombo.value}x</span>
 						</span>
 					</div>
+					<div className="mt-[5px] flex items-center gap-1.5 text-[11px]">
+						<span className="text-[#a1a1aa]">score</span>
+						<span className="ml-auto flex items-baseline gap-1.5 select-text">
+							<WasLabel stat={stats.totalScore} />
+							<span className="text-[#e4e4e7] tabular-nums">
+								{stats.totalScore.value.toLocaleString()}
+							</span>
+						</span>
+					</div>
 				</div>
 
-				{/* the header card: everything simulation cannot recount. score and
-				geki/katu stay the file's own numbers until export regenerates them,
-				so they are grouped under this caption rather than mixed into the
-				live rows above */}
+				{/* the header card: everything simulation cannot recount. geki and
+				katu stay the file's own numbers until export regenerates them --
+				taking them live needs a derive_score call per resimulation, which
+				TODO.md records -- so they are grouped under this caption rather than
+				mixed into the live rows above */}
 				<div>
 					<div className="mb-[5px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
 						recorded in file
 					</div>
 					<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[11px] text-[11px]">
-						<div className="contents">
-							<dt className="text-[#8a8a93]">score</dt>
-							<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
-								{stats.totalScore.toLocaleString()}
-							</dd>
-						</div>
 						<div className="contents">
 							<dt className="text-[#8a8a93]">geki / katu</dt>
 							<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
