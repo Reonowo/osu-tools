@@ -5,8 +5,10 @@ import { HIT_FADE_OUT_TIME } from "../engine/game-constants";
 import type { PhysicalKey } from "../engine/buttons";
 import { buttonEdges, pressEdges, type ButtonEdges, type Press } from "../engine/interpolation";
 import { analyseScene, judgedTime, type ReplayAnalysis } from "./analysis";
+import { comboChanges, type ComboChange } from "./combo";
 import { hpExtremes, type HpExtremes } from "./hp";
 import { severityTargets, type SeverityTargets, type SeverityTick } from "./judgement-nav";
+import { finalScore } from "./score";
 import type {
 	Grade,
 	HpCurve,
@@ -82,6 +84,11 @@ export interface DerivedScene {
 	objectLane: ObjectLaneEntry[];
 	/** the overview strip's below-great marks, height meaning severity */
 	severityTicks: SeverityTick[];
+	/** every moment the combo changed, which is the whole input to the watch
+	 * HUD's combo pop (`lib/combo.ts`). built here beside the severity ticks
+	 * so a landed edit rebuilds it for free and the counter reads the new
+	 * timeline with no transition of its own (`docs/adr/0009`) */
+	comboChanges: ComboChange[];
 	/** the same marks as navigable targets, per grade and sorted by where a
 	 * jump lands rather than when the judgement fired (lib/judgement-nav.ts).
 	 * built here rather than by its consumers so it re-derives on every landed
@@ -119,11 +126,12 @@ export interface ReplayStat<T = number> {
 }
 
 /** the replay panel's whole readout, derived rather than computed in the
- * component so the panel is a pure display: counts, accuracy, grade, and max
- * combo follow the simulation (the engine re-judges every edit, so these go
- * live the moment a delta lands) with the header as the "was" reference,
- * while score and geki/katu have no simulation to follow -- the score port
- * is plan-4 work -- and stay header-valued outright */
+ * component so the panel is a pure display: counts, accuracy, grade, max combo
+ * and the total score follow the simulation (the engine re-judges every edit
+ * and re-folds the score curve with it, so these go live the moment a delta
+ * lands) with the header as the "was" reference, while geki and katu have no
+ * simulation to follow -- taking them live is one `derive_score` call away and
+ * is recorded as a follow-up in TODO.md -- and stay header-valued outright */
 export interface ReplayStats {
 	/** true when value came from an authoritative simulation */
 	simulated: boolean;
@@ -135,7 +143,11 @@ export interface ReplayStats {
 	accuracy: ReplayStat;
 	grade: ReplayStat<RankGrade>;
 	maxCombo: ReplayStat;
-	totalScore: number;
+	/** the score curve's last step, which IS the engine's `total_score` for
+	 * the current document (the engine pins that equality), with the file's
+	 * own total as the frozen reference. 0 for a play that scored nothing;
+	 * the header's own value where there is no curve to read at all */
+	totalScore: ReplayStat;
 	countGeki: number;
 	countKatsu: number;
 }
@@ -168,6 +180,10 @@ function gradeFor(accuracy: number, countMiss: number): RankGrade {
 function replayStats(scene: LoadedScene): ReplayStats {
 	const header = scene.replay;
 	const totals = scene.simulation.status === "authoritative" ? scene.simulation.totals : null;
+	// null for a scene with no simulation AND for one whose curve could not be
+	// folded; both fall back to the header, because neither knows a score. an
+	// EMPTY curve is a third thing and is a real 0 (scene-types' ScoreCurve)
+	const scoreCurve = scene.simulation.status === "authoritative" ? scene.simulation.scoreCurve : null;
 	const live = totals ?? header;
 	const headerAccuracy = accuracyOf(header);
 	const liveAccuracy = totals === null ? headerAccuracy : accuracyOf(totals);
@@ -183,7 +199,10 @@ function replayStats(scene: LoadedScene): ReplayStats {
 			header: gradeFor(headerAccuracy, header.countMiss)
 		},
 		maxCombo: { value: live.maxCombo, header: header.maxCombo },
-		totalScore: header.totalScore,
+		totalScore: {
+			value: scoreCurve === null ? header.totalScore : finalScore(scoreCurve),
+			header: header.totalScore
+		},
 		countGeki: header.countGeki,
 		countKatsu: header.countKatsu
 	};
@@ -410,6 +429,7 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		objectLane,
 		severityTicks,
 		severityTargets: severityTargets(severityTicks, objects),
+		comboChanges: comboChanges(scene.simulation.status === "authoritative" ? scene.simulation.events : []),
 		hp: derivedHp(scene),
 		analysis: analyseScene(scene, presses),
 		stats: replayStats(scene)

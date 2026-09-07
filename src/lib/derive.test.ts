@@ -80,6 +80,7 @@ describe("deriveScene", () => {
 					...scene.simulation,
 					status: "authoritative",
 					hpCurve: [],
+					scoreCurve: [],
 					events: [
 						{
 							time: 1400,
@@ -108,6 +109,7 @@ describe("deriveScene", () => {
 					...scene.simulation,
 					status: "authoritative",
 					hpCurve: [],
+					scoreCurve: [],
 					events: [
 						{
 							time: 1180,
@@ -205,6 +207,7 @@ function laneScene(objects: RenderObject[], events: JudgementEventDto[], frames:
 		simulation: {
 			status: "authoritative",
 			hpCurve: [],
+			scoreCurve: [],
 			events,
 			totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0 }
 		}
@@ -761,9 +764,38 @@ describe("deriveScene replay stats", () => {
 		expect(stats.maxCombo).toEqual({ value: 1, header: 1 });
 	});
 
-	test("score and geki/katu are never simulated and stay header-valued", () => {
+	test("the score follows the curve, with the header riding along as the reference", () => {
+		// the shared fixture's header says 300 while its one-judgement curve
+		// ends at 100 -- exactly the drift an edit produces, and the same shape
+		// max combo above already reads
 		const { stats } = deriveScene(testScene());
-		expect(stats.totalScore).toBe(300);
+		expect(stats.totalScore).toEqual({ value: 100, header: 300 });
+	});
+
+	test("a play that scored nothing reads 0 rather than falling back to the header", () => {
+		const base = testScene().simulation;
+		if (base.status !== "authoritative") throw new Error("the shared fixture simulates");
+		const { stats } = deriveScene(testScene({ simulation: { ...base, scoreCurve: [] } }));
+		expect(stats.totalScore).toEqual({ value: 0, header: 300 });
+	});
+
+	test("a curve that could not be folded falls back to the header, unlike an empty one", () => {
+		// the two states an empty array would otherwise collapse together: a
+		// play that scored nothing is a truthful 0, a withheld fold knows
+		// nothing and must not claim one (scene-types' ScoreCurve)
+		const base = testScene().simulation;
+		if (base.status !== "authoritative") throw new Error("the shared fixture simulates");
+		const { stats } = deriveScene(testScene({ simulation: { ...base, scoreCurve: null } }));
+		expect(stats.totalScore).toEqual({ value: 300, header: 300 });
+	});
+
+	test("without a simulation the score falls back to the header, as every other row does", () => {
+		const { stats } = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+		expect(stats.totalScore).toEqual({ value: 300, header: 300 });
+	});
+
+	test("geki and katu have no simulation to follow and stay header-valued", () => {
+		const { stats } = deriveScene(testScene());
 		expect(stats.countGeki).toBe(0);
 		expect(stats.countKatsu).toBe(0);
 	});
