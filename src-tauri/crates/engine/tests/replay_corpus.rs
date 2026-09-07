@@ -139,6 +139,14 @@ fn local_nomod_replays_self_verify() {
             tally.count_katsu,
             total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER),
         );
+        // the running walk over the very same play: the curve the HUD reads
+        // must end where the header-oracled fold does. checked on every
+        // corpus play including the ratified-divergence ones -- the invariant
+        // is curve-versus-total, which a header divergence does not touch
+        if let Err(complaint) = fixture_util::score_curve_ends_on_the_total(&timeline, &processed, stars) {
+            failures.push(format!("{name}: {complaint}"));
+            continue;
+        }
         let header_derived = (
             u32::from(osr.header.count_geki),
             u32::from(osr.header.count_katsu),
@@ -678,6 +686,10 @@ fn synthetic_full_combo_on_the_fixture_map() {
         attributes.accuracy_score + attributes.combo_score + surplus,
         "simulated full-combo total matches lazer's dumped attributes plus stable's surplus"
     );
+    // and the running walk the HUD reads ends on that same total, over a
+    // committed decode -> process -> simulate -> score_curve pass with no
+    // local corpus needed
+    fixture_util::score_curve_ends_on_the_total(&timeline, &processed, stars).unwrap();
 
     // the health curve on the same clean play: a full combo tracks the
     // perfect play the search simulated, so every recorded sample is the

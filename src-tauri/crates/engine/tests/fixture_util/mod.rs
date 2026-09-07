@@ -94,6 +94,36 @@ pub fn stable_tick_surplus(processed: &engine::beatmap::ProcessedBeatmap) -> u64
     u64::try_from(surplus).expect("no fixture map spaces slider points sub-millisecond")
 }
 
+/// the score curve's own oracle, worded as a complaint rather than an assert
+/// so the corpus block can collect it beside its other per-replay failures:
+/// the curve's last step IS the achieved total, and its times never go
+/// backwards (the frontend binary-searches them).
+///
+/// this is the only thing tying the running walk to the oracle-pinned fold --
+/// `total_score` is what lazer's dumps and the .osr headers verify, and
+/// `score_curve` is a second fold over the same timeline -- so both test
+/// binaries call one definition of it rather than each carrying their own
+pub fn score_curve_ends_on_the_total(
+    timeline: &engine::simulation::JudgementTimeline,
+    processed: &engine::beatmap::ProcessedBeatmap,
+    stars: i32,
+) -> Result<(), String> {
+    let curve = engine::score::score_curve(timeline, processed, stars, engine::score::NOMOD_SCORE_MULTIPLIER);
+    let total = engine::score::total_score(timeline, processed, stars, engine::score::NOMOD_SCORE_MULTIPLIER);
+    let last = curve.last().map(|step| step.score).unwrap_or(0);
+    if last != total {
+        return Err(format!(
+            "the score curve ends at {last}, but the achieved total is {total}"
+        ));
+    }
+    for pair in curve.windows(2) {
+        if pair[1].time < pair[0].time {
+            return Err(format!("the score curve steps backwards in time: {pair:?}"));
+        }
+    }
+    Ok(())
+}
+
 pub fn assert_vec2_close(actual: Vec2, expected: [f32; 2], ctx: &str) {
     assert!(
         (actual.x - expected[0]).abs() <= POSITION_TOL && (actual.y - expected[1]).abs() <= POSITION_TOL,

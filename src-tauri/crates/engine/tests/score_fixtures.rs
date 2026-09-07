@@ -225,6 +225,13 @@ fn synthetic_full_combo_totals_match_the_lazer_dumped_attributes() {
             "{}: full-combo total",
             case.name
         );
+        // the running walk against the same oracle: the curve's last step IS
+        // the total, on every map the dump covers. this is what makes the
+        // spinner clamp and the merge order unmissable -- a curve that pays a
+        // half turn the total does not (or misses one it does) fails here
+        // rather than showing a wrong number in the HUD
+        fixture_util::score_curve_ends_on_the_total(&timeline, &processed, stars)
+            .unwrap_or_else(|complaint| panic!("{}: {complaint}", case.name));
         covered += 1;
     }
 
@@ -264,8 +271,13 @@ fn the_stable_spinner_tick_model_reaches_the_lazer_dumped_bonus_at_the_cap() {
         spinner_scoring: vec![engine::simulation::SpinnerScoring {
             object_index: 0,
             scoring_half_spins: i64::from(spinner.total_half_spins_possible),
-            // the scorev1 fold reads the total alone; the per-increment
-            // records exist for the health fold
+            // the scorev1 TOTAL reads the half-spin count alone, so this
+            // stays a closed-form pin with no increments built. the score
+            // CURVE walks the increments instead and would read this record
+            // as a disc that never turned -- deliberately not compared here:
+            // the curve's own oracle is the invariant asserted over the
+            // fixture maps and the corpus, where the simulator ships the
+            // increments it always does
             increments: Vec::new(),
         }],
     };
