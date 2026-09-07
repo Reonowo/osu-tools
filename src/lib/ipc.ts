@@ -8,6 +8,7 @@ import type {
 	EffectSettings,
 	ExportResult,
 	GameplaySettings,
+	InterfaceSettings,
 	IpcError,
 	KeybindOverrides,
 	LoadedScene,
@@ -87,6 +88,7 @@ export function invokeSetViewerPrefs(
 	editing: EditingSettings,
 	effects: EffectSettings,
 	timeline: TimelineSettings,
+	interfacePrefs: InterfaceSettings,
 	keybinds: KeybindOverrides
 ): Promise<Settings> {
 	return invoke<Settings>("set_viewer_prefs", {
@@ -97,6 +99,9 @@ export function invokeSetViewerPrefs(
 		editing,
 		effects,
 		timeline,
+		// the wire key is the group's own name; the parameter beside it is
+		// renamed because `interface` is a reserved word in module code
+		interface: interfacePrefs,
 		keybinds
 	});
 }

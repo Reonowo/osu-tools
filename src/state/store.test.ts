@@ -26,6 +26,7 @@ import {
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
+	DEFAULT_INTERFACE,
 	DEFAULT_OVERLAYS,
 	DEFAULT_SKIN,
 	DEFAULT_TIMELINE,
@@ -86,6 +87,7 @@ const baseSettings: Settings = {
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
+	interface: DEFAULT_INTERFACE,
 	keybinds: {},
 	skin: DEFAULT_SKIN,
 	video: DEFAULT_VIDEO,
@@ -112,7 +114,17 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 		loadReplayWithBeatmap: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects, timeline, keybinds) => ({
+		setViewerPrefs: async (
+			volume,
+			audio,
+			gameplay,
+			overlays,
+			editing,
+			effects,
+			timeline,
+			interfacePrefs,
+			keybinds
+		) => ({
 			...baseSettings,
 			volume,
 			audio,
@@ -121,6 +133,7 @@ function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 			editing,
 			effects,
 			timeline,
+			interface: interfacePrefs,
 			keybinds
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
@@ -560,6 +573,7 @@ describe("viewer preferences", () => {
 			editing: { ...DEFAULT_EDITING, snapToLattice: false },
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
+			interface: DEFAULT_INTERFACE,
 			keybinds: {},
 			skin: DEFAULT_SKIN,
 			video: DEFAULT_VIDEO,

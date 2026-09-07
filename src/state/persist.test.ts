@@ -5,6 +5,7 @@ import type {
 	EditingSettings,
 	EffectSettings,
 	GameplaySettings,
+	InterfaceSettings,
 	IpcError,
 	KeybindOverrides,
 	OverlaySettings,
@@ -18,6 +19,7 @@ import {
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
+	DEFAULT_INTERFACE,
 	DEFAULT_OVERLAYS,
 	DEFAULT_TIMELINE,
 	DEFAULT_VIDEO
@@ -76,6 +78,7 @@ const baseSettings: Settings = {
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
+	interface: DEFAULT_INTERFACE,
 	keybinds: {},
 	skin: { kind: "bundled" },
 	video: DEFAULT_VIDEO,
@@ -102,7 +105,17 @@ function deps(): IpcDeps {
 		loadReplayWithBeatmap: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
-		setViewerPrefs: async (volume, audio, gameplay, overlays, editing, effects, timeline, keybinds) => ({
+		setViewerPrefs: async (
+			volume,
+			audio,
+			gameplay,
+			overlays,
+			editing,
+			effects,
+			timeline,
+			interfacePrefs,
+			keybinds
+		) => ({
 			...baseSettings,
 			volume,
 			audio,
@@ -111,6 +124,7 @@ function deps(): IpcDeps {
 			editing,
 			effects,
 			timeline,
+			interface: interfacePrefs,
 			keybinds
 		}),
 		clearRecents: async () => ({ ...baseSettings, recents: [] }),
@@ -183,6 +197,7 @@ function saveRecorder() {
 		editing: EditingSettings;
 		effects: EffectSettings;
 		timeline: TimelineSettings;
+		interface: InterfaceSettings;
 		keybinds: KeybindOverrides;
 	}[] = [];
 	return {
@@ -195,9 +210,20 @@ function saveRecorder() {
 			editing: EditingSettings,
 			effects: EffectSettings,
 			timeline: TimelineSettings,
+			interfacePrefs: InterfaceSettings,
 			keybinds: KeybindOverrides
 		) => {
-			calls.push({ volume, audio, gameplay, overlays, editing, effects, timeline, keybinds });
+			calls.push({
+				volume,
+				audio,
+				gameplay,
+				overlays,
+				editing,
+				effects,
+				timeline,
+				interface: interfacePrefs,
+				keybinds
+			});
 			return baseSettings;
 		}
 	};

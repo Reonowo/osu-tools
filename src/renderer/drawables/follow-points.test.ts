@@ -110,6 +110,9 @@ function stubContext(scene: ReturnType<typeof testScene>, effects = DEFAULT_EFFE
 			hideCursor: false,
 			keyOverlay: true,
 			hpBar: true,
+			comboCounter: true,
+			accuracy: true,
+			score: true,
 			displayLength: 800,
 			playfieldGrid: 0
 		}),

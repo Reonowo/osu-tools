@@ -13,6 +13,7 @@ import type {
 	EditingSettings,
 	EffectSettings,
 	GameplaySettings,
+	InterfaceSettings,
 	IpcError,
 	KeybindOverrides,
 	OverlaySettings,
@@ -28,6 +29,7 @@ export type PrefsSaver = (
 	editing: EditingSettings,
 	effects: EffectSettings,
 	timeline: TimelineSettings,
+	interfacePrefs: InterfaceSettings,
 	keybinds: KeybindOverrides
 ) => Promise<unknown>;
 
@@ -58,22 +60,30 @@ export function installPrefsPersistence(
 	// reads at call time, so a burst collapses to one save carrying the
 	// latest values rather than the ones that scheduled it
 	const flush = () => {
-		const { volume, audio, gameplay, overlays, editing, effects, timeline, keybinds } = store.getState();
-		save(volume, audio, gameplay, overlays, editing, effects, timeline, keybinds).catch((e: unknown) => {
-			// a silently dropped rejection would let the ui imply the prefs were
-			// saved while they revert on restart; route it through the same toast
-			// flow as saveStablePath
-			const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
-			store.setState({ lastError: { error, osrPath: "" } });
-		});
+		// one read, then `interface` pulled off it by hand: it is a reserved
+		// word in module code, so the destructuring shorthand every sibling
+		// uses is not available to it
+		const state = store.getState();
+		const { volume, audio, gameplay, overlays, editing, effects, timeline, keybinds } = state;
+		const interfacePrefs = state.interface;
+		save(volume, audio, gameplay, overlays, editing, effects, timeline, interfacePrefs, keybinds).catch(
+			(e: unknown) => {
+				// a silently dropped rejection would let the ui imply the prefs
+				// were saved while they revert on restart; route it through the
+				// same toast flow as saveStablePath
+				const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+				store.setState({ lastError: { error, osrPath: "" } });
+			}
+		);
 	};
 
 	const unsubscribe = store.subscribe((state, prev) => {
-		// reference equality on audio/overlays/editing/effects/timeline/keybinds:
-		// setAudio/setOverlay/setEditing/setEffect/setTimeline/setKeybinds always
-		// build a new object, and every other store write (scene installs,
-		// playback, rate) leaves all seven fields untouched, so those never
-		// schedule a save
+		// reference equality on audio/overlays/editing/effects/timeline/interface/
+		// keybinds: setAudio/setOverlay/setEditing/setEffect/setTimeline/
+		// setInterface/setKeybinds always build a new object, and every other
+		// store write (scene installs, playback, rate, and the OS reduce-motion
+		// observation beside the interface group) leaves all eight fields
+		// untouched, so those never schedule a save
 		if (
 			state.volume === prev.volume &&
 			state.audio === prev.audio &&
@@ -82,6 +92,7 @@ export function installPrefsPersistence(
 			state.editing === prev.editing &&
 			state.effects === prev.effects &&
 			state.timeline === prev.timeline &&
+			state.interface === prev.interface &&
 			state.keybinds === prev.keybinds
 		) {
 			return;

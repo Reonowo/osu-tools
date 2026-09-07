@@ -40,6 +40,9 @@ function stubContext(scene: ReturnType<typeof testScene>): RenderContext {
 			hideCursor: false,
 			keyOverlay: true,
 			hpBar: true,
+			comboCounter: true,
+			accuracy: true,
+			score: true,
 			displayLength: 800,
 			playfieldGrid: 0
 		}),
@@ -100,6 +103,7 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 			simulation: {
 				status: "authoritative",
 				hpCurve: [],
+				scoreCurve: [],
 				events: [
 					{
 						time: 1000,
@@ -182,6 +186,7 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 			simulation: {
 				status: "authoritative",
 				hpCurve: [],
+				scoreCurve: [],
 				events: [
 					{
 						time: 1000,

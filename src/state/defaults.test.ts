@@ -22,6 +22,9 @@ describe("effectiveOverlays, the edit-mode force-draw fold", () => {
 		hideCursor: true,
 		keyOverlay: false,
 		hpBar: true,
+		comboCounter: true,
+		accuracy: true,
+		score: true,
 		displayLength: 800,
 		playfieldGrid: 0
 	};

@@ -8,6 +8,7 @@ import type {
 	EditingSettings,
 	GameplaySettings,
 	EffectSettings,
+	InterfaceSettings,
 	OverlaySettings,
 	SkinLocator,
 	TimelineSettings,
@@ -24,6 +25,9 @@ export const DEFAULT_OVERLAYS: OverlaySettings = {
 	hideCursor: false,
 	keyOverlay: true,
 	hpBar: true,
+	comboCounter: true,
+	accuracy: true,
+	score: true,
 	displayLength: 800,
 	// off: a reference grid the user did not ask for must not appear over
 	// their replay
@@ -74,6 +78,14 @@ export const DEFAULT_TIMELINE: TimelineSettings = {
 	nestedMarks: true,
 	severityTicks: true,
 	hpCurve: true
+};
+
+/** mirrors settings.rs InterfacePrefs::default() -- the master unset, so a
+ * fresh install follows the OS's reduce-motion setting rather than deciding
+ * for it, and every animation under it on */
+export const DEFAULT_INTERFACE: InterfaceSettings = {
+	motion: null,
+	comboPop: true
 };
 
 /** the master folded into every granular flag, which is what the renderer

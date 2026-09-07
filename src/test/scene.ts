@@ -66,6 +66,9 @@ export function testScene(overrides: Partial<LoadedScene> = {}): LoadedScene {
 		simulation: {
 			status: "authoritative",
 			hpCurve: [],
+			// the one judgement's own step: an ok at combo 0 scores its bare
+			// base, so the running total is 100 from 980ms on
+			scoreCurve: [[980, 100]],
 			events: [
 				{
 					time: 980,

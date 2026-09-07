@@ -4,6 +4,7 @@ import {
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
+	DEFAULT_INTERFACE,
 	DEFAULT_OVERLAYS,
 	DEFAULT_SKIN,
 	DEFAULT_TIMELINE,
@@ -44,6 +45,7 @@ describe("scene contract mirror", () => {
 			{
 				status: "authoritative",
 				hpCurve: [],
+				scoreCurve: [],
 				events: [
 					{
 						time: 1030,
@@ -136,6 +138,9 @@ describe("scene contract mirror", () => {
 			hideCursor: true,
 			keyOverlay: false,
 			hpBar: true,
+			comboCounter: true,
+			accuracy: true,
+			score: true,
 			displayLength: 1200,
 			playfieldGrid: 16
 		};
@@ -177,6 +182,7 @@ describe("scene contract mirror", () => {
 			editing: DEFAULT_EDITING,
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
+			interface: DEFAULT_INTERFACE,
 			keybinds: { selectTool: [{ hotkey: "К", codes: ["KeyV"] }], eraseTool: [] },
 			skin: DEFAULT_SKIN,
 			video: DEFAULT_VIDEO,

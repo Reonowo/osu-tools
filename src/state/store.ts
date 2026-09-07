@@ -43,6 +43,7 @@ import type {
 	FrameDto,
 	IpcError,
 	GameplaySettings,
+	InterfaceSettings,
 	KeybindOverrides,
 	LoadedScene,
 	OverlaySettings,
@@ -76,6 +77,7 @@ import {
 	DEFAULT_EFFECTS,
 	DEFAULT_FEATHER_MS,
 	DEFAULT_GAMEPLAY,
+	DEFAULT_INTERFACE,
 	DEFAULT_OVERLAYS,
 	DEFAULT_SMOOTH_STRENGTH,
 	DEFAULT_TIMELINE,
@@ -87,7 +89,15 @@ import { toggleMute } from "@/playback/audio-levels";
 // OverlaySettings moved to the wire contract (scene-types.ts) when the
 // overlays became a persisted setting; re-exported so the renderer and the
 // settings dialog keep importing it from here
-export type { AudioSettings, EditingSettings, EffectSettings, GameplaySettings, OverlaySettings, TimelineSettings };
+export type {
+	AudioSettings,
+	EditingSettings,
+	EffectSettings,
+	GameplaySettings,
+	InterfaceSettings,
+	OverlaySettings,
+	TimelineSettings
+};
 
 // watch shows a replay; edit is the (future) mutation surface
 export type ViewerMode = "watch" | "edit";
@@ -111,6 +121,7 @@ export interface IpcDeps {
 		editing: EditingSettings,
 		effects: EffectSettings,
 		timeline: TimelineSettings,
+		interfacePrefs: InterfaceSettings,
 		keybinds: KeybindOverrides
 	): Promise<Settings>;
 	clearRecents(): Promise<Settings>;
@@ -275,6 +286,16 @@ export interface ViewerState {
 	effects: EffectSettings;
 	/** the timeline dock's per-layer visibility toggles */
 	timeline: TimelineSettings;
+	/** the app chrome's own animation: the tri-state master and the row per
+	 * animation under it, stored exactly as they persist. consumers read the
+	 * RESOLVED answer through `lib/motion.ts`'s selectMotion, never the master
+	 * alone, because "follow the OS" is only half a question without the query
+	 * below */
+	interface: InterfaceSettings;
+	/** what `(prefers-reduced-motion: reduce)` currently answers. an
+	 * observation rather than a preference -- the app root tracks the query and
+	 * writes it here, so nothing persists it and no save is scheduled by it */
+	osReducesMotion: boolean;
 	/** the user's sparse keybind overrides, exactly as they persist */
 	keybinds: KeybindOverrides;
 	/** the overrides folded onto the defaults: what is actually bound. it
@@ -357,6 +378,10 @@ export interface ViewerState {
 	setEditing<K extends keyof EditingSettings>(key: K, value: EditingSettings[K]): void;
 	setEffect<K extends keyof EffectSettings>(key: K, value: EffectSettings[K]): void;
 	setTimeline<K extends keyof TimelineSettings>(key: K, value: TimelineSettings[K]): void;
+	setInterface<K extends keyof InterfaceSettings>(key: K, value: InterfaceSettings[K]): void;
+	/** the app root's report of the OS reduce-motion query, at startup and on
+	 * every change: what makes the `system` master state follow the OS live */
+	setOsReducesMotion(reduces: boolean): void;
 	/** replaces the whole override map -- the keybind module's pure editors
 	 * (applyCapture, clearBinding, revertKeybind) are what produce the next
 	 * one, so every rule about what an override may be lives in one place */
@@ -946,6 +971,11 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			editing: DEFAULT_EDITING,
 			effects: DEFAULT_EFFECTS,
 			timeline: DEFAULT_TIMELINE,
+			interface: DEFAULT_INTERFACE,
+			// false until the app root reads the query: the honest default is
+			// "the OS has not asked for less motion", which is what an
+			// environment with no matchMedia (the headless tests) also means
+			osReducesMotion: false,
 			keybinds: NO_KEYBIND_OVERRIDES,
 			effectiveKeybinds: foldKeybinds(NO_KEYBIND_OVERRIDES),
 			playing: false,
@@ -1084,6 +1114,18 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				recordPrefEdit(`timeline.${key}`);
 				set({ timeline: { ...get().timeline, [key]: value } });
 			},
+			// the master and the rows under it are stored side by side and
+			// written the same way the effects group is: switching the master
+			// off must not touch the rows, so they come back as the user left
+			// them
+			setInterface: (key, value) => {
+				recordPrefEdit(`interface.${key}`);
+				set({ interface: { ...get().interface, [key]: value } });
+			},
+			// deliberately NOT a pref edit: this is an observation of the OS, not
+			// something the user set here, and recording it would schedule a save
+			// of values nobody changed
+			setOsReducesMotion: (reduces) => set({ osReducesMotion: reduces }),
 			setKeybinds: (overrides) => {
 				// one key for the whole map, matching how it hydrates: the map
 				// replaces wholesale rather than merging, so there is no
@@ -1180,7 +1222,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					return next;
 				};
 				const live = get();
-				// volume/audio/gameplay/overlays/editing/effects/timeline/keybinds are
+				// volume/audio/gameplay/overlays/editing/effects/timeline/interface/keybinds are
 				// frontend-owned -- nothing backend-side ever changes them on its own
 				// -- so they apply even when a newer read has claimed the slot; the
 				// settings object itself (recents move under a concurrent load)
@@ -1197,6 +1239,11 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					editing: hydrateGroup("editing", { ...DEFAULT_EDITING, ...settings.editing }, live.editing),
 					effects: hydrateGroup("effects", { ...DEFAULT_EFFECTS, ...settings.effects }, live.effects),
 					timeline: hydrateGroup("timeline", { ...DEFAULT_TIMELINE, ...settings.timeline }, live.timeline),
+					interface: hydrateGroup(
+						"interface",
+						{ ...DEFAULT_INTERFACE, ...settings.interface },
+						live.interface
+					),
 					// the whole map replaces, never merges: a merge would resurrect an
 					// override the user reverted in another window, and the sparse map
 					// is already only what they changed. a settings file written
@@ -1247,7 +1294,11 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 				// microtask drain as this resolution, ahead of any queued input
 				if (prefsEditedSince(editsBefore)) {
 					for (;;) {
-						const { volume, audio, gameplay, overlays, editing, effects, timeline, keybinds } = get();
+						const current = get();
+						const { volume, audio, gameplay, overlays, editing, effects, timeline, keybinds } = current;
+						// pulled off by hand rather than destructured: `interface` is a
+						// reserved word in module code (persist.ts carries the same note)
+						const interfacePrefs = current.interface;
 						const editsAtSave = new Map(prefEdits);
 						try {
 							const saved = await deps.setViewerPrefs(
@@ -1258,6 +1309,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 								editing,
 								effects,
 								timeline,
+								interfacePrefs,
 								keybinds
 							);
 							if (!prefsEditedSince(editsAtSave)) {

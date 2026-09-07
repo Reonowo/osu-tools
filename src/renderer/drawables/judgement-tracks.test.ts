@@ -93,6 +93,7 @@ describe("judgement specs", () => {
 			simulation: {
 				status: "authoritative",
 				hpCurve: [],
+				scoreCurve: [],
 				events: [
 					{
 						time: 1000,
@@ -175,6 +176,7 @@ describe("judgement specs", () => {
 			simulation: {
 				status: "authoritative",
 				hpCurve: [],
+				scoreCurve: [],
 				events: [
 					{
 						time: 1250,
@@ -195,6 +197,7 @@ describe("judgement specs", () => {
 			simulation: {
 				status: "authoritative",
 				hpCurve: [],
+				scoreCurve: [],
 				events: [
 					{
 						time: 980,
@@ -221,6 +224,7 @@ describe("judgement specs", () => {
 					simulation: {
 						status: "authoritative",
 						hpCurve: [],
+						scoreCurve: [],
 						events: [
 							{
 								time: 980,
@@ -264,6 +268,7 @@ describe("judgement specs", () => {
 			simulation: {
 				status: "authoritative",
 				hpCurve: [],
+				scoreCurve: [],
 				events: [
 					{ time: 900, objectIndex: 0, kind: { type: "spinnerSpin" }, comboAfter: 0, accuracyAfter: 1 },
 					{

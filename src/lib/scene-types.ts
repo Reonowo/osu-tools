@@ -215,7 +215,13 @@ export interface TotalsDto {
 }
 
 export type SimulationDto =
-	| { status: "authoritative"; events: JudgementEventDto[]; totals: TotalsDto; hpCurve: HpCurve }
+	| {
+			status: "authoritative";
+			events: JudgementEventDto[];
+			totals: TotalsDto;
+			hpCurve: HpCurve;
+			scoreCurve: ScoreCurve | null;
+	  }
 	| { status: "notSimulated"; reason: "unsupportedMods" | "beatmapMismatch" };
 
 /** the engine's HP curve as it rides the wire: `[time, fraction]` breakpoints
@@ -231,6 +237,27 @@ export type SimulationDto =
  * reads as a full bar everywhere — the export dialog is where that is
  * reported */
 export type HpCurve = readonly (readonly [number, number])[];
+
+/** the engine's running scorev1 total as it rides the wire: `[time, score]`
+ * steps in time order, the score being the total AFTER that step.
+ *
+ * one step per judgement that scored and one per scoring half spin at its own
+ * increment's time, so the number ticks up through a spinner the way the
+ * player saw it. a step is only ever a strict increase — a judgement worth
+ * nothing (a miss) leaves no step at all — and the score before the first one
+ * is 0. the last step is the simulated total the replay panel leads with.
+ *
+ * unlike the HP curve this never depends on the drain-rate search: a search
+ * that did not settle leaves the score intact. `lib/score.ts` is the only
+ * thing that reads it, and it re-derives on every landed edit.
+ *
+ * EMPTY and NULL are different answers. Empty is a play that scored nothing —
+ * a real reading of 0 throughout. `null` is a curve that could not be folded
+ * at all (a refused star count, which no decoded beatmap reaches), and the
+ * surfaces fall back to the header's own total for it rather than claiming a
+ * score of zero: the HUD hides the line and the panel leads with the file's
+ * number, exactly as they do for a scene with no simulation */
+export type ScoreCurve = readonly (readonly [number, number])[];
 
 export interface RenderPlan {
 	playfield: { width: number; height: number };
@@ -378,6 +405,13 @@ export interface OverlaySettings {
 	 * dialog, beside the key overlay — the bar is watch HUD rather than
 	 * analysis chrome (`docs/adr/0008`), and off means no HP is evaluated */
 	hpBar: boolean;
+	/** the watch HUD's combo counter, and below it its accuracy and its score.
+	 * one row per element rather than one row for the readouts: a row that
+	 * hides two things is not a row for either. each off means that element
+	 * unmounts AND its lookup stops running, the same rule `hpBar` follows */
+	comboCounter: boolean;
+	accuracy: boolean;
+	score: boolean;
 	/** ms; lazer's ReplayAnalysisDisplayLength (200-2000, default 800) */
 	displayLength: number;
 	/** the playfield grid's spacing in osu!px, `0` meaning off. a plain
@@ -471,6 +505,24 @@ export interface TimelineSettings {
 	/** the overview strip's HP fill and its fail-point mark together: the mark
 	 * says where the fill reached zero, so neither is toggled alone */
 	hpCurve: boolean;
+}
+
+/** mirrors settings.rs InterfacePrefs: the app chrome's own animation.
+ *
+ * `motion` is the MASTER and is tri-state — `true` on, `false` off, `null`
+ * following the OS's reduce-motion setting live, which is the default. it
+ * persists unresolved on purpose: resolving it at write time would freeze
+ * whatever the OS said that moment. `lib/motion.ts` is the one place it is
+ * resolved, and the app root writes the answer onto `<html>` as `data-motion`
+ * so the stylesheet covers every chrome transition without prop plumbing.
+ *
+ * never the playfield's effects, which have their own master, and never the
+ * HP bar's damp, which is a reading rather than motion */
+export interface InterfaceSettings {
+	motion: boolean | null;
+	/** the combo counter's pop and break flash. gated by the master and keeps
+	 * its own setting while it is off, exactly as an effect row does */
+	comboPop: boolean;
 }
 
 /** one key an action answers to, as it is persisted. the hotkey string is the
@@ -647,6 +699,7 @@ export interface Settings {
 	editing: EditingSettings;
 	effects: EffectSettings;
 	timeline: TimelineSettings;
+	interface: InterfaceSettings;
 	keybinds: KeybindOverrides;
 	/** app-wide, and deliberately NOT carried on a recents entry the way a
 	 * beatmap association is: opening a recent replay must never silently change

@@ -12,6 +12,7 @@ import {
 	DEFAULT_EDITING,
 	DEFAULT_EFFECTS,
 	DEFAULT_GAMEPLAY,
+	DEFAULT_INTERFACE,
 	DEFAULT_OVERLAYS,
 	DEFAULT_TIMELINE
 } from "../../state/defaults";
@@ -69,6 +70,7 @@ const baseSettings: Settings = {
 	editing: DEFAULT_EDITING,
 	effects: DEFAULT_EFFECTS,
 	timeline: DEFAULT_TIMELINE,
+	interface: DEFAULT_INTERFACE,
 	keybinds: {},
 	skin: { kind: "bundled" },
 	video: DEFAULT_VIDEO,
