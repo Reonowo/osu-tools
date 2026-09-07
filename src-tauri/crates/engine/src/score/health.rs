@@ -104,6 +104,7 @@ use crate::beatmap::stable_points::StablePointKind;
 use crate::beatmap::{ProcessedBeatmap, ProcessedKind};
 use crate::limits;
 use crate::score::sections::{combo_end_additions, is_section_last, ComboEndAddition};
+use crate::score::spin::spin_turns;
 use crate::score::ScoreContext;
 use crate::simulation::score::JudgementKind;
 use crate::simulation::JudgementTimeline;
@@ -872,51 +873,27 @@ struct SpinGain {
     amount: f64,
 }
 
-/// every spinner's counted half turns as HP gains, in firing order. the
-/// FIRST half turn of a spinner earns nothing; after it a turn is a bonus
-/// (2N) when it sits past `required + 3` by an even amount, else a spin
-/// (1.7N) -- the same gate `score::scorev1` folds the total through
+/// every spinner's counted half turns as HP gains, in firing order --
+/// `spin::spin_turns`' merge priced in HP. the FIRST half turn of a spinner
+/// earns nothing; after it a turn is a bonus (2N) when it sits past
+/// `required + 3` by an even amount, else a spin (1.7N). deliberately NOT
+/// clamped at the disc's possible half spins, where `score::scorev1` is:
+/// stable's runtime drain pays what the disc turned, and only the score
+/// simulator treats the analytic bound as hard
 fn spin_gains(processed: &ProcessedBeatmap, timeline: &JudgementTimeline, normal: f64) -> Vec<SpinGain> {
-    let mut gains = Vec::new();
-    for scoring in &timeline.spinner_scoring {
-        let Some(object) = processed.objects.get(scoring.object_index) else {
-            continue;
-        };
-        let ProcessedKind::Spinner(spinner) = &object.kind else {
-            continue;
-        };
-        // i64 throughout: a crafted requirement can sit at i32::MAX, where
-        // `required + 3` would overflow
-        let gate = i64::from(spinner.stable_half_spins_required) + 3;
-        for (index, increment) in scoring.increments.iter().enumerate() {
-            let half = index as i64 + 1;
-            if half <= 1 {
-                continue;
-            }
-            let bonus = half > gate && (half - gate) % 2 == 0;
-            gains.push(SpinGain {
-                emission_index: increment.emission_index,
-                time: increment.time,
-                amount: if bonus { normal * 2.0 } else { normal * 1.7 },
-            });
-        }
-    }
-    // emission position first -- it is the only key that places an
-    // increment against a judgement stamped with the same millisecond --
-    // then TIME, because the gains were collected one disc at a time and a
-    // crafted map can leave two discs turning across the same emission
-    // position (no judgement is emitted between their frames, so every
-    // increment of both carries it). flattening disc by disc there would
-    // hand `Drain` one disc's whole run before the other's first turn, and
-    // it cannot rewind. within one disc the times are already
-    // non-decreasing, so this only ever merges the discs against each other,
-    // and the sort stays stable for two that turned in the very same frame
-    gains.sort_by(|a, b| {
-        a.emission_index
-            .cmp(&b.emission_index)
-            .then_with(|| a.time.total_cmp(&b.time))
-    });
-    gains
+    spin_turns(processed, timeline)
+        .into_iter()
+        .filter(|turn| turn.half > 1)
+        .map(|turn| SpinGain {
+            emission_index: turn.emission_index,
+            time: turn.time,
+            amount: if turn.is_bonus() {
+                normal * 2.0
+            } else {
+                normal * 1.7
+            },
+        })
+        .collect()
 }
 
 /// appends one breakpoint, dropping a repeat of the one before it. a point

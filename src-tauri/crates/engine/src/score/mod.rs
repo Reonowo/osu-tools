@@ -15,6 +15,7 @@ mod health;
 mod peppy;
 mod scorev1;
 mod sections;
+mod spin;
 
 pub use derive::{derive_score, derive_score_with_health, DerivedFields, DerivedScore, OverflowField};
 pub use health::{
@@ -24,7 +25,7 @@ pub use health::{
 };
 pub use hash::{invariant_date_string, replay_hash};
 pub use peppy::peppy_stars;
-pub use scorev1::{stable_slider_point_values, total_score};
+pub use scorev1::{score_curve, stable_slider_point_values, total_score, ScoreStep};
 pub use sections::{
     combo_end_additions, is_perfect, max_achievable_combo, section_tally, ComboEndAddition, SectionTally,
 };

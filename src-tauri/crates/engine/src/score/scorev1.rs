@@ -33,8 +33,9 @@
 
 use crate::beatmap::difficulty::HitGrade;
 use crate::beatmap::{ProcessedBeatmap, ProcessedKind, ProcessedSlider, ProcessedSpinner};
+use crate::score::spin::{spin_turns, SpinTurn};
 use crate::simulation::score::{JudgementKind, ScoreState};
-use crate::simulation::JudgementTimeline;
+use crate::simulation::{JudgementEvent, JudgementTimeline};
 
 fn base_value(grade: HitGrade) -> u64 {
     match grade {
@@ -158,6 +159,97 @@ fn stable_spinner_tick_score(spinner: &ProcessedSpinner, halves_spun: i64) -> u6
     (ticks as u64) * 100 + (bonuses as u64) * 1100
 }
 
+/// per-slider stable point values and each slider's next point ordinal: the
+/// machine emits one event per judged point in list order, so the running
+/// count of a slider's tick/repeat/tail events IS the point index.
+///
+/// stateful because the ordinal advances with the walk, and shared by the
+/// total and the curve so the two folds cannot drift on how a point is valued
+struct SliderPoints<'a> {
+    processed: &'a ProcessedBeatmap,
+    values: Vec<Option<Vec<u64>>>,
+    ordinal: Vec<usize>,
+}
+
+impl<'a> SliderPoints<'a> {
+    fn new(processed: &'a ProcessedBeatmap) -> Self {
+        SliderPoints {
+            processed,
+            values: vec![None; processed.objects.len()],
+            ordinal: vec![0; processed.objects.len()],
+        }
+    }
+
+    /// the next point of `index`'s slider, valued stable-style. ALWAYS
+    /// advances the ordinal, hit or not: a dropped point is still a point the
+    /// machine emitted, and skipping it would misalign every later one
+    fn value(&mut self, index: usize, kind_value: u64, hit: bool) -> u64 {
+        let ordinal = match self.ordinal.get_mut(index) {
+            Some(ordinal) => {
+                let current = *ordinal;
+                *ordinal += 1;
+                current
+            }
+            // out-of-bounds object: a mismatched timeline/beatmap pair must
+            // degrade, never panic (same posture as the spinner leg below)
+            None => return if hit { kind_value } else { 0 },
+        };
+        if !hit {
+            return 0;
+        }
+        let processed = self.processed;
+        let values = self.values[index].get_or_insert_with(|| {
+            match processed.objects.get(index).map(|o| (&o.kind, o.start_time)) {
+                Some((ProcessedKind::Slider(slider), start_time)) => {
+                    stable_slider_point_values(start_time, slider)
+                }
+                // a point event on a non-slider object only arises from a
+                // mismatched pair; the empty table falls back to the kind
+                _ => Vec::new(),
+            }
+        });
+        values.get(ordinal).copied().unwrap_or(kind_value)
+    }
+}
+
+/// one judgement event's score increase, with `state` holding the combo fold
+/// BEFORE it -- stable reads the multiplier from the combo the element has
+/// not yet incremented
+fn event_value(
+    points: &mut SliderPoints,
+    state: &ScoreState,
+    event: &JudgementEvent,
+    peppy_stars: i32,
+    mod_multiplier: f64,
+) -> u64 {
+    match event.kind {
+        JudgementKind::SliderHead { hit } => {
+            if hit {
+                30
+            } else {
+                0
+            }
+        }
+        JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit } => {
+            points.value(event.object_index, 30, hit)
+        }
+        JudgementKind::SliderTick { hit } => points.value(event.object_index, 10, hit),
+        // lazer's gameplay ticks; scored via the stable half-spin model
+        // instead (module doc)
+        JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => 0,
+        JudgementKind::Circle(grade)
+        | JudgementKind::SpinnerFinal(grade)
+        | JudgementKind::SliderAggregate(grade) => {
+            let base = base_value(grade);
+            if base == 0 {
+                return 0;
+            }
+            let bonus = combo_bonus(u64::from(state.combo), base, peppy_stars, mod_multiplier);
+            base.saturating_add(bonus)
+        }
+    }
+}
+
 /// the achieved scorev1 total. accumulates in u64 -- stable itself wraps a
 /// 32-bit int on degenerate maps, but a wrapped header field is exactly the
 /// lie export refuses to write, so the wide fold feeds checked narrowing
@@ -176,67 +268,16 @@ pub fn total_score(
     // including the classic tail divergence
     let mut state = ScoreState::default();
     let mut total: u64 = 0;
-
-    // per-slider stable point values and each slider's next point ordinal:
-    // the machine emits one event per judged point in list order, so the
-    // running count of a slider's tick/repeat/tail events IS the point index
-    let mut point_values: Vec<Option<Vec<u64>>> = vec![None; processed.objects.len()];
-    let mut point_ordinal: Vec<usize> = vec![0; processed.objects.len()];
-    let mut slider_point = |index: usize, kind_value: u64, hit: bool| -> u64 {
-        let ordinal = match point_ordinal.get_mut(index) {
-            Some(ordinal) => {
-                let current = *ordinal;
-                *ordinal += 1;
-                current
-            }
-            // out-of-bounds object: a mismatched timeline/beatmap pair must
-            // degrade, never panic (same posture as the spinner leg below)
-            None => return if hit { kind_value } else { 0 },
-        };
-        if !hit {
-            return 0;
-        }
-        let values = point_values[index].get_or_insert_with(|| {
-            match processed.objects.get(index).map(|o| (&o.kind, o.start_time)) {
-                Some((ProcessedKind::Slider(slider), start_time)) => {
-                    stable_slider_point_values(start_time, slider)
-                }
-                // a point event on a non-slider object only arises from a
-                // mismatched pair; the empty table falls back to the kind
-                _ => Vec::new(),
-            }
-        });
-        values.get(ordinal).copied().unwrap_or(kind_value)
-    };
+    let mut points = SliderPoints::new(processed);
 
     for event in &timeline.events {
-        match event.kind {
-            JudgementKind::SliderHead { hit } => {
-                if hit {
-                    total = total.saturating_add(30);
-                }
-            }
-            JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit } => {
-                let value = slider_point(event.object_index, 30, hit);
-                total = total.saturating_add(value);
-            }
-            JudgementKind::SliderTick { hit } => {
-                let value = slider_point(event.object_index, 10, hit);
-                total = total.saturating_add(value);
-            }
-            // lazer's gameplay ticks; scored via the stable half-spin model
-            // below instead (module doc)
-            JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => {}
-            JudgementKind::Circle(grade)
-            | JudgementKind::SpinnerFinal(grade)
-            | JudgementKind::SliderAggregate(grade) => {
-                let base = base_value(grade);
-                if base > 0 {
-                    let bonus = combo_bonus(u64::from(state.combo), base, peppy_stars, mod_multiplier);
-                    total = total.saturating_add(base).saturating_add(bonus);
-                }
-            }
-        }
+        total = total.saturating_add(event_value(
+            &mut points,
+            &state,
+            event,
+            peppy_stars,
+            mod_multiplier,
+        ));
         state.apply(&event.kind);
     }
 
@@ -255,6 +296,111 @@ pub fn total_score(
     total
 }
 
+/// one step of the score curve: the running total the play held from `time`
+/// until the next step
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScoreStep {
+    pub time: f64,
+    pub score: u64,
+}
+
+/// the same fold as [`total_score`], stopped at every moment the number on
+/// screen changed: one step per judgement that scores, one per scoring half
+/// spin at its own increment's time, in the order the play produced them.
+///
+/// the spinner difference from the total is only WHERE the half spins are
+/// paid, never how much: the total folds each disc's closed form in one lump
+/// after the events, while the curve merges the individual turns into the
+/// judgement stream by emission position (`spin::spin_turns`, the same merge
+/// the HP fold walks) so the number ticks up during the spin as the player
+/// saw it. the two agree exactly wherever a spinner's increment records are
+/// complete -- which the simulator guarantees and a hand-built timeline need
+/// not -- and that equality is the invariant the fixture and corpus tests
+/// pin, since it is the only thing keeping this walk honest against the
+/// oracle-pinned one above.
+///
+/// `stable_spinner_tick_score`'s clamp at the disc's possible half spins is
+/// applied here per turn, where the HP fold deliberately does not clamp at
+/// all (`health.rs`'s `spin_gains`)
+pub fn score_curve(
+    timeline: &JudgementTimeline,
+    processed: &ProcessedBeatmap,
+    peppy_stars: i32,
+    mod_multiplier: f64,
+) -> Vec<ScoreStep> {
+    let mut state = ScoreState::default();
+    let mut total: u64 = 0;
+    let mut points = SliderPoints::new(processed);
+    let mut steps: Vec<ScoreStep> = Vec::new();
+
+    let turns = spin_turns(processed, timeline);
+    let mut cursor = 0usize;
+
+    for (index, event) in timeline.events.iter().enumerate() {
+        // every turn the discs earned before this event was emitted lands
+        // first, each at its own frame time
+        step_turns(&turns, &mut cursor, Some(index), &mut total, &mut steps);
+        let value = event_value(&mut points, &state, event, peppy_stars, mod_multiplier);
+        if value > 0 {
+            total = total.saturating_add(value);
+            steps.push(ScoreStep {
+                time: event.time,
+                score: total,
+            });
+        }
+        state.apply(&event.kind);
+    }
+    // the simulator bounds every increment by its own spinner's final
+    // judgement, so this drains nothing for a real play. it exists so a
+    // hand-built timeline cannot silently drop a turn the total scores, which
+    // would break the invariant the whole walk is checked by
+    step_turns(&turns, &mut cursor, None, &mut total, &mut steps);
+
+    steps
+}
+
+/// steps the half turns up to and including emission position `limit` (all
+/// that remain when `None`), each at its own increment's time.
+///
+/// NOT named for draining anything: "drain" is the HP module's word in this
+/// crate (the drain rate, the drain windows, `health::Drain`), and this turns
+/// spin increments into score steps
+fn step_turns(
+    turns: &[SpinTurn],
+    cursor: &mut usize,
+    limit: Option<usize>,
+    total: &mut u64,
+    steps: &mut Vec<ScoreStep>,
+) {
+    while let Some(turn) = turns
+        .get(*cursor)
+        .filter(|turn| limit.is_none_or(|index| turn.emission_index <= index))
+    {
+        *cursor += 1;
+        // past the disc's analytic bound stable's simulator pays nothing --
+        // the frame-gap bookkeeping at the window edges can exceed it by a
+        // fraction of a half turn, and the bound is treated as hard
+        if turn.half > turn.possible_halves {
+            continue;
+        }
+        let value = if turn.is_bonus() {
+            1100
+        } else if turn.half > 1 && turn.half % 2 == 0 {
+            100
+        } else {
+            0
+        };
+        if value == 0 {
+            continue;
+        }
+        *total = total.saturating_add(value);
+        steps.push(ScoreStep {
+            time: turn.time,
+            score: *total,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,7 +408,7 @@ mod tests {
     use crate::formats::beatmap::{Beatmap, HitObject, HitObjectKind, TimingPoint};
     use crate::formats::GameMode;
     use crate::math::Vec2;
-    use crate::simulation::{HitTotals, JudgementEvent, SpinnerScoring};
+    use crate::simulation::{HitTotals, JudgementEvent, SpinnerIncrement, SpinnerScoring};
 
     fn timeline_of(kinds: &[JudgementKind]) -> JudgementTimeline {
         JudgementTimeline {
@@ -631,6 +777,213 @@ mod tests {
             "precondition: the play full-combos the slider"
         );
         assert_eq!(total_score(&timeline, &beatmap, 4, 1.0), 486);
+    }
+
+    /// one spinner's scoring record with its per-half-turn increments filled
+    /// in, one per millisecond from `start_time` and all emitted just before
+    /// event `emission_index`. the simulator always ships these; a record
+    /// without them is what makes the curve and the total disagree, so every
+    /// case that compares the two builds them here
+    fn spun(object_index: usize, halves: i64, emission_index: usize, start_time: f64) -> SpinnerScoring {
+        SpinnerScoring {
+            object_index,
+            scoring_half_spins: halves,
+            increments: (0..halves.max(0))
+                .map(|i| SpinnerIncrement {
+                    time: start_time + i as f64,
+                    emission_index,
+                })
+                .collect(),
+        }
+    }
+
+    /// the invariant the curve exists under: its last step IS `total_score`,
+    /// and it never steps backwards in time (the frontend binary-searches it).
+    /// returns the curve so a case can go on to pin its individual steps
+    fn curve_matching_total(
+        timeline: &JudgementTimeline,
+        processed: &ProcessedBeatmap,
+        stars: i32,
+        multiplier: f64,
+    ) -> Vec<ScoreStep> {
+        let curve = score_curve(timeline, processed, stars, multiplier);
+        assert_eq!(
+            curve.last().map(|step| step.score).unwrap_or(0),
+            total_score(timeline, processed, stars, multiplier),
+            "the curve's last step is the achieved total"
+        );
+        for pair in curve.windows(2) {
+            assert!(pair[1].time >= pair[0].time, "times are non-decreasing: {pair:?}");
+        }
+        curve
+    }
+
+    /// the step increases, which is what the tests below actually reason
+    /// about -- the curve itself carries running totals
+    fn deltas(curve: &[ScoreStep]) -> Vec<u64> {
+        let mut previous = 0;
+        curve
+            .iter()
+            .map(|step| {
+                let delta = step.score - previous;
+                previous = step.score;
+                delta
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_curve_ends_on_the_total_for_every_hand_built_shape() {
+        // the same fold shapes the total's own pins walk, each checked
+        // against the total rather than against a written-out number: this is
+        // the guard that keeps the running walk from drifting away from the
+        // oracle-pinned one
+        let three_greats = timeline_of(&[
+            JudgementKind::Circle(HitGrade::Great),
+            JudgementKind::Circle(HitGrade::Great),
+            JudgementKind::Circle(HitGrade::Great),
+        ]);
+        curve_matching_total(&three_greats, &circles_map(3), 4, 1.0);
+        // the multiplier seam scales both halves the same way
+        curve_matching_total(&three_greats, &circles_map(3), 4, 0.5);
+
+        curve_matching_total(
+            &timeline_of(&[
+                JudgementKind::Circle(HitGrade::Great),
+                JudgementKind::Circle(HitGrade::Great),
+                JudgementKind::Circle(HitGrade::Ok),
+                JudgementKind::Circle(HitGrade::Meh),
+            ]),
+            &circles_map(4),
+            4,
+            1.0,
+        );
+
+        curve_matching_total(
+            &timeline_of(&[
+                JudgementKind::SliderHead { hit: true },
+                JudgementKind::SliderTick { hit: true },
+                JudgementKind::SliderRepeat {
+                    hit: true,
+                    repeat_index: 0,
+                },
+                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderAggregate(HitGrade::Great),
+            ]),
+            &circles_map(5),
+            4,
+            1.0,
+        );
+
+        curve_matching_total(
+            &timeline_of(&[
+                JudgementKind::SliderHead { hit: false },
+                JudgementKind::SliderTick { hit: false },
+                JudgementKind::SliderTail { hit: false },
+                JudgementKind::SliderAggregate(HitGrade::Miss),
+            ]),
+            &circles_map(4),
+            4,
+            1.0,
+        );
+
+        // and a mismatched pair, which both folds must degrade through
+        // identically rather than diverging into a curve that ends elsewhere
+        let mut mismatched = timeline_of(&[JudgementKind::Circle(HitGrade::Great)]);
+        mismatched.spinner_scoring = vec![spun(0, 12, 0, 100.0), spun(99, 12, 0, 100.0)];
+        curve_matching_total(&mismatched, &circles_map(1), 4, 1.0);
+    }
+
+    #[test]
+    fn a_spun_disc_steps_its_half_turns_at_their_own_times() {
+        // the same 2000ms od5 spinner the closed-form pin uses: gate 13
+        // (odd), twelve half turns, so whole spins 1..6 score 100 each and no
+        // bonus lands. the curve pays them at the increments' own frame times
+        // rather than in one lump, which is the whole point of the walk
+        let processed = spinner_map(2000.0, 5.0);
+        let mut timeline = timeline_of(&[
+            JudgementKind::SpinnerSpin,
+            JudgementKind::SpinnerFinal(HitGrade::Great),
+        ]);
+        for event in &mut timeline.events {
+            event.object_index = 0;
+        }
+        timeline.spinner_scoring = vec![spun(0, 12, 1, 100.0)];
+
+        let curve = curve_matching_total(&timeline, &processed, 4, 1.0);
+        assert_eq!(deltas(&curve), vec![100, 100, 100, 100, 100, 100, 300]);
+        // half turn h sits at 100 + (h - 1), only the even ones score, and
+        // every one of them lands before the final judgement's own step
+        assert_eq!(
+            curve.iter().map(|step| step.time).collect::<Vec<_>>(),
+            vec![101.0, 103.0, 105.0, 107.0, 109.0, 111.0, 1000.0]
+        );
+    }
+
+    #[test]
+    fn an_over_spun_disc_contributes_nothing_past_the_clamp() {
+        // possible = 31 on this spinner, so half turns 32.. pay nothing --
+        // the analytic bound is hard, exactly as the closed form treats it
+        let processed = spinner_map(2000.0, 5.0);
+        let mut timeline = timeline_of(&[JudgementKind::SpinnerFinal(HitGrade::Miss)]);
+        timeline.events[0].object_index = 0;
+        timeline.spinner_scoring = vec![spun(0, 31, 0, 100.0)];
+        let capped = curve_matching_total(&timeline, &processed, 4, 1.0);
+
+        let mut over = timeline.clone();
+        over.spinner_scoring = vec![spun(0, 60, 0, 100.0)];
+        let overspun = curve_matching_total(&over, &processed, 4, 1.0);
+        assert_eq!(
+            overspun.last().map(|step| step.score),
+            capped.last().map(|step| step.score),
+            "spinning past the cap banks nothing"
+        );
+        assert_eq!(overspun.len(), capped.len(), "and adds no steps either");
+    }
+
+    #[test]
+    fn a_miss_adds_no_step_and_a_bonus_reads_the_combo_before_its_event() {
+        let timeline = timeline_of(&[
+            JudgementKind::Circle(HitGrade::Great),
+            JudgementKind::Circle(HitGrade::Great),
+            JudgementKind::Circle(HitGrade::Miss),
+            JudgementKind::Circle(HitGrade::Great),
+            JudgementKind::Circle(HitGrade::Great),
+            JudgementKind::Circle(HitGrade::Great),
+        ]);
+        let curve = curve_matching_total(&timeline, &circles_map(6), 4, 1.0);
+        // five steps for six events: the miss scores nothing and so changes
+        // nothing on screen. the last hit's 348 is its 300 plus the bonus for
+        // the combo of 2 standing BEFORE it
+        assert_eq!(deltas(&curve), vec![300, 300, 300, 300, 348]);
+        assert_eq!(
+            curve.iter().map(|step| step.time).collect::<Vec<_>>(),
+            vec![0.0, 1000.0, 3000.0, 4000.0, 5000.0],
+            "the miss at 2000 left no step"
+        );
+    }
+
+    #[test]
+    fn a_tail_adjacent_tick_lands_as_one_step_of_thirty() {
+        use crate::replay::frames::Buttons;
+        use crate::simulation::simulate;
+        use crate::simulation::test_support::{frame, slider_map, wrap};
+
+        // the parity-issue-15 shape end to end: head 30, the promoted tick 30,
+        // tail 30, then the aggregate's 300 + 96. the promotion has to arrive
+        // as ONE step of 30 rather than as a 10 and a correction, since the
+        // number on screen never showed the 10
+        let beatmap = slider_map(1.5, 0);
+        let end_t = beatmap.objects[0].end_time;
+        let frames = wrap(vec![
+            frame(1000.0, 100.0, 100.0, Buttons::LEFT_1),
+            frame(1250.0, 170.0, 100.0, Buttons::LEFT_1),
+            frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
+            frame(end_t + 50.0, 200.0, 100.0, 0),
+        ]);
+        let timeline = simulate(&beatmap, &frames).unwrap();
+        let curve = curve_matching_total(&timeline, &beatmap, 4, 1.0);
+        assert_eq!(deltas(&curve), vec![30, 30, 30, 396]);
     }
 
     #[test]
