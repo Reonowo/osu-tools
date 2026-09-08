@@ -21,6 +21,7 @@ pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
     parse_error: fn(String) -> EngineError,
+    exhausted: bool,
 }
 
 impl<'a> Reader<'a> {
@@ -29,7 +30,18 @@ impl<'a> Reader<'a> {
             bytes,
             pos: 0,
             parse_error,
+            exhausted: false,
         }
+    }
+
+    /// whether a read has run past the end of the buffer. every other
+    /// failure -- an unexpected tag, an oversized length, a count that
+    /// cannot be right -- leaves this false, which is what lets a CHUNKED
+    /// reader tell "hand me more bytes" from "this file is corrupt"
+    /// (`formats::osr::scan_osr_header` is the one caller that needs the
+    /// distinction; a whole-file codec has nothing more to hand over)
+    pub(crate) fn exhausted(&self) -> bool {
+        self.exhausted
     }
 
     /// how many bytes the walk has consumed. a codec that must account for
@@ -54,11 +66,10 @@ impl<'a> Reader<'a> {
     }
 
     pub(crate) fn take(&mut self, n: usize, what: &str) -> Result<&'a [u8]> {
-        let end = self
-            .pos
-            .checked_add(n)
-            .filter(|&e| e <= self.bytes.len())
-            .ok_or_else(|| self.fail(what))?;
+        let Some(end) = self.pos.checked_add(n).filter(|&e| e <= self.bytes.len()) else {
+            self.exhausted = true;
+            return Err(self.fail(what));
+        };
         let slice = &self.bytes[self.pos..end];
         self.pos = end;
         Ok(slice)

@@ -121,6 +121,115 @@ pub const FIRST_LAZER_VERSION: u32 = 30_000_000;
 /// payload is discarded
 const FIRST_LAZER_SCORE_INFO_VERSION: u32 = 30000001;
 
+/// what [`scan_osr_header`] answers: either the header and how far the walk
+/// got, or "the buffer ends inside the header, hand me more bytes".
+///
+/// the two are distinct ANSWERS rather than a value and an error because a
+/// chunked reader has to tell them apart -- growing the buffer is the right
+/// move for one and pointless for the other -- and only the codec knows
+/// which it hit
+#[derive(Debug, Clone, PartialEq)]
+pub enum OsrHeaderScan {
+    Complete {
+        header: OsrHeader,
+        /// how many bytes the walk consumed: the offset the compressed frame
+        /// payload begins at, which is also exactly the header's own length
+        consumed: usize,
+    },
+    /// the buffer ran out mid-header. never returned for a malformed one --
+    /// an unexpected string tag or an oversized length is a
+    /// [`EngineError::ReplayParse`] however short the buffer is
+    Incomplete,
+}
+
+/// reads one `.osr` header and stops at the compressed payload, so a folder
+/// of thousands can be LISTED without decompressing a single frame.
+///
+/// two deliberate differences from [`decode_osr`], both of them because this
+/// is a listing reader rather than an opener:
+///
+/// - `online_score_id` is always zero. stable writes it AFTER the frame
+///   payload, so reaching it would mean reading past the very bytes this
+///   entry point exists to skip -- ~200 KB a file, against the ~2.6 KB the
+///   largest real header measures. nothing that lists replays asks for it;
+///   `decode_osr` is what answers when something does
+/// - a non-`osu!` mode is RETURNED rather than refused. which rulesets this
+///   app opens is the caller's rule, and refusing here would make "a taiko
+///   replay" indistinguishable from "a corrupt file" in a folder scan
+///
+/// on every buffer `decode_osr` accepts, the two agree field for field on
+/// everything else; `header_scan_matches_the_full_decoder` pins that over
+/// every fixture and every corpus replay.
+pub fn scan_osr_header(bytes: &[u8]) -> Result<OsrHeaderScan> {
+    let mut r = Reader::new(bytes, EngineError::ReplayParse);
+    match scan(&mut r) {
+        Ok(header) => Ok(OsrHeaderScan::Complete {
+            header,
+            consumed: r.pos(),
+        }),
+        // the one distinction this entry point exists to draw: a read that
+        // ran off the end of the buffer means "more bytes", anything else
+        // means the file is not a replay
+        Err(_) if r.exhausted() => Ok(OsrHeaderScan::Incomplete),
+        Err(e) => Err(e),
+    }
+}
+
+fn scan(r: &mut Reader) -> Result<OsrHeader> {
+    let mode = match r.u8("mode")? {
+        0 => GameMode::Osu,
+        1 => GameMode::Taiko,
+        2 => GameMode::Catch,
+        3 => GameMode::Mania,
+        other => {
+            return Err(EngineError::ReplayParse(format!(
+                "unknown game mode byte {other}"
+            )))
+        }
+    };
+    let version = r.u32("version")?;
+    let beatmap_md5 = r.osu_string("beatmap_md5")?;
+    let player_name = r.osu_string("player_name")?;
+    let replay_md5 = r.osu_string("replay_md5")?;
+    let count_300 = r.u16("count_300")?;
+    let count_100 = r.u16("count_100")?;
+    let count_50 = r.u16("count_50")?;
+    let count_geki = r.u16("count_geki")?;
+    let count_katsu = r.u16("count_katsu")?;
+    let count_miss = r.u16("count_miss")?;
+    let total_score = r.u32("total_score")?;
+    let max_combo = r.u16("max_combo")?;
+    let perfect = r.u8("perfect")? != 0;
+    let mods = r.u32("mods")?;
+    let life_graph = r.osu_string("life_graph")?;
+    let timestamp_ticks = r.i64("timestamp")?;
+    // read and discarded: the walk has to end past it for `consumed` to name
+    // the payload's own offset, and its value is the payload's business
+    r.i32("compressed_length")?;
+    Ok(OsrHeader {
+        mode,
+        version,
+        beatmap_md5,
+        player_name,
+        replay_md5,
+        count_300,
+        count_100,
+        count_50,
+        count_geki,
+        count_katsu,
+        count_miss,
+        total_score,
+        max_combo,
+        perfect,
+        mods,
+        life_graph,
+        timestamp_ticks,
+        // see the entry point's doc: it sits past the payload, and reaching
+        // it would undo the whole point of a header-only read
+        online_score_id: 0,
+    })
+}
+
 pub fn decode_osr(bytes: &[u8]) -> Result<OsrFile> {
     if bytes.len() as u64 > limits::MAX_OSR_FILE_BYTES {
         return Err(resource_limit(
