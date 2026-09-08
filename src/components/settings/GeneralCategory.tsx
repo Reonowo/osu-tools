@@ -1,7 +1,7 @@
-// general: the osu! stable install path, and the app chrome's own motion.
-// later, the custom Songs directory and the resolved-install status -- both
-// bespoke controls like the path one, which is why the install half of this
-// category still covers no per-key pref (categories.ts)
+// general: the osu! stable install path, what that path actually resolved to,
+// and the app chrome's own motion. the install half covers no per-key pref --
+// the override is a bespoke control and the two lines under it are read-only
+// readings of the resolved status (categories.ts)
 
 import { SectionLabel } from "@/components/panels/SectionLabel";
 import { ToggleRow } from "@/components/settings/ToggleRow";
@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { motionChoice, motionPreference, selectMotion, type MotionChoice } from "@/lib/motion";
+import type { StableStatus } from "@/lib/scene-types";
+import { cn } from "@/lib/utils";
 import { useViewerStore, type InterfaceSettings } from "@/state/store";
 
 // the master's three states, in the order they read as a scale: defer to the
@@ -66,9 +68,16 @@ export function GeneralCategory({
 	// resolves against the live OS query, so the rows below gate themselves the
 	// moment the user changes their system setting, with no preference change
 	const motionOn = useViewerStore(selectMotion);
+	// what the override above actually resolved to. the box showed the
+	// override alone, so a user whose BeatmapDirectory pointed somewhere gone
+	// saw a lookup miss with no way to see where the app had looked
+	const stableStatus = useViewerStore((s) => s.stableStatus);
 
 	return (
-		<div className="grid gap-4">
+		// an explicit minmax(0,1fr) column rather than the implicit auto one: an
+		// auto track can never be narrower than its content's min-content width,
+		// so a truncating row would widen this grid instead of clipping inside it
+		<div className="grid grid-cols-[minmax(0,1fr)] gap-4">
 			<section className="space-y-2">
 				<SectionLabel>osu! install</SectionLabel>
 				<div className="flex items-center gap-2 text-sm">
@@ -87,6 +96,7 @@ export function GeneralCategory({
 						reset
 					</Button>
 				</div>
+				<ResolvedInstall status={stableStatus} />
 			</section>
 
 			<section className="space-y-2">
@@ -146,6 +156,60 @@ export function GeneralCategory({
 					/>
 				))}
 			</section>
+		</div>
+	);
+}
+
+/** the two read-only lines under the override: where the install resolved to
+ * and where its songs actually live.
+ *
+ * the songs line is the one that earns its place -- it is a pure function of
+ * the install's own per-user cfg (`songs_dir.rs`), and until it was shown a
+ * relocated or deleted `BeatmapDirectory` surfaced only as a beatmap lookup
+ * that mysteriously missed */
+function ResolvedInstall({ status }: { status: StableStatus | null }) {
+	if (status === null) {
+		return <Row label="resolved">looking…</Row>;
+	}
+	if (status.status === "notFound") {
+		return (
+			// the one row that wraps: the searched list is the whole point of the
+			// line, and truncating it to an ellipsis would hide every path but the
+			// first -- which is the reading a user who found no install needs
+			<Row label="resolved" wrap>
+				<span className="text-amber-500/80">
+					no install found{status.searched.length > 0 && ` — looked in ${status.searched.join(", ")}`}
+				</span>
+			</Row>
+		);
+	}
+	return (
+		<>
+			<Row label="resolved">
+				{status.root} <span className="text-[#5a5a63]">({status.fromOverride ? "set here" : "detected"})</span>
+			</Row>
+			<Row label="songs">{status.songsDir}</Row>
+		</>
+	);
+}
+
+function Row({
+	label,
+	children,
+	wrap = false
+}: {
+	label: string;
+	children: React.ReactNode;
+	/** let the value run onto further lines instead of ending in an ellipsis.
+	 * off by default: a single path reads better clipped than rewrapped.
+	 * wrap-anywhere rather than a plain wrap, so the line breaks at its spaces
+	 * where it can but never widens the row when it cannot */
+	wrap?: boolean;
+}) {
+	return (
+		<div className="flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground">
+			<span className="w-14 shrink-0">{label}</span>
+			<span className={cn("min-w-0 flex-1 font-mono", wrap ? "wrap-anywhere" : "truncate")}>{children}</span>
 		</div>
 	);
 }

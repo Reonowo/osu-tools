@@ -149,7 +149,11 @@ export function SettingsDialog({
 					// when a fallback to the first category would be visible
 					value={body.shown}
 					onValueChange={(value) => onCategoryChange(value as SettingsCategory)}
-					className="min-h-0 gap-4"
+					// min-w-0 as well as min-h-0: this is the dialog grid's own item, and
+					// an auto track floors at its item's min-content width, so without it a
+					// category holding one long unwrapped path widens the track past the
+					// panel and paints its text outside the dialog
+					className="min-h-0 min-w-0 gap-4"
 				>
 					{/* the nav is a sibling of the scroll viewport, never inside it, so
 					    no scroll state can move it */}
