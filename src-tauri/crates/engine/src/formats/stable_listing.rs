@@ -11,13 +11,15 @@
 //!
 //! # what it keeps
 //!
-//! md5, folder name and file name, per entry, and the listing's version.
-//! that is the whole question a beatmap lookup asks. every other field --
-//! the metadata, the star ratings, the timing points, the play data, and the
-//! player name in the header -- is WALKED and discarded, so a large string
-//! or a fat rating table pads the file without costing a byte of memory. no
-//! lookup policy lives here: which entry answers a hash, and what a stale
-//! one means, is the app's own rule.
+//! md5, folder name and file name per entry -- the whole question a beatmap
+//! lookup asks -- plus the six naming fields the replay browser titles a row
+//! with (artist and title in both scripts, the difficulty name and the
+//! creator). every other field -- the star ratings, the timing points, the
+//! play data, the tags, and the player name in the header -- is WALKED and
+//! discarded, so a fat rating table pads the file without costing a byte of
+//! memory. no lookup policy lives here: which entry answers a hash, what a
+//! stale one means, and which naming field a row prints, are the app's own
+//! rules.
 //!
 //! # the three layout gates
 //!
@@ -74,15 +76,29 @@ pub struct StableListing {
     pub entries: Vec<StableListingEntry>,
 }
 
-/// one beatmap's row, cut to the three fields a lookup resolves through. all
-/// three are optional because the wire's string tag has a null spelling and
-/// stable does write it -- an entry missing any of them simply cannot answer
-/// a lookup, which is the reading app's call to make, not this codec's
+/// one beatmap's row, cut to the three fields a lookup resolves through and
+/// the six a listing row is NAMED by. every one is optional because the
+/// wire's string tag has a null spelling and stable does write it -- an
+/// entry missing its md5 simply cannot answer a lookup, and one missing a
+/// title reads as an untitled row, which is the reading app's call to make,
+/// not this codec's.
+///
+/// the naming fields cost nothing to keep: the walk already reads past every
+/// one of them, so carrying them is the difference between `skip_osu_string`
+/// and `osu_string` rather than a second pass over the file
 #[derive(Debug, Clone, PartialEq)]
 pub struct StableListingEntry {
     pub md5: Option<String>,
     pub folder_name: Option<String>,
     pub file_name: Option<String>,
+    pub artist: Option<String>,
+    pub artist_unicode: Option<String>,
+    pub title: Option<String>,
+    pub title_unicode: Option<String>,
+    /// the difficulty name -- what a `.osu` calls `Version` and what every
+    /// surface in this app prints in brackets after a title
+    pub difficulty: Option<String>,
+    pub creator: Option<String>,
 }
 
 /// decodes a whole `osu!.db`. the byte length is charged against
@@ -166,12 +182,12 @@ fn entry(r: &mut Reader, version: i32) -> Result<StableListingEntry> {
         // instead of resolving half a library from misread bytes
         r.skip(4, "entry.size")?;
     }
-    r.skip_osu_string("entry.artist")?;
-    r.skip_osu_string("entry.artist_unicode")?;
-    r.skip_osu_string("entry.title")?;
-    r.skip_osu_string("entry.title_unicode")?;
-    r.skip_osu_string("entry.creator")?;
-    r.skip_osu_string("entry.difficulty")?;
+    let artist = r.osu_string("entry.artist")?;
+    let artist_unicode = r.osu_string("entry.artist_unicode")?;
+    let title = r.osu_string("entry.title")?;
+    let title_unicode = r.osu_string("entry.title_unicode")?;
+    let creator = r.osu_string("entry.creator")?;
+    let difficulty = r.osu_string("entry.difficulty")?;
     r.skip_osu_string("entry.audio")?;
     let md5 = r.osu_string("entry.md5")?;
     let file_name = r.osu_string("entry.file_name")?;
@@ -220,6 +236,12 @@ fn entry(r: &mut Reader, version: i32) -> Result<StableListingEntry> {
         md5,
         folder_name,
         file_name,
+        artist,
+        artist_unicode,
+        title,
+        title_unicode,
+        difficulty,
+        creator,
     })
 }
 
@@ -265,6 +287,13 @@ mod tests {
     const CARNIVAL_MD5: &str = "73dc65db8bf113b5bf21d7ace5ef131b";
     const CARNIVAL_FOLDER: &str = "Carnival";
     const CARNIVAL_FILE: &str = "- Carnival (Pawnables) [Merry Go 'Round].osu";
+    /// stable's own placeholder for a map that declares no artist -- kept as
+    /// the fixture's literal value rather than normalised away, since what a
+    /// blank naming field looks like on the wire is part of what this pins
+    const CARNIVAL_ARTIST: &str = "?";
+    const CARNIVAL_TITLE: &str = "Carnival";
+    const CARNIVAL_DIFFICULTY: &str = "Merry Go 'Round";
+    const CARNIVAL_CREATOR: &str = "Pawnables";
 
     fn slice_bytes(version: &str) -> Vec<u8> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -288,6 +317,14 @@ mod tests {
             assert_eq!(entry.md5.as_deref(), Some(CARNIVAL_MD5), "{version}");
             assert_eq!(entry.folder_name.as_deref(), Some(CARNIVAL_FOLDER), "{version}");
             assert_eq!(entry.file_name.as_deref(), Some(CARNIVAL_FILE), "{version}");
+            // the six naming fields, on both real slices: what the browser
+            // titles a row with, and what its search matches
+            assert_eq!(entry.artist.as_deref(), Some(CARNIVAL_ARTIST), "{version}");
+            assert_eq!(entry.artist_unicode.as_deref(), Some(CARNIVAL_ARTIST), "{version}");
+            assert_eq!(entry.title.as_deref(), Some(CARNIVAL_TITLE), "{version}");
+            assert_eq!(entry.title_unicode.as_deref(), Some(CARNIVAL_TITLE), "{version}");
+            assert_eq!(entry.difficulty.as_deref(), Some(CARNIVAL_DIFFICULTY), "{version}");
+            assert_eq!(entry.creator.as_deref(), Some(CARNIVAL_CREATOR), "{version}");
         }
     }
 
@@ -465,6 +502,12 @@ mod tests {
                 assert_eq!(ours.md5, theirs.hash, "{version}");
                 assert_eq!(ours.folder_name, theirs.folder_name, "{version}");
                 assert_eq!(ours.file_name, theirs.file_name, "{version}");
+                assert_eq!(ours.artist, theirs.artist_ascii, "{version}");
+                assert_eq!(ours.artist_unicode, theirs.artist_unicode, "{version}");
+                assert_eq!(ours.title, theirs.title_ascii, "{version}");
+                assert_eq!(ours.title_unicode, theirs.title_unicode, "{version}");
+                assert_eq!(ours.difficulty, theirs.difficulty_name, "{version}");
+                assert_eq!(ours.creator, theirs.creator, "{version}");
             }
             // the tag layout each slice was captured for: the count osu-db
             // read, and the value tag stable actually wrote in front of it
