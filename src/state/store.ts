@@ -21,6 +21,8 @@ import {
 	invokeExportReplay,
 	invokeExportVideo,
 	invokeGetSettings,
+	invokeGetStableStatus,
+	invokeListLocalReplays,
 	invokeLoadReplay,
 	invokeLoadReplayWithBeatmap,
 	invokeRedo,
@@ -48,10 +50,12 @@ import type {
 	LoadedScene,
 	OverlaySettings,
 	RendererOptionsMap,
+	ReplayBrowserListing,
 	Settings,
 	SkinEntry,
 	SkinLocator,
 	SkinManifest,
+	StableStatus,
 	TimelineSettings,
 	VideoExportResult,
 	VideoRendererStatus,
@@ -113,6 +117,8 @@ export interface IpcDeps {
 	loadReplayWithBeatmap(osrPath: string, beatmapPath: string, allowMismatch: boolean): Promise<LoadedScene>;
 	getSettings(): Promise<Settings>;
 	setOsuStablePath(path: string | null): Promise<Settings>;
+	getStableStatus(): Promise<StableStatus>;
+	listLocalReplays(): Promise<ReplayBrowserListing>;
 	setViewerPrefs(
 		volume: number,
 		audio: AudioSettings,
@@ -335,6 +341,24 @@ export interface ViewerState {
 	 * reach it too), which is above the popover's own lifetime. session-only
 	 * chrome, never persisted */
 	openMenuOpen: boolean;
+	/** the replay browser dialog, in the store for openMenuOpen's reason: its
+	 * keybind registers at the App root so it works on the start screen too */
+	browserOpen: boolean;
+	/** the browser's rows and per-source statuses, or null before the first
+	 * read. held here rather than in the dialog so the fetch survives a close
+	 * and reopen -- the backend's own mtime-keyed cache makes the refetch free,
+	 * and keeping the last answer means reopening paints instantly */
+	browserListing: ReplayBrowserListing | null;
+	browserLoading: boolean;
+	/** the browser's own failure, shown INSIDE the dialog rather than as a
+	 * toast: the dialog is where the user asked the question, and a toast
+	 * behind an open dialog is a message nobody reads */
+	browserError: IpcError | null;
+	/** where the app resolved the stable install to, read at startup and
+	 * after every override change. three surfaces read it and none re-derive
+	 * it: the start screen's footer, the settings box, and the browser's
+	 * no-install state. null until the first read resolves */
+	stableStatus: StableStatus | null;
 	tool: ToolId;
 	/** the armed key tile: filters the press table and names the key
 	 * add-press writes. session-only, never persisted; reset by every scene
@@ -408,6 +432,15 @@ export interface ViewerState {
 	setPanelTab(tab: PanelTab): void;
 	setHelpOpen(open: boolean): void;
 	setOpenMenuOpen(open: boolean): void;
+	/** opens or closes the replay browser. opening kicks off the list read,
+	 * which is where the dialog's own loading state comes from */
+	setBrowserOpen(open: boolean): void;
+	/** re-reads the browser's list. cheap on the backend until something
+	 * moves on disk, which is what makes it safe to call on every open */
+	refreshBrowser(): Promise<void>;
+	/** re-resolves the stable install. called at startup and after every
+	 * override write, so the footer and the settings box are never stale */
+	refreshStableStatus(): Promise<void>;
 	setTool(tool: ToolId): void;
 	setFeatherMs(ms: number): void;
 	setSmoothStrength(value: number): void;
@@ -739,6 +772,14 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 		// refresh, a debounced pref write -- discard a resolved manifest that
 		// nothing ever re-reads
 		let skinRefreshSeq = 0;
+		// the browser's list and the install status get their own counters for
+		// the skin's reason: both read the disk on their own schedule -- a
+		// folder of thousands and a directory probe -- and neither should be
+		// cancellable by an unrelated settings publication. they are separate
+		// from each other too, because an override change starts both and only
+		// one of them can fail
+		let browserRefreshSeq = 0;
+		let stableStatusSeq = 0;
 		// the ROW LIST has its own order, separate from the selection's: it is
 		// published from four places (a refresh, a success, and both superseded
 		// and gated import branches), the walk behind it is off-thread and
@@ -994,6 +1035,11 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			panelTab: "replay",
 			helpOpen: false,
 			openMenuOpen: false,
+			browserOpen: false,
+			browserListing: null,
+			browserLoading: false,
+			browserError: null,
+			stableStatus: null,
 			tool: "select",
 			armedKey: null,
 			featherMs: DEFAULT_FEATHER_MS,
@@ -1179,6 +1225,42 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			setPanelTab: (panelTab) => set({ panelTab, panelOpen: true }),
 			setHelpOpen: (helpOpen) => set({ helpOpen }),
 			setOpenMenuOpen: (openMenuOpen) => set({ openMenuOpen }),
+			setBrowserOpen: (browserOpen) => {
+				set({ browserOpen });
+				// the read rides the OPEN, never the close: the list is what
+				// the dialog is for, and a stale one is what a user would
+				// otherwise browse. the backend's mtime cache is what makes
+				// this free when nothing changed
+				if (browserOpen) void get().refreshBrowser();
+			},
+			refreshBrowser: async () => {
+				// claimed at initiation, like every other refresh in this
+				// store: a slow read must neither publish over nor cancel
+				// anything newer
+				const seq = ++browserRefreshSeq;
+				set({ browserLoading: true, browserError: null });
+				try {
+					const browserListing = await deps.listLocalReplays();
+					if (seq === browserRefreshSeq) set({ browserListing, browserLoading: false });
+				} catch (e) {
+					const error: IpcError = isIpcError(e) ? e : { kind: "internal", message: String(e) };
+					// the previous list stays on screen beside the error: a
+					// failed refresh is not a reason to empty a list that was
+					// good a moment ago
+					if (seq === browserRefreshSeq) set({ browserError: error, browserLoading: false });
+				}
+			},
+			refreshStableStatus: async () => {
+				const seq = ++stableStatusSeq;
+				try {
+					const stableStatus = await deps.getStableStatus();
+					if (seq === stableStatusSeq) set({ stableStatus });
+				} catch {
+					// the three surfaces treat null as "not read yet", which
+					// is the honest state after a failed probe -- and none of
+					// them is worth a toast the user cannot act on
+				}
+			},
 			setTool: (tool) => set({ tool }),
 			// a blank number field arrives as NaN and must leave the last good
 			// value alone, matching setOverlay's displayLength rule
@@ -1256,6 +1338,12 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 					// before this feature hydrates it empty
 					...(editedInFlight("keybinds") ? {} : installKeybinds(settings.keybinds ?? NO_KEYBIND_OVERRIDES))
 				});
+				// the install status rides the same startup read: it resolves
+				// through the override the settings just published, and the
+				// start screen's footer is on screen before a replay ever is.
+				// not awaited before the skin below -- neither depends on the
+				// other, and a slow directory probe must not hold up the skin
+				void get().refreshStableStatus();
 				// the skin is resolved separately from the settings read, because the
 				// persisted locator is a POINTER and resolving it touches the disk:
 				// a folder that moved between sessions comes back as the bundled
@@ -1343,6 +1431,18 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			saveStablePath: async (path) => {
 				try {
 					publishSettings(await deps.setOsuStablePath(path));
+					// the override is what the status resolves through, so the
+					// footer and the settings box would otherwise show the old
+					// root until the next launch. the browser's list is dropped
+					// with it: it describes an install that is no longer the one
+					set({ browserListing: null });
+					await get().refreshStableStatus();
+					// and re-read it if the browser is still up. the reachable
+					// case is the browser's own no-install panel, whose "set the
+					// install path" button opens settings OVER an open browser:
+					// without this the dialog would go on showing an empty list
+					// for the install the user just pointed it at
+					if (get().browserOpen) await get().refreshBrowser();
 				} catch (e) {
 					// callers void this promise (SettingsDialog buttons), so a failed
 					// save must surface through the toast flow, not vanish as an
@@ -1579,6 +1679,8 @@ export const viewerStore = createViewerStore(
 		loadReplayWithBeatmap: invokeLoadReplayWithBeatmap,
 		getSettings: invokeGetSettings,
 		setOsuStablePath: invokeSetOsuStablePath,
+		getStableStatus: invokeGetStableStatus,
+		listLocalReplays: invokeListLocalReplays,
 		setViewerPrefs: invokeSetViewerPrefs,
 		clearRecents: invokeClearRecents,
 		listSkins: invokeListSkins,

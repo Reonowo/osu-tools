@@ -13,8 +13,11 @@ import type {
 	HpCurve,
 	IpcError,
 	LoadedScene,
+	BrowserRow,
 	RecentReplay,
-	Settings
+	ReplayBrowserListing,
+	Settings,
+	StableStatus
 } from "../lib/scene-types";
 import { defaultKeybinds } from "../playback/keybinds";
 import { testScene } from "../test/scene";
@@ -108,12 +111,21 @@ const sampleRecent: RecentReplay = {
 	allowMismatch: false
 };
 
+/** an empty browser answer: what a machine with no stable install returns,
+ * and the baseline the browser cases override one field of */
+function emptyBrowserListing(overrides: Partial<ReplayBrowserListing> = {}): ReplayBrowserListing {
+	const read = { status: "read" as const, count: 0, unreadable: 0, truncated: false };
+	return { rows: [], localPlays: read, replaysFolder: read, listing: read, ...overrides };
+}
+
 function deps(overrides: Partial<IpcDeps> = {}): IpcDeps {
 	return {
 		loadReplay: async () => testScene(),
 		loadReplayWithBeatmap: async () => testScene(),
 		getSettings: async () => baseSettings,
 		setOsuStablePath: async (path) => ({ ...baseSettings, osuStablePath: path }),
+		getStableStatus: async () => ({ status: "notFound", searched: [] }),
+		listLocalReplays: async () => emptyBrowserListing(),
 		setViewerPrefs: async (
 			volume,
 			audio,
@@ -3771,5 +3783,237 @@ describe("racing video preference writes", () => {
 		await Promise.all([first, second]);
 		expect(store.getState().settings?.video.resolution).toBe("2560x1440");
 		expect(store.getState().settings?.video.fps).toBe(30);
+	});
+});
+
+/** lets every already-started microtask chain finish. the store's refreshes
+ * are fire-and-forget from a setter, so there is no promise to await */
+async function settle(): Promise<void> {
+	for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+describe("the replay browser", () => {
+	function browserRow(overrides: Partial<BrowserRow> = {}): BrowserRow {
+		return {
+			path: "E:\\osu!\\Data\\r\\abc-1.osr",
+			replayMd5: "aa",
+			beatmapMd5: "b".repeat(32),
+			source: "localPlay",
+			artist: "Aqours",
+			artistUnicode: null,
+			title: "Miracle Wave",
+			titleUnicode: null,
+			difficulty: "Insane",
+			creator: "someone",
+			titled: true,
+			playerName: "Reonowo",
+			accuracy: 0.98,
+			maxCombo: 420,
+			score: 1_234_567,
+			mods: 0,
+			timestampTicks: "638000000000000000",
+			date: "2022-09-28",
+			lazerWritten: false,
+			...overrides
+		};
+	}
+
+	test("opening reads the list, closing does not", async () => {
+		let reads = 0;
+		const store = createViewerStore(
+			deps({
+				listLocalReplays: async () => {
+					reads += 1;
+					return emptyBrowserListing({ rows: [browserRow()] });
+				}
+			})
+		);
+
+		store.getState().setBrowserOpen(true);
+		expect(store.getState().browserOpen).toBe(true);
+		await settle();
+		expect(reads).toBe(1);
+		expect(store.getState().browserListing?.rows).toHaveLength(1);
+		expect(store.getState().browserLoading).toBe(false);
+
+		// the close is chrome, not a query: the backend's mtime cache makes the
+		// next open free, and re-reading here would only cost a walk nobody
+		// asked for
+		store.getState().setBrowserOpen(false);
+		await settle();
+		expect(reads).toBe(1);
+		// and the last answer survives the close, so reopening paints at once
+		expect(store.getState().browserListing?.rows).toHaveLength(1);
+
+		store.getState().setBrowserOpen(true);
+		await settle();
+		expect(reads).toBe(2);
+	});
+
+	test("a failed read keeps the last good list and says why", async () => {
+		const failure: IpcError = { kind: "osuDbNotFound", searched: ["C:\\osu!"] };
+		let fail = false;
+		const store = createViewerStore(
+			deps({
+				listLocalReplays: async () => {
+					if (fail) throw failure;
+					return emptyBrowserListing({ rows: [browserRow()] });
+				}
+			})
+		);
+
+		store.getState().setBrowserOpen(true);
+		await settle();
+		fail = true;
+		await store.getState().refreshBrowser();
+
+		expect(store.getState().browserError).toEqual(failure);
+		expect(store.getState().browserLoading).toBe(false);
+		// the rows a moment ago were good; emptying the list would be a worse
+		// answer than showing them beside the error
+		expect(store.getState().browserListing?.rows).toHaveLength(1);
+		// and the failure stays INSIDE the dialog rather than raising a toast
+		// behind it
+		expect(store.getState().lastError).toBe(null);
+	});
+
+	test("a slow read never publishes over a newer one", async () => {
+		const gates: (() => void)[] = [];
+		const answers = [
+			emptyBrowserListing({ rows: [browserRow({ path: "first.osr" })] }),
+			emptyBrowserListing({ rows: [browserRow({ path: "second.osr" })] })
+		];
+		let call = 0;
+		const store = createViewerStore(
+			deps({
+				listLocalReplays: () => {
+					const answer = answers[call++];
+					return new Promise((resolve) => gates.push(() => resolve(answer)));
+				}
+			})
+		);
+
+		const first = store.getState().refreshBrowser();
+		const second = store.getState().refreshBrowser();
+		// the older read resolves LAST, which is the ordering a stale answer
+		// would otherwise win
+		gates[1]();
+		gates[0]();
+		await Promise.all([first, second]);
+
+		expect(store.getState().browserListing?.rows[0]?.path).toBe("second.osr");
+	});
+
+	test("opening a row goes through the one open, exactly as a recents card does", async () => {
+		const opened: string[] = [];
+		const store = createViewerStore(
+			deps({
+				loadReplay: async (osrPath) => {
+					opened.push(osrPath);
+					return testScene();
+				}
+			})
+		);
+
+		store.getState().setBrowserOpen(true);
+		await settle();
+		// what the dialog does on a click: close, then the store's one open
+		store.getState().setBrowserOpen(false);
+		await store.getState().openReplay("E:\\osu!\\Data\\r\\abc-1.osr");
+
+		expect(opened).toEqual(["E:\\osu!\\Data\\r\\abc-1.osr"]);
+		expect(store.getState().browserOpen).toBe(false);
+		expect(store.getState().osrPath).toBe("E:\\osu!\\Data\\r\\abc-1.osr");
+	});
+});
+
+describe("the stable install status", () => {
+	const found: StableStatus = {
+		status: "found",
+		root: "E:\\osu!",
+		fromOverride: false,
+		songsDir: "E:\\osu!\\Songs"
+	};
+
+	test("startup reads it beside the settings", async () => {
+		const store = createViewerStore(deps({ getStableStatus: async () => found }));
+		expect(store.getState().stableStatus).toBe(null);
+		await store.getState().hydrateSettings();
+		await settle();
+		expect(store.getState().stableStatus).toEqual(found);
+	});
+
+	test("an override write re-reads it, so no surface shows a stale root", async () => {
+		let status: StableStatus = { status: "notFound", searched: ["C:\\osu!"] };
+		const store = createViewerStore(
+			deps({
+				getStableStatus: async () => status,
+				setOsuStablePath: async (path) => {
+					status = { ...found, root: path ?? "", fromOverride: path !== null };
+					return { ...baseSettings, osuStablePath: path };
+				},
+				listLocalReplays: async () => emptyBrowserListing({ rows: [] })
+			})
+		);
+		await store.getState().hydrateSettings();
+		await settle();
+		expect(store.getState().stableStatus).toEqual({ status: "notFound", searched: ["C:\\osu!"] });
+
+		await store.getState().saveStablePath("E:\\osu!");
+		expect(store.getState().stableStatus).toEqual({ ...found, fromOverride: true });
+	});
+
+	test("setting the path re-reads the browser when it is the surface that sent you", async () => {
+		// the browser's own no-install panel opens settings OVER an open
+		// browser, so the dialog is still mounted when the path lands. without
+		// the re-read it would go on showing an empty list for the very
+		// install the user just pointed it at
+		let reads = 0;
+		let status: StableStatus = { status: "notFound", searched: [] };
+		const store = createViewerStore(
+			deps({
+				getStableStatus: async () => status,
+				setOsuStablePath: async (path) => {
+					status = { ...found, root: path ?? "", fromOverride: true };
+					return { ...baseSettings, osuStablePath: path };
+				},
+				listLocalReplays: async () => {
+					reads += 1;
+					return emptyBrowserListing();
+				}
+			})
+		);
+
+		store.getState().setBrowserOpen(true);
+		await settle();
+		expect(reads).toBe(1);
+
+		await store.getState().saveStablePath("E:\\osu!");
+		expect(reads).toBe(2);
+		expect(store.getState().browserListing).not.toBe(null);
+
+		// with the browser closed the list is dropped and NOT re-read: the
+		// next open pays for it, and only if there is one
+		store.getState().setBrowserOpen(false);
+		await settle();
+		await store.getState().saveStablePath("D:\\osu!");
+		expect(reads).toBe(2);
+		expect(store.getState().browserListing).toBe(null);
+	});
+
+	test("a failed probe leaves the last answer rather than a wrong one", async () => {
+		let fail = false;
+		const store = createViewerStore(
+			deps({
+				getStableStatus: async () => {
+					if (fail) throw new Error("probe failed");
+					return found;
+				}
+			})
+		);
+		await store.getState().refreshStableStatus();
+		fail = true;
+		await store.getState().refreshStableStatus();
+		expect(store.getState().stableStatus).toEqual(found);
 	});
 });

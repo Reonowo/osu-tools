@@ -252,7 +252,14 @@ async function openTestScene(): Promise<Store> {
 		getVideoRendererStatus: async () => fakeRendererStatus(),
 		installVideoRenderer: async () => ({ ...fakeRendererStatus(), installed: true }),
 		setVideoPrefs: async () => settings,
-		redetectVideoEncoder: async () => settings
+		redetectVideoEncoder: async () => settings,
+		getStableStatus: async () => ({ status: "notFound" as const, searched: [] }),
+		listLocalReplays: async () => ({
+			rows: [],
+			localPlays: { status: "read" as const, count: 0, unreadable: 0, truncated: false },
+			replaysFolder: { status: "read" as const, count: 0, unreadable: 0, truncated: false },
+			listing: { status: "read" as const, count: 0, unreadable: 0, truncated: false }
+		})
 	};
 	const store = createViewerStore(deps);
 	await store.getState().openReplay("C:\\r.osr");

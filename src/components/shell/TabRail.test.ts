@@ -125,7 +125,14 @@ function deps(): IpcDeps {
 		getVideoRendererStatus: async () => fakeRendererStatus(),
 		installVideoRenderer: async () => ({ ...fakeRendererStatus(), installed: true }),
 		setVideoPrefs: async () => baseSettings,
-		redetectVideoEncoder: async () => baseSettings
+		redetectVideoEncoder: async () => baseSettings,
+		getStableStatus: async () => ({ status: "notFound" as const, searched: [] }),
+		listLocalReplays: async () => ({
+			rows: [],
+			localPlays: { status: "read" as const, count: 0, unreadable: 0, truncated: false },
+			replaysFolder: { status: "read" as const, count: 0, unreadable: 0, truncated: false },
+			listing: { status: "read" as const, count: 0, unreadable: 0, truncated: false }
+		})
 	};
 }
 

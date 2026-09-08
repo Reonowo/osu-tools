@@ -14,10 +14,12 @@ import type {
 	LoadedScene,
 	OverlaySettings,
 	RendererOptionsMap,
+	ReplayBrowserListing,
 	Settings,
 	SkinEntry,
 	SkinLocator,
 	SkinManifest,
+	StableStatus,
 	TimelineSettings,
 	VideoExportResult,
 	VideoProgressEvent,
@@ -79,6 +81,20 @@ export function invokeGetSettings(): Promise<Settings> {
 
 export function invokeSetOsuStablePath(path: string | null): Promise<Settings> {
 	return invoke<Settings>("set_osu_stable_path", { path });
+}
+
+/** where the app resolved the stable install to. read at startup and again
+ * after every override change; it never touches the listing, so it costs a
+ * directory probe rather than a 22 MB parse */
+export function invokeGetStableStatus(): Promise<StableStatus> {
+	return invoke<StableStatus>("get_stable_status");
+}
+
+/** the replay browser's whole list: stable's local plays plus the install's
+ * Replays folder, deduped and newest first. a second call costs nothing until
+ * something moves on disk (browser.rs's mtime-keyed cache) */
+export function invokeListLocalReplays(): Promise<ReplayBrowserListing> {
+	return invoke<ReplayBrowserListing>("list_local_replays");
 }
 
 export function invokeSetViewerPrefs(
