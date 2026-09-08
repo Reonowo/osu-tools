@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use engine::formats::stable_listing::{decode_stable_listing, StableListing};
+use serde::Serialize;
 
 use crate::error::IpcError;
 use crate::media::read_file_capped;
@@ -24,8 +25,17 @@ use crate::songs_dir::{current_user_name, locate_songs_directory};
 
 #[derive(Debug)]
 pub struct StableInstall {
+    /// the install directory itself. the listing sits directly in it, and so
+    /// do `scores.db`, `Data/r` and `Replays` -- which is why the replay
+    /// browser takes the root rather than re-deriving it from `db_path`
+    pub root: PathBuf,
     pub db_path: PathBuf,
     pub songs_dir: PathBuf,
+    /// whether the user's settings override named this root, or detection
+    /// found it. display only -- nothing branches on it -- but a footer that
+    /// cannot say which is which is what made a detected install read as "no
+    /// path set"
+    pub from_override: bool,
 }
 
 /// standard install locations, checked in order. where the songs live is not
@@ -53,6 +63,8 @@ pub fn detect_install(
         let db_path = root.join("osu!.db");
         if db_path.is_file() {
             return Ok(StableInstall {
+                root: root.clone(),
+                from_override: override_path.is_some(),
                 db_path,
                 // read on every detection, override root and detected root
                 // alike: the cfg is a few hundred lines, and caching it would
@@ -66,6 +78,52 @@ pub fn detect_install(
     })
 }
 
+/// where the app resolved the stable install to, for the three surfaces that
+/// ask outside a load: the start screen's footer, the settings box, and the
+/// replay browser's no-install state.
+///
+/// deliberately says nothing about the LISTING. resolving an install is
+/// finding a directory with an `osu!.db` in it; whether that listing can be
+/// read is the lookup's and the browser's question, each of which reports it
+/// where the user is already looking. a status that also read the listing
+/// would turn every start-screen footer into a 22 MB parse
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum StableStatus {
+    Found {
+        root: String,
+        /// whether the settings override named this root or detection found
+        /// it. the footer says which, because "detected" and "path set" are
+        /// different facts and calling a detected install "no path set" is
+        /// the bug this closes
+        from_override: bool,
+        /// where the songs actually live under the install's own per-user
+        /// cfg (`songs_dir`). shown in the settings box, so a relocated or
+        /// missing `BeatmapDirectory` is visible where a user would look
+        songs_dir: String,
+    },
+    NotFound {
+        searched: Vec<String>,
+    },
+}
+
+/// resolves the install exactly as a load does, and reports it. the one
+/// entry point behind the status command: nothing else may re-derive this,
+/// or the footer and the loader would eventually disagree
+pub fn install_status(override_path: Option<&Path>, candidates: &[PathBuf]) -> StableStatus {
+    match detect_install(override_path, candidates) {
+        Ok(install) => StableStatus::Found {
+            root: install.root.display().to_string(),
+            from_override: install.from_override,
+            songs_dir: install.songs_dir.display().to_string(),
+        },
+        Err(IpcError::OsuDbNotFound { searched }) => StableStatus::NotFound { searched },
+        // detect_install raises nothing else; an unexpected failure reads as
+        // "not found with nothing searched" rather than as a panic
+        Err(_) => StableStatus::NotFound { searched: Vec::new() },
+    }
+}
+
 /// where one listing entry says its beatmap lives, relative to the Songs
 /// directory. the two halves stay apart because that is how stable stores
 /// them, and joining them at the fold would pay a path allocation per entry
@@ -76,14 +134,40 @@ pub struct BeatmapLocation {
     pub file: String,
 }
 
-/// the listing reduced to the only question a lookup asks it: md5 (always
-/// lower-cased) to where the file sits. an entry missing any of md5, folder
-/// or file is dropped here -- one odd row can never block the rest of a
-/// library, and a row that cannot name a file could not answer anyway
+/// what one listing entry NAMES its beatmap, for a surface that lists
+/// beatmaps rather than opening one. carried through the fold because the
+/// codec already walks past every one of these fields, so keeping them costs
+/// a clone rather than a second read of a 22 MB file.
+///
+/// both scripts are kept because the replay browser's search matches both --
+/// a japanese title has to be findable in either -- while what is DISPLAYED
+/// is the romanised pair alone, as everywhere else in this app
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BeatmapNames {
+    pub artist: Option<String>,
+    pub artist_unicode: Option<String>,
+    pub title: Option<String>,
+    pub title_unicode: Option<String>,
+    pub difficulty: Option<String>,
+    pub creator: Option<String>,
+}
+
+/// one folded row: where the beatmap sits, and what it is called
+#[derive(Debug)]
+struct ListingRow {
+    location: BeatmapLocation,
+    names: BeatmapNames,
+}
+
+/// the listing reduced to the two questions asked of it: md5 (always
+/// lower-cased) to where the file sits, and md5 to what it is called. an
+/// entry missing any of md5, folder or file is dropped here -- one odd row
+/// can never block the rest of a library, and a row that cannot name a file
+/// could not answer a lookup anyway
 #[derive(Debug)]
 pub struct StableListingIndex {
     pub version: i32,
-    by_md5: HashMap<String, BeatmapLocation>,
+    by_md5: HashMap<String, ListingRow>,
 }
 
 impl StableListingIndex {
@@ -98,7 +182,16 @@ impl StableListingIndex {
     /// hex case is normalised on both sides, here and at the fold, so an
     /// upper-case header hash still finds its lower-case entry
     pub fn get(&self, md5: &str) -> Option<&BeatmapLocation> {
-        self.by_md5.get(&md5.to_ascii_lowercase())
+        self.by_md5.get(&md5.to_ascii_lowercase()).map(|row| &row.location)
+    }
+
+    /// what the library calls this beatmap, for a surface that lists rather
+    /// than opens. a separate reader from [`Self::get`] because the two
+    /// questions have separate answers: a hash the library does not know is
+    /// an untitled row in the browser and a lookup miss at load, and neither
+    /// caller should have to skip over the other's half
+    pub fn names(&self, md5: &str) -> Option<&BeatmapNames> {
+        self.by_md5.get(&md5.to_ascii_lowercase()).map(|row| &row.names)
     }
 }
 
@@ -164,6 +257,10 @@ fn unreadable(db_path: &Path, reason: String) -> IpcError {
 fn fold(listing: StableListing) -> StableListingIndex {
     let mut by_md5 = HashMap::with_capacity(listing.entries.len());
     for entry in listing.entries {
+        // a PARTIAL move of the three fields the location needs, leaving the
+        // naming ones below still owned by `entry`: this fold exists to keep
+        // a 22 MB listing from costing fifty, so it does not clone strings it
+        // is about to take anyway
         let (Some(md5), Some(folder), Some(file)) = (entry.md5, entry.folder_name, entry.file_name)
         else {
             continue;
@@ -173,9 +270,17 @@ fn fold(listing: StableListing) -> StableListingIndex {
         // the linear scan this fold replaced answered with the first such
         // row, so a library whose later duplicate has since been deleted or
         // edited resolves exactly as it did before the fold existed
-        by_md5
-            .entry(md5.to_ascii_lowercase())
-            .or_insert(BeatmapLocation { folder, file });
+        by_md5.entry(md5.to_ascii_lowercase()).or_insert(ListingRow {
+            location: BeatmapLocation { folder, file },
+            names: BeatmapNames {
+                artist: entry.artist,
+                artist_unicode: entry.artist_unicode,
+                title: entry.title,
+                title_unicode: entry.title_unicode,
+                difficulty: entry.difficulty,
+                creator: entry.creator,
+            },
+        });
     }
     StableListingIndex {
         version: listing.version,
