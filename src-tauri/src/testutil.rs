@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::TimeZone;
 use osu_db::listing::{Beatmap as DbBeatmap, Grade, Listing, RankedStatus};
+use osu_db::score::{BeatmapScores, ScoreList};
 use osu_db::Mode;
 
 pub fn write_osz(path: &Path, entries: &[(&str, &[u8])]) {
@@ -228,4 +229,105 @@ pub fn mangle_listing(db_path: &std::path::Path, edit: impl FnOnce(&mut Listing)
     let mut listing = Listing::from_file(db_path).unwrap();
     edit(&mut listing);
     listing.save(db_path).unwrap();
+}
+
+/// one row of a fake `scores.db`, in the terms the browser's rules are
+/// about: which beatmap, when, and which replay hash. everything else takes
+/// a value a real row could carry, so a test says only what it means
+pub struct ScoreRow {
+    pub beatmap_md5: String,
+    pub timestamp_ticks: i64,
+    pub replay_md5: Option<String>,
+    pub mode: Mode,
+    pub mods: u32,
+    pub player_name: Option<String>,
+}
+
+impl ScoreRow {
+    pub fn new(beatmap_md5: &str, timestamp_ticks: i64) -> ScoreRow {
+        ScoreRow {
+            beatmap_md5: beatmap_md5.to_string(),
+            timestamp_ticks,
+            replay_md5: None,
+            mode: Mode::Standard,
+            mods: 0,
+            player_name: Some("test".into()),
+        }
+    }
+
+    pub fn replay_md5(mut self, md5: &str) -> ScoreRow {
+        self.replay_md5 = Some(md5.to_string());
+        self
+    }
+
+    pub fn mode(mut self, mode: Mode) -> ScoreRow {
+        self.mode = mode;
+        self
+    }
+
+    pub fn mods(mut self, mods: u32) -> ScoreRow {
+        self.mods = mods;
+        self
+    }
+}
+
+/// writes a `scores.db` through osu-db's own writer, grouped by beatmap the
+/// way stable groups them. the crate is a DEV-only oracle: it is the
+/// independent implementation the engine's codec is cross-checked against,
+/// and here it is what builds the fake installs the app's own tests read
+/// back through the production reader
+pub fn write_scores_db(path: &std::path::Path, rows: &[ScoreRow]) {
+    let mut groups: Vec<BeatmapScores> = Vec::new();
+    for row in rows {
+        let replay = osu_db::replay::Replay {
+            mode: row.mode,
+            version: 20190410,
+            beatmap_hash: Some(row.beatmap_md5.clone()),
+            player_name: row.player_name.clone(),
+            replay_hash: row.replay_md5.clone(),
+            count_300: 1,
+            count_100: 0,
+            count_50: 0,
+            count_geki: 0,
+            count_katsu: 0,
+            count_miss: 0,
+            score: 300,
+            max_combo: 1,
+            perfect_combo: true,
+            mods: osu_db::ModSet::from_bits(row.mods),
+            life_graph: Some(String::new()),
+            timestamp: dotnet_ticks_to_datetime(row.timestamp_ticks),
+            replay_data: None,
+            raw_replay_data: None,
+            online_score_id: 0,
+        };
+        match groups.iter_mut().find(|g| g.hash.as_deref() == Some(row.beatmap_md5.as_str())) {
+            Some(group) => group.scores.push(replay),
+            None => groups.push(BeatmapScores {
+                hash: Some(row.beatmap_md5.clone()),
+                scores: vec![replay],
+            }),
+        }
+    }
+    ScoreList {
+        version: 20260711,
+        beatmaps: groups,
+    }
+    .save(path)
+    .unwrap();
+}
+
+/// osu-db takes a chrono datetime where stable's wire carries .net ticks, so
+/// the helper converts once rather than every test doing it. the writer's
+/// own round trip is exact, which is what lets a test name a tick value and
+/// then look for the `Data/r` file named after it
+fn dotnet_ticks_to_datetime(ticks: i64) -> chrono::DateTime<chrono::Utc> {
+    // 621355968000000000 ticks from 0001-01-01 to the unix epoch
+    let unix_ticks = ticks - 621_355_968_000_000_000;
+    chrono::Utc
+        .timestamp_opt(
+            unix_ticks.div_euclid(10_000_000),
+            (unix_ticks.rem_euclid(10_000_000) * 100) as u32,
+        )
+        .unwrap()
 }

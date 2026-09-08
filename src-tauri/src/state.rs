@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::browser::BrowserCache;
 use crate::load::SessionState;
 use crate::settings::{load_settings, Settings};
 use crate::stable::ListingCache;
@@ -29,6 +30,10 @@ pub struct AppState {
     /// arc so commands can hand the cache to spawn_blocking without holding
     /// the state borrow across an await
     pub listing_cache: Arc<ListingCache>,
+    /// the replay browser's assembled list, keyed on the three mtimes it
+    /// reads. arc for the listing cache's reason: the assembly runs on a
+    /// blocking thread and must not hold a `State` borrow across the await
+    pub browser_cache: Arc<BrowserCache>,
     pub session: Mutex<Option<SessionState>>,
     /// orders the skin-selection writes against each other.
     ///
@@ -96,6 +101,7 @@ impl AppState {
             skins_root,
             settings: Mutex::new(settings),
             listing_cache: Arc::new(ListingCache::default()),
+            browser_cache: Arc::new(BrowserCache::default()),
             session: Mutex::new(None),
             skin_writes: Mutex::new(SkinWriteOrder::default()),
             import_lock: Arc::new(Mutex::new(())),

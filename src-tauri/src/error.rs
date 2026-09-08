@@ -115,15 +115,18 @@ impl From<EngineError> for IpcError {
             EngineError::Io(e) => IpcError::Io {
                 message: e.to_string(),
             },
-            // StableListingParse joins the two below rather than getting a
-            // blanket kind of its own: the ONLY producer is the listing codec
-            // and its only consumer is the stable seam, which maps it to
-            // OsuDbUnreadable while it still knows which file it was reading
-            // (stable.rs). reaching this arm would mean an engine entry point
-            // grew a second way to raise it, which is an internal fault
+            // the two stable-database parse variants join the two below
+            // rather than getting blanket kinds of their own: each has ONE
+            // producer (the listing codec, the local scores codec) and one
+            // consumer that maps it while it still knows which file was
+            // being read -- `stable.rs`'s OsuDbUnreadable and `browser.rs`'s
+            // per-source note. reaching this arm would mean an engine entry
+            // point grew a second way to raise them, which is an internal
+            // fault
             EngineError::InvalidArgument(message)
             | EngineError::ReplayEncode(message)
-            | EngineError::StableListingParse(message) => IpcError::Internal { message },
+            | EngineError::StableListingParse(message)
+            | EngineError::LocalScoresParse(message) => IpcError::Internal { message },
         }
     }
 }

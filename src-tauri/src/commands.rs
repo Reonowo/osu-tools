@@ -156,19 +156,15 @@ fn allow_skin_files<R: Runtime>(app: &AppHandle<R>, manifest: &SkinManifest) {
 }
 
 /// standard accuracy over the header counts -- the same weighting the replay
-/// panel shows, computed here so the recents card needs no scene
+/// panel and the browser row show, off the one shared rule, so the recents
+/// card needs no scene
 fn header_accuracy(replay: &crate::scene::ReplayMeta) -> f64 {
-    let judged = u32::from(replay.count_300)
-        + u32::from(replay.count_100)
-        + u32::from(replay.count_50)
-        + u32::from(replay.count_miss);
-    if judged == 0 {
-        return 0.0;
-    }
-    let weighted = 300.0 * f64::from(replay.count_300)
-        + 100.0 * f64::from(replay.count_100)
-        + 50.0 * f64::from(replay.count_50);
-    weighted / (300.0 * f64::from(judged))
+    crate::scene::standard_accuracy(
+        replay.count_300,
+        replay.count_100,
+        replay.count_50,
+        replay.count_miss,
+    )
 }
 
 /// a recents write is a convenience, never a reason to fail a load that
@@ -278,6 +274,48 @@ pub async fn load_replay_with_beatmap<R: Runtime>(
     .map_err(|e| join_err("load", e))??;
     record_recent(state.inner(), &osr_path_for_recents, &outcome);
     Ok(install_scene(&app, state.inner(), outcome))
+}
+
+/// where the app resolved the stable install to, outside a load.
+///
+/// read at startup and again after every override change, by the three
+/// surfaces that used to have nothing to read: the start screen's footer
+/// (which could only ever say "no path set"), the settings box, and the
+/// replay browser's no-install state. deliberately never touches the
+/// listing -- see `stable::install_status`
+#[tauri::command]
+pub fn get_stable_status(state: State<'_, AppState>) -> crate::stable::StableStatus {
+    let override_path = state.settings.lock().expect("settings lock").osu_stable_path.clone();
+    crate::stable::install_status(
+        override_path.as_deref().map(Path::new),
+        &crate::stable::default_candidates(),
+    )
+}
+
+/// the replay browser's whole list: every local play stable still lists and
+/// every replay in the install's `Replays` folder, deduped and newest first.
+///
+/// async and off-thread because a cold call parses `scores.db` and reads a
+/// header per file in a folder that holds thousands here; a second call
+/// costs nothing until one of the three mtimes moves (`browser::BrowserCache`).
+/// with no install it fails exactly as a load does, and the dialog renders
+/// the searched paths from the status it already holds
+#[tauri::command]
+pub async fn list_local_replays(
+    state: State<'_, AppState>,
+) -> Result<Arc<crate::browser::ReplayBrowserListing>, IpcError> {
+    let override_path = state.settings.lock().expect("settings lock").osu_stable_path.clone();
+    let listing_cache = Arc::clone(&state.listing_cache);
+    let browser_cache = Arc::clone(&state.browser_cache);
+    tauri::async_runtime::spawn_blocking(move || {
+        let install = crate::stable::detect_install(
+            override_path.as_deref().map(Path::new),
+            &crate::stable::default_candidates(),
+        )?;
+        Ok(browser_cache.get(&install, &listing_cache))
+    })
+    .await
+    .map_err(|e| join_err("replay browser", e))?
 }
 
 #[tauri::command]
@@ -1282,7 +1320,9 @@ mod tests {
                 get_video_renderer_status,
                 install_video_renderer,
                 set_video_prefs,
-                redetect_video_encoder
+                redetect_video_encoder,
+                get_stable_status,
+                list_local_replays
             ])
             .manage(AppState::new(config_dir, cache_root, skins_root, video))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -3594,4 +3634,112 @@ Name: Audible
             serde_json::json!({ "kind": "exportOverflow", "field": "count300" })
         );
     }
+    /// the status command on its three answers. the override branch matters
+    /// most: it is what the settings box reads back after a browse
+    #[test]
+    fn the_install_status_reports_the_override_the_detection_and_the_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let root = tempfile::tempdir().unwrap();
+
+        // no install anywhere the override names
+        set_osu_stable_path(app.state(), Some(root.path().display().to_string())).unwrap();
+        match get_stable_status(app.state()) {
+            crate::stable::StableStatus::NotFound { searched } => {
+                assert_eq!(searched, vec![root.path().display().to_string()]);
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+
+        // the same root, now a real install: found, from the override, with
+        // the songs directory the cfg rule resolves
+        crate::testutil::fake_install(root.path(), "1 fixture", "map.osu", b"the map contents");
+        match get_stable_status(app.state()) {
+            crate::stable::StableStatus::Found {
+                root: found,
+                from_override,
+                songs_dir,
+            } => {
+                assert_eq!(found, root.path().display().to_string());
+                assert!(from_override);
+                assert_eq!(songs_dir, root.path().join("Songs").display().to_string());
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+
+        // a relocated BeatmapDirectory shows up here, which is the whole
+        // point of putting the songs directory in the settings box
+        let cfg = format!("osu!.{}.cfg", crate::songs_dir::current_user_name());
+        std::fs::write(root.path().join(cfg), "BeatmapDirectory = D:\\relocated\n").unwrap();
+        match get_stable_status(app.state()) {
+            crate::stable::StableStatus::Found { songs_dir, .. } => {
+                assert_eq!(songs_dir, "D:\\relocated");
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+
+        // cleared: detection alone, which on a machine with no stable
+        // install finds nothing and says where it looked
+        set_osu_stable_path(app.state(), None).unwrap();
+        match get_stable_status(app.state()) {
+            crate::stable::StableStatus::NotFound { searched } => {
+                assert_eq!(searched, crate::stable::default_candidates()
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>());
+            }
+            // a developer machine WITH a stable install answers Found, which
+            // is equally correct -- the assertion is that it agrees with
+            // detection, not that detection fails
+            crate::stable::StableStatus::Found { from_override, .. } => assert!(!from_override),
+        }
+    }
+
+    /// the browser command end to end over a fake install, which is what
+    /// exercises the codecs, the fold, the header reader and the cache
+    /// together
+    #[test]
+    fn the_browser_lists_both_sources_through_the_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
+        let root = tempfile::tempdir().unwrap();
+        let md5 = crate::testutil::fake_install(root.path(), "1 fixture", "map.osu", b"the map contents");
+        set_osu_stable_path(app.state(), Some(root.path().display().to_string())).unwrap();
+
+        // one local play with its file, and one file in the Replays folder
+        let ticks = 638_000_000_000_000_000i64;
+        let data_r = root.path().join("Data").join("r");
+        std::fs::create_dir_all(&data_r).unwrap();
+        std::fs::write(
+            data_r.join(format!("{md5}-{}.osr", ticks - 504_911_232_000_000_000i64)),
+            osr_bytes(&md5, 0, None),
+        )
+        .unwrap();
+        crate::testutil::write_scores_db(
+            &root.path().join("scores.db"),
+            &[crate::testutil::ScoreRow::new(&md5, ticks).replay_md5("aa")],
+        );
+        let replays = root.path().join("Replays");
+        std::fs::create_dir_all(&replays).unwrap();
+        std::fs::write(replays.join("downloaded.osr"), osr_bytes(&md5, 0, None)).unwrap();
+
+        let listing = tauri::async_runtime::block_on(list_local_replays(app.state())).unwrap();
+        assert_eq!(listing.rows.len(), 2);
+        assert!(listing.rows.iter().all(|r| r.titled));
+        assert!(listing.rows.iter().all(|r| r.title.as_deref() == Some("fixture")));
+
+        // a second call is the very same assembly: nothing on disk moved
+        let again = tauri::async_runtime::block_on(list_local_replays(app.state())).unwrap();
+        assert!(Arc::ptr_eq(&listing, &again));
+
+        // and with no install the command fails the way a load does, so the
+        // dialog can render its no-install state from the status it holds
+        set_osu_stable_path(app.state(), Some(dir.path().join("nowhere").display().to_string()))
+            .unwrap();
+        match tauri::async_runtime::block_on(list_local_replays(app.state())) {
+            Err(IpcError::OsuDbNotFound { searched }) => assert_eq!(searched.len(), 1),
+            other => panic!("expected OsuDbNotFound, got {other:?}"),
+        }
+    }
+
 }

@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+pub mod browser;
 pub mod cache;
 pub mod commands;
 pub mod edit;
@@ -67,6 +68,8 @@ pub fn run() {
             commands::load_replay_with_beatmap,
             commands::get_settings,
             commands::set_osu_stable_path,
+            commands::get_stable_status,
+            commands::list_local_replays,
             commands::set_viewer_prefs,
             commands::clear_recents,
             commands::list_skins,

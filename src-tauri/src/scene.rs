@@ -166,6 +166,24 @@ pub struct BeatmapMeta {
     pub md5: String,
 }
 
+/// standard accuracy over judged counts: the weighting every surface in the
+/// app shows, in one place so the recents card, the replay panel and the
+/// browser row can never disagree about what a play scored.
+///
+/// takes the four counts rather than a header, because the two callers hold
+/// different shapes of the same numbers -- a `.osr` header and a `scores.db`
+/// row -- and neither should have to build the other's struct to ask
+pub fn standard_accuracy(count_300: u16, count_100: u16, count_50: u16, count_miss: u16) -> f64 {
+    let judged =
+        u32::from(count_300) + u32::from(count_100) + u32::from(count_50) + u32::from(count_miss);
+    if judged == 0 {
+        return 0.0;
+    }
+    let weighted =
+        300.0 * f64::from(count_300) + 100.0 * f64::from(count_100) + 50.0 * f64::from(count_50);
+    weighted / (300.0 * f64::from(judged))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayMeta {
