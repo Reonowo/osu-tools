@@ -22,6 +22,9 @@
 //! | [`MAX_TOTAL_SLIDER_NESTED_OBJECTS`] | 2,000,000 | the map-wide sum of slider nested objects retained by `beatmap::processing::process_beatmap`. [`MAX_SLIDER_NESTED_OBJECTS`] bounds one slider's events, but every built slider's objects stay resident while the next builds, and a 32 MiB file has room for hundreds of thousands of slider lines whose declared repeat counts each sit just under that per-slider cap -- fresh per-slider budgets alone would let total retention reach tens of GiB and die on allocation instead of returning `ResourceLimit`. charged cumulatively after each slider builds, so the transient overshoot is at most one per-slider cap | `beatmap::processing::tests::total_nested_object_cap_boundary` |
 //! | [`MAX_TOTAL_SLIDER_PATH_VERTICES`] | 4,000,000 | the map-wide sum of flattened path vertices retained by `beatmap::processing::process_beatmap`, closing the same aggregate gap for [`MAX_SLIDER_PATH_VERTICES`]: each processed slider retains its full piecewise-linear path (plus a cumulative-length entry per vertex), and many per-slider-cap paths from one file would otherwise accumulate unbounded. charged cumulatively after each slider builds, same overshoot bound as the nested-object cap | `beatmap::processing::tests::total_path_vertex_cap_boundary` |
 //! | [`MAX_OSU_DB_BYTES`] | 256 MiB | raw `osu!.db` byte length, checked in `formats::stable_listing::decode_stable_listing` before a single byte is walked. the app crate charges the same file's DECLARED length before reading it, through the capped file reader, so the lookup never allocates an oversized buffer on the way to this check -- and surfaces the breach as its own `OsuDbUnreadable` outcome (the picker) rather than a generic cap toast, since an over-large library is an inconvenience rather than an app fault | `formats::stable_listing::tests::osu_db_byte_size_cap_boundary` (through the cap-parameterised entry point, so no test allocates 256 MiB) and `...::max_osu_db_bytes_constant_matches_limits_module` |
+//! | [`MAX_SCORES_DB_BYTES`] | 64 MiB | raw `scores.db` byte length, checked in `formats::local_scores::decode_local_scores` before a single byte is walked. the app crate charges the same file's DECLARED length before reading it, through the capped file reader, and reports the breach as the replay browser's own per-source note rather than emptying the browser -- the Replays folder still lists. measured on a real 1,375-play database the file is 194 KB at ~140 bytes per row, so this admits roughly 470,000 local plays, two orders past any real history | `formats::local_scores::tests::scores_db_byte_size_cap_boundary` (through the cap-parameterised entry point) and `...::max_scores_db_bytes_constant_matches_limits_module` |
+//! | [`MAX_OSR_HEADER_BYTES`] | 1 MiB | how far the app crate's chunked header reader will grow a buffer looking for the end of one `.osr` header, charged in `browser::read_osr_header`. the header's life-bar string is its only unbounded field -- the largest seen across 4,382 real files is 2,629 bytes, and a ten-minute marathon's runs to tens of kilobytes -- so a file still asking for more at this point is not a replay, and it counts as unreadable rather than failing the folder scan | `browser::tests::an_osr_header_past_the_byte_cap_is_unreadable_not_fatal` (app crate) |
+//! | [`MAX_REPLAYS_FOLDER_FILES`] | 100,000 | how many entries the app crate's `Replays` folder scan will walk before it stops and says so in the browser's footer. the real install here holds 4,382; the cap exists because the folder is user-owned and its size is bounded by nothing, and truncating a list with a visible note is strictly better than a scan that never returns | `browser::tests::the_replays_folder_scan_stops_at_the_file_cap` (app crate) |
 //! | [`MAX_OSR_FILE_BYTES`] | 32 MiB | raw `.osr` file byte length, checked in `formats::osr::decode_osr` before any framing is parsed | `formats::osr::tests::osr_file_size_cap_boundary` |
 //! | [`MAX_LZMA_DECOMPRESSED_BYTES`] | 128 MiB | the lzma-alone replay frame payload's decompressed size, enforced three ways in `formats::osr::decompress_lzma_capped`: a header precheck against the stream's declared uncompressed size, a `CappedWriter` bound on bytes actually produced, and lzma-rs's own `memlimit` guarding its internal dictionary buffer | `formats::osr::tests::lzma_bomb_declared_size_hits_cap` (declared-size precheck), `...::lzma_decompressed_size_cap_boundary` (accept-at-cap via the real decode path, which is also `CappedWriter`'s accept branch), `...::lzma_capped_writer_is_the_sole_guard_for_small_dict_sentinel_streams` (`CappedWriter`'s reject branch, on the one stream shape where neither of the other two layers can fire), `...::lzma_inflated_dict_size_hits_internal_memlimit` (lzma-rs's own memlimit) |
 //! | [`MAX_REPLAY_FRAMES`] | 4,000,000 | parsed replay frame count, checked in `formats::osr::parse_actions` | `formats::osr::tests::frame_count_cap_boundary` |
@@ -247,6 +250,29 @@ pub const MAX_SKIN_INI_BYTES: u64 = 1024 * 1024;
 /// anyone runs -- while keeping the folded md5 map the app builds from it in
 /// the tens of megabytes at the very worst
 pub const MAX_OSU_DB_BYTES: u64 = 256 * 1024 * 1024;
+
+/// stable's local leaderboards. a row is ~140 bytes on the wire (measured
+/// over 1,375 real rows in a 194 KB file), so one cap on the input bounds
+/// the walk, the row vector and every string in it -- 64 MiB admits roughly
+/// 470,000 plays, where the largest real history anyone has is in the tens
+/// of thousands
+pub const MAX_SCORES_DB_BYTES: u64 = 64 * 1024 * 1024;
+
+/// how large a buffer the app's chunked `.osr` header reader may grow before
+/// it gives up on finding the header's end. distinct from
+/// [`MAX_OSR_FILE_BYTES`], which bounds a whole replay including its frame
+/// payload: this bounds only the prefix a LISTING reads, so a folder of
+/// thousands is walked without touching a byte of compressed frames.
+///
+/// declared here beside the format's other caps but charged in the app
+/// crate, since the engine never opens a file
+pub const MAX_OSR_HEADER_BYTES: u64 = 1024 * 1024;
+
+/// how many entries the app's `Replays` folder scan walks before stopping.
+/// declared here for the same reason as the header cap; the scan reports the
+/// truncation rather than failing, because a browser missing its newest
+/// files is a worse answer than a browser missing its oldest
+pub const MAX_REPLAYS_FOLDER_FILES: usize = 100_000;
 
 pub const MAX_OSR_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_LZMA_DECOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;

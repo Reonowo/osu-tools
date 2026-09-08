@@ -14,6 +14,13 @@ pub enum EngineError {
     /// pick the beatmap manually" -- copy that would be a lie about a `.osu`
     #[error("failed to parse osu!.db: {0}")]
     StableListingParse(String),
+    /// stable's local leaderboards (`scores.db`) could not be walked. its
+    /// own variant beside the listing's, for the same reason: the app names
+    /// the file it failed on in the browser's footer, and calling a
+    /// leaderboard failure an `osu!.db` one would send a user to the wrong
+    /// file
+    #[error("failed to parse scores.db: {0}")]
+    LocalScoresParse(String),
     #[error("resource limit exceeded: {cap} (limit {limit}, actual {actual})")]
     ResourceLimit {
         cap: &'static str,
