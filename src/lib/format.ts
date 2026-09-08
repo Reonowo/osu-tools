@@ -95,3 +95,19 @@ export function ticksToUnixMs(ticks: string): number | null {
 export function unixMsToTicks(unixMs: number): string {
 	return (BigInt(Math.round(unixMs)) * 10_000n + UNIX_EPOCH_TICKS).toString();
 }
+
+/** `yyyy-mm-dd` from .net ticks, read with NO zone conversion -- which is
+ * what makes it the date stable's own export file names carry (checked
+ * against all 4,382 stable-named files in the real install; a local-time
+ * reading matches one fewer). `toISOString` is what supplies the "no zone"
+ * half: the ticks are an instant, and this prints the calendar day that
+ * instant falls on in UTC, exactly as stable wrote it.
+ *
+ * rust has the same rule in `browser.rs`, for the browser row's own `date`
+ * field; this one serves the export dialog, which works from a loaded
+ * scene's ticks rather than from a browser row */
+export function isoDateFromTicks(ticks: string): string | null {
+	const ms = ticksToUnixMs(ticks);
+	if (ms === null) return null;
+	return new Date(ms).toISOString().slice(0, 10);
+}

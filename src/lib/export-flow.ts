@@ -3,6 +3,7 @@
 // the post-export summary rows. the ExportDialog component is the thin
 // shell over these
 
+import { isoDateFromTicks } from "./format";
 import type { IpcError, RegeneratedFields } from "./scene-types";
 
 /** which of the three export paths the document's dirty split selects */
@@ -57,6 +58,81 @@ export function defaultExportPath(osrPath: string): string {
 	// not an extension separator
 	if (dotIndex <= sepIndex + 1) return `${osrPath}${EDITED_MARKER}`;
 	return `${osrPath.slice(0, dotIndex)}${EDITED_MARKER}${osrPath.slice(dotIndex)}`;
+}
+
+/** what a redirected prefill needs to know about the play, all of it already
+ * on the loaded scene */
+export interface ExportNaming {
+	playerName: string | null;
+	artist: string;
+	title: string;
+	version: string;
+	/** .net ticks as the scene carries them */
+	timestampTicks: string;
+}
+
+/** the app is std-only, so the mode suffix stable puts in an export name is
+ * fixed. it is spelled out rather than omitted because a file missing it
+ * does not sort or read like its neighbours in the folder */
+const STABLE_MODE_SUFFIX = "Osu";
+
+/** characters windows forbids in a file name, replaced with a space. this is
+ * a PREFILL the user can edit, not a claim to reproduce stable's own
+ * sanitisation -- what it has to be is a name the save dialog accepts */
+const FORBIDDEN_IN_FILE_NAME = /[<>:"/\\|?*]/g;
+
+function sanitizeFileName(name: string): string {
+	return name.replace(FORBIDDEN_IN_FILE_NAME, " ");
+}
+
+/** windows paths are case-insensitive and mix separators, so a prefix test
+ * has to normalise both before comparing */
+function normalizePath(path: string): string {
+	return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function isInside(path: string, directory: string): boolean {
+	const parent = normalizePath(directory);
+	return parent.length > 0 && normalizePath(path).startsWith(`${parent}/`);
+}
+
+/** the separator the install root is already written with, so a prefill
+ * reads like the path it came from rather than mixing both kinds */
+function separatorOf(root: string): string {
+	return root.includes("\\") ? "\\" : "/";
+}
+
+/**
+ * the destination the export dialog prefills, given where the replay came
+ * from.
+ *
+ * a play opened out of stable's `Data/r` is the case this exists for: that
+ * folder is the client's own private data, and writing an edited replay into
+ * it would put a file there stable never wrote and cannot account for. so a
+ * source inside the install but outside its `Replays` folder is redirected
+ * to `Replays` under stable's own export name -- `<player> - <artist> -
+ * <title> [<version>] (<date>) Osu`, plus this app's edited marker.
+ *
+ * every other source keeps [`defaultExportPath`]'s rule, the Replays folder
+ * included: a redirect that fired where it was not needed would move a file
+ * the user had deliberately put somewhere.
+ */
+export function redirectedExportPath(osrPath: string, installRoot: string | null, naming: ExportNaming): string {
+	if (installRoot === null) return defaultExportPath(osrPath);
+	const separator = separatorOf(installRoot);
+	const replaysDir = `${installRoot.replace(/[\\/]+$/, "")}${separator}Replays`;
+	if (!isInside(osrPath, installRoot) || isInside(osrPath, replaysDir)) {
+		return defaultExportPath(osrPath);
+	}
+	const date = isoDateFromTicks(naming.timestampTicks);
+	// an empty player name leaves a leading " - ", exactly as stable's own
+	// export of a guest play does
+	const player = naming.playerName ?? "";
+	const dated = date === null ? "" : ` (${date})`;
+	const name = sanitizeFileName(
+		`${player} - ${naming.artist} - ${naming.title} [${naming.version}]${dated} ${STABLE_MODE_SUFFIX}`
+	);
+	return `${replaysDir}${separator}${name}${EDITED_MARKER}.osr`;
 }
 
 /** the consent the first export attempt sends: with the overwrite warning

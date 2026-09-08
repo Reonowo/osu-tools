@@ -19,7 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { SectionLabel } from "@/components/panels/SectionLabel";
 import {
-	defaultExportPath,
+	redirectedExportPath,
 	expectationCopy,
 	exportPathKind,
 	initialOverwriteConsent,
@@ -30,13 +30,36 @@ import {
 import { isIpcError } from "@/lib/ipc";
 import type { ExportResult, IpcError } from "@/lib/scene-types";
 import { describeIpcError } from "@/state/errors";
-import { useViewerStore } from "@/state/store";
+import { useViewerStore, viewerStore } from "@/state/store";
 
 type Phase =
 	| { step: "form" }
 	| { step: "exporting" }
 	| { step: "confirmOverwrite" }
 	| { step: "done"; result: ExportResult };
+
+/** the destination one opening of the dialog starts from.
+ *
+ * reads the store LIVE rather than through render-time selectors, so the
+ * prefill is computed from the state at the moment of the reset: the resolved
+ * install can change while this dialog is up (the settings dialog opens over
+ * it), and a captured `installRoot` of null would prefill an edited replay
+ * straight back into stable's private `Data/r` -- exactly what
+ * `redirectedExportPath` exists to prevent. widening the effect's deps was
+ * the other fix and is the wrong one: it would re-run the whole reset and
+ * throw away a destination the user had already typed
+ */
+function prefillFor(osrPath: string): string {
+	const { scene, stableStatus } = viewerStore.getState();
+	const installRoot = stableStatus !== null && stableStatus.status === "found" ? stableStatus.root : null;
+	return redirectedExportPath(osrPath, installRoot, {
+		playerName: scene?.replay.playerName ?? null,
+		artist: scene?.beatmap.artist ?? "",
+		title: scene?.beatmap.title ?? "",
+		version: scene?.beatmap.version ?? "",
+		timestampTicks: scene?.replay.timestampTicks ?? "0"
+	});
+}
 
 export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
 	const osrPath = useViewerStore((s) => s.osrPath);
@@ -65,7 +88,7 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 	useEffect(() => {
 		if (open) {
 			currentRequest.current += 1;
-			setDestination(osrPath === null ? "" : defaultExportPath(osrPath));
+			setDestination(osrPath === null ? "" : prefillFor(osrPath));
 			setPhase({ step: "form" });
 			setError(null);
 		}
