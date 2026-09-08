@@ -11,17 +11,44 @@ import {
 	DEFAULT_VIDEO
 } from "../state/defaults";
 import type {
+	BrowserSourceStatus,
 	EffectSettings,
 	IpcError,
 	JudgementKindDto,
 	LoadedSceneWarning,
 	OverlaySettings,
 	RenderKind,
+	ReplaySource,
 	Settings,
 	SimulationDto,
+	StableStatus,
 	VideoSettings
 } from "./scene-types";
 import { isIpcError } from "./ipc";
+
+describe("the replay browser contract mirror", () => {
+	test("the source and status literals are the ones rust serializes", () => {
+		// literals copied from browser.rs's
+		// the_browser_payload_serializes_with_the_declared_field_names
+		const sources: ReplaySource[] = ["localPlay", "replaysFolder"];
+		expect(sources).toHaveLength(2);
+		const statuses: BrowserSourceStatus[] = [
+			{ status: "read", count: 1, unreadable: 0, truncated: false },
+			{ status: "failed", path: "E:\\osu!\\scores.db", reason: "the file is missing" }
+		];
+		expect(statuses.map((s) => s.status)).toEqual(["read", "failed"]);
+	});
+
+	test("the install status literals are the ones stable.rs serializes", () => {
+		// literals copied from commands.rs's
+		// the_install_status_reports_the_override_the_detection_and_the_miss
+		const statuses: StableStatus[] = [
+			{ status: "found", root: "E:\\osu!", fromOverride: true, songsDir: "E:\\osu!\\Songs" },
+			{ status: "notFound", searched: ["C:\\osu!"] }
+		];
+		expect(statuses.map((s) => s.status)).toEqual(["found", "notFound"]);
+	});
+});
 
 describe("scene contract mirror", () => {
 	test("judgement kinds accept the rust-serialized literals", () => {

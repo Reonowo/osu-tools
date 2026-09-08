@@ -445,6 +445,77 @@ export interface RecentReplay {
 	allowMismatch: boolean;
 }
 
+/** mirrors stable.rs StableStatus: where the app resolved the osu! stable
+ * install to, outside a load.
+ *
+ * three surfaces read it and none of them may re-derive it -- the start
+ * screen's footer, the settings box's read-only lines, and the replay
+ * browser's no-install state. it says nothing about whether the LISTING can
+ * be read: that is the lookup's and the browser's answer, each reported where
+ * the user is already looking */
+export type StableStatus =
+	| {
+			status: "found";
+			root: string;
+			/** the settings override named this root, rather than detection
+			 * finding it. display only; the footer says which because "detected"
+			 * and "path set" are different facts */
+			fromOverride: boolean;
+			/** where the songs actually live under the install's own per-user
+			 * cfg, so a relocated or missing BeatmapDirectory is visible */
+			songsDir: string;
+	  }
+	| { status: "notFound"; searched: string[] };
+
+/** mirrors browser.rs ReplaySource: which half of the browser a row came
+ * from. a badge to the user; the dedup rule's tiebreak underneath */
+export type ReplaySource = "localPlay" | "replaysFolder";
+
+/** mirrors browser.rs BrowserRow. the naming fields are the stable listing's,
+ * and `titled` says whether it could answer at all -- a play whose beatmap
+ * has left the library still lists, identified by its md5 */
+export interface BrowserRow {
+	path: string;
+	replayMd5: string | null;
+	beatmapMd5: string | null;
+	source: ReplaySource;
+	artist: string | null;
+	artistUnicode: string | null;
+	title: string | null;
+	titleUnicode: string | null;
+	difficulty: string | null;
+	creator: string | null;
+	titled: boolean;
+	playerName: string | null;
+	/** 0-1, the same weighting a recents card shows */
+	accuracy: number;
+	maxCombo: number;
+	score: number;
+	mods: number;
+	/** .net ticks; a string for ReplayMeta.timestampTicks' reason */
+	timestampTicks: string;
+	/** `yyyy-mm-dd`, formatted rust-side from those ticks with no zone
+	 * conversion -- the same date stable's own export names carry */
+	date: string;
+	lazerWritten: boolean;
+}
+
+/** mirrors browser.rs BrowserSourceStatus. each of the browser's three
+ * sources answers for itself, so one broken file never empties the list */
+export type BrowserSourceStatus =
+	| { status: "read"; count: number; unreadable: number; truncated: boolean }
+	| { status: "failed"; path: string; reason: string };
+
+/** mirrors browser.rs ReplayBrowserListing */
+export interface ReplayBrowserListing {
+	rows: BrowserRow[];
+	localPlays: BrowserSourceStatus;
+	replaysFolder: BrowserSourceStatus;
+	/** the stable listing, which titles rows rather than producing them; its
+	 * count is how many it named */
+	listing: BrowserSourceStatus;
+}
+
 /** mirrors settings.rs EditingPrefs. governs the (future) replay-editing
  * surface -- kept separate from OverlaySettings, which these are not */
 export interface EditingSettings {
