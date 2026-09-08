@@ -70,6 +70,7 @@ export type KeybindAction =
 	| "undo"
 	| "redo"
 	| "openMenu"
+	| "replayBrowser"
 	| "showHelp";
 
 /** where a keybind is registered: `global` is use-playback-shortcuts, through
@@ -469,6 +470,19 @@ export const KEYBINDS = {
 		label: "open a replay",
 		locked: null,
 		defaults: one("Mod+O", "KeyO")
+	},
+	// the browser's own chord, beside the open accelerator it extends rather
+	// than replaces: Ctrl+O reaches the file picker and the recents, this
+	// reaches everything stable knows about. `Mod` and key-matched for
+	// openMenu's reasons, and unlocked like every row but cancel
+	replayBrowser: {
+		action: "replayBrowser",
+		group: "general",
+		owner: "global",
+		by: "key",
+		label: "browse local replays",
+		locked: null,
+		defaults: one("Mod+Shift+O", "KeyO")
 	},
 	// matched on the key rather than the code: a function key reports the same
 	// `key` on every layout, so the layout question the code-matched path

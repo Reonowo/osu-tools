@@ -312,10 +312,15 @@ function registrationsFor(row: EffectiveKeybind, key: string): UseHotkeyDefiniti
 const CODE_MATCHED: readonly KeybindAction[] = ["viewportReset"];
 
 /** the global actions registered somewhere else. this hook mounts with
- * AppShell, which exists only once a scene is loaded; the help binding and the
- * open accelerator both have to work on the start screen too, so App registers
- * them (use-help-shortcut.ts, use-open-shortcut.ts) */
-const APP_LEVEL: readonly KeybindAction[] = ["showHelp", "openMenu"];
+ * AppShell, which exists only once a scene is loaded; the help binding, the
+ * open accelerator and the replay browser all have to work on the start
+ * screen too, so App registers them (use-help-shortcut.ts,
+ * use-open-shortcut.ts, use-browser-shortcut.ts).
+ *
+ * a row missing from this list is not merely unregistered here -- it falls
+ * into `registrationsFor`'s default arm, which returns nothing today and
+ * would silently DOUBLE-register the moment someone gave it a case */
+const APP_LEVEL: readonly KeybindAction[] = ["showHelp", "openMenu", "replayBrowser"];
 
 /** the actions this hook registers through the library: every global one
  * matched on its printed character. the code-matched rows cannot be registered
