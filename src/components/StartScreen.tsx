@@ -3,15 +3,16 @@
 // shell's silhouette so switching between this and AppShell (App.tsx's
 // scene === null branch) reads as the same application, not two skins
 
-import { FileUp, Settings2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { FileUp, FolderSearch, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Identity } from "@/components/shell/TopBar";
 import { PanelHeader } from "@/components/shell/SidePanel";
 import { RecentEntry } from "@/components/RecentEntry";
 import type { SettingsCategory } from "@/components/settings/categories";
+import type { StableStatus } from "@/lib/scene-types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { pickReplay } from "@/lib/openers";
+import { keybindSuffix } from "@/playback/keybinds";
 import { useViewerStore } from "@/state/store";
 
 export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: SettingsCategory) => void }) {
@@ -22,19 +23,22 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 	// a card carries no privilege a browse does not have (docs/adr/0005)
 	const openReplay = useViewerStore((s) => s.openReplay);
 	const clearRecents = useViewerStore((s) => s.clearRecents);
+	const setBrowserOpen = useViewerStore((s) => s.setBrowserOpen);
+	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
+	// the resolved install, read at startup by the store. what makes this
+	// footer able to say "detected" at all -- see the comment below it
+	const stableStatus = useViewerStore((s) => s.stableStatus);
 
 	const recents = settings?.recents ?? [];
 	// a static snapshot, not a ticking clock: this screen never re-renders on
 	// its own between opens, and formatRelativeTime only needs "now" once
 	const nowMs = Date.now();
 
-	// get_settings only ever returns the user's override path -- the app
-	// resolves no install directory of its own (no ipc command does that yet,
-	// see TODO.md's task 20 entry). the null-state footer copy below says "no
-	// path set" rather than "auto-detected": the latter is a past participle,
-	// it reads as "we looked and found it", and that lookup never happens --
-	// don't restore that wording, it was the exact bug this comment guards
-	const stablePath = settings?.osuStablePath ?? null;
+	// the footer says what the app actually resolved, which it can now do:
+	// get_stable_status runs detection outside a load, so "detected" is a
+	// past participle backed by a real lookup rather than the lie the old
+	// copy guarded against. `settings` is still read for the recents above
+	const footer = footerCopy(stableStatus);
 
 	return (
 		<div className="grid h-screen w-screen grid-rows-[48px_minmax(0,1fr)_26px] overflow-hidden bg-surface-viewport font-sans text-[#e4e4e7]">
@@ -112,14 +116,19 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 							))
 						)}
 
+						{/* live where the placeholder stood, in place and in the same
+						shape: this row promised the browser before it existed */}
 						<button
 							type="button"
-							disabled
-							className="mt-1 flex w-full flex-col gap-1 rounded-[9px] border border-dashed border-border px-2.5 py-[9px] text-left disabled:cursor-not-allowed"
+							onClick={() => setBrowserOpen(true)}
+							className="mt-1 flex w-full flex-col gap-1 rounded-[9px] border border-dashed border-border px-2.5 py-[9px] text-left hover:border-border-strong hover:bg-[#16161a]"
 						>
-							<span className="flex items-center justify-between gap-2">
-								<span className="text-[11px] text-[#71717a]">browse local replays</span>
-								<Badge variant="secondary">soon</Badge>
+							<span className="flex items-center gap-1.5">
+								<FolderSearch className="size-3.5 text-[#71717a]" />
+								<span className="text-[11px] text-[#e4e4e7]">browse local replays</span>
+								<span className="ml-auto font-mono text-[10px] text-[#5a5a63]">
+									{keybindSuffix(keybinds, "replayBrowser").trim()}
+								</span>
 							</span>
 							<span className="text-[10px] text-[#8a8a93]">from scores.db and the Replays folder</span>
 						</button>
@@ -129,12 +138,31 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 
 			<footer className="flex min-w-0 items-center gap-1.5 border-t border-border bg-surface-rail px-2.5 font-mono text-[10.5px] text-[#8a8a93]">
 				<span
-					className={`size-[5px] shrink-0 rounded-full ${stablePath !== null ? "bg-[#88b300]" : "bg-[#8a8a93]"}`}
+					className={`size-[5px] shrink-0 rounded-full ${footer.found ? "bg-[#88b300]" : "bg-[#8a8a93]"}`}
 				/>
-				<span>osu! stable {stablePath !== null ? "path set" : "no path set"}</span>
+				<span>osu! stable {footer.state}</span>
 				<span className="text-[#3f3f46]">·</span>
-				<span className="truncate">{stablePath ?? "auto-detect"}</span>
+				<span className="truncate">{footer.detail}</span>
 			</footer>
 		</div>
 	);
+}
+
+/** the footer's three states, in the voice they read in. the null case is
+ * "the probe has not answered yet", which is a moment long at startup and
+ * must not be spelled as a failure */
+function footerCopy(status: StableStatus | null): { found: boolean; state: string; detail: string } {
+	if (status === null) return { found: false, state: "…", detail: "looking for your install" };
+	if (status.status === "notFound") {
+		return {
+			found: false,
+			state: "not found",
+			detail: status.searched.length === 0 ? "nowhere to look" : status.searched.join(" · ")
+		};
+	}
+	return {
+		found: true,
+		state: status.fromOverride ? "path set" : "detected",
+		detail: status.root
+	};
 }
