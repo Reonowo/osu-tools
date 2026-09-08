@@ -14,7 +14,7 @@
 // (it has to work on the start screen too, where this component does not
 // mount), which is above this popover's own lifetime
 
-import { ChevronDown, FolderOpen } from "lucide-react";
+import { ChevronDown, FolderOpen, FolderSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RecentEntry } from "@/components/RecentEntry";
@@ -33,6 +33,7 @@ export function OpenMenu() {
 	const loading = useViewerStore((s) => s.loading);
 	const osrPath = useViewerStore((s) => s.osrPath);
 	const openReplay = useViewerStore((s) => s.openReplay);
+	const setBrowserOpen = useViewerStore((s) => s.setBrowserOpen);
 	const keybinds = useViewerStore((s) => s.effectiveKeybinds);
 
 	// minus the replay already loaded -- the rule and its reasons live in
@@ -90,6 +91,24 @@ export function OpenMenu() {
 				>
 					<FolderOpen className="size-3.5 text-[#71717a]" />
 					{loading ? "loading…" : "browse…"}
+				</button>
+
+				{/* between browse and the recents, which is where it belongs in
+				the order this menu already reads in: pick a file, then pick from
+				everything osu! itself knows about, then the few you opened here */}
+				<button
+					type="button"
+					onClick={() => {
+						setOpen(false);
+						setBrowserOpen(true);
+					}}
+					className="flex w-full shrink-0 items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[12px] font-medium text-[#e4e4e7] hover:bg-[#16161a]"
+				>
+					<FolderSearch className="size-3.5 text-[#71717a]" />
+					browse local replays
+					<span className="ml-auto font-mono text-[10px] text-[#5a5a63]">
+						{keybindSuffix(keybinds, "replayBrowser").trim()}
+					</span>
 				</button>
 
 				<Separator className="shrink-0" />

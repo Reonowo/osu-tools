@@ -6,6 +6,7 @@ import { ExportDialog } from "@/components/ExportDialog";
 import { VideoExportDialog } from "@/components/VideoExportDialog";
 import { HelpOverlay } from "@/components/HelpOverlay";
 import { MismatchDialog } from "@/components/MismatchDialog";
+import { ReplayBrowser } from "@/components/ReplayBrowser";
 import { resolveOpenCategory, type SettingsCategory } from "@/components/settings/categories";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { StartScreen } from "@/components/StartScreen";
@@ -16,6 +17,7 @@ import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
 import { installFocusModality } from "@/playback/focus-modality";
 import { warmBundledSamples } from "@/playback/hitsounds";
+import { useBrowserShortcut } from "@/playback/use-browser-shortcut";
 import { useHelpShortcut } from "@/playback/use-help-shortcut";
 import { useOpenShortcut } from "@/playback/use-open-shortcut";
 import { asksPageZoomReset } from "@/playback/shortcut-guards";
@@ -37,13 +39,15 @@ export default function App() {
 	const osReducesMotion = useViewerStore((s) => s.osReducesMotion);
 
 	// registered here rather than with the other global bindings: those mount
-	// with AppShell, which exists only once a scene is loaded, and both of these
-	// have to be reachable from the start screen -- the keybind list because it
-	// is most useful before you have started, the open accelerator because that
-	// is where a user would first press it (use-help-shortcut.ts,
-	// use-open-shortcut.ts)
+	// with AppShell, which exists only once a scene is loaded, and all three of
+	// these have to be reachable from the start screen -- the keybind list
+	// because it is most useful before you have started, the open accelerator
+	// because that is where a user would first press it, and the replay browser
+	// because with nothing loaded it is the fastest route to a replay
+	// (use-help-shortcut.ts, use-open-shortcut.ts, use-browser-shortcut.ts)
 	useHelpShortcut();
 	useOpenShortcut();
+	useBrowserShortcut();
 
 	function selectCategory(category: SettingsCategory) {
 		lastCategory.current = category;
@@ -193,6 +197,9 @@ export default function App() {
 			which belongs to no component */}
 			<DiscardDialog />
 			<HelpOverlay />
+			{/* app-rooted like the help overlay: its keybind registers here, so
+			it has to be reachable from the start screen too */}
+			<ReplayBrowser onOpenSettings={() => openSettings("general")} />
 			<SettingsDialog
 				category={settingsCategory}
 				onCategoryChange={selectCategory}
