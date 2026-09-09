@@ -12,6 +12,7 @@ pub mod media;
 pub mod osk;
 pub mod osz;
 pub mod scene;
+pub mod second_instance;
 pub mod settings;
 pub mod skin;
 pub mod songs_dir;
@@ -27,11 +28,18 @@ pub fn run() {
     tauri::Builder::default()
         // single-instance must be the first registered plugin (its docs);
         // it is also the primary guard that keeps cache gc race-free
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // a second launch focuses the existing window; forwarding its
-            // argv (file-association open) is plan 4 frontend work (TODO.md)
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            use tauri::Emitter;
+            // a second launch focuses the existing window, and a replay on its
+            // command line goes to the frontend's guarded open (second_instance.rs)
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
+            }
+            if let Some(path) = second_instance::replay_in_argv(&argv, &cwd) {
+                let _ = app.emit(
+                    second_instance::OPEN_REPLAY_EVENT,
+                    path.to_string_lossy().into_owned(),
+                );
             }
         }))
         .plugin(tauri_plugin_opener::init())
