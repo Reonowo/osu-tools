@@ -82,6 +82,9 @@ export interface DerivedScene {
 	/** the object lane's per-object model, index-aligned with
 	 * renderPlan.objects */
 	objectLane: ObjectLaneEntry[];
+	/** the play's dropped slider elements, one fold over objectLane's drop
+	 * lists so the analysis panel's count and the lane's marks cannot disagree */
+	drops: DropCounts;
 	/** the overview strip's below-great marks, height meaning severity */
 	severityTicks: SeverityTick[];
 	/** every moment the combo changed, which is the whole input to the watch
@@ -264,28 +267,72 @@ function markDropped(entry: ObjectLaneEntry, marked: readonly RenderNested[], ma
 	if (mark !== undefined) mark.dropped = true;
 }
 
-/** the hover readout's cause segment for a below-great slider -- `dropped
- * tail`, `dropped 2 ticks + tail` -- worded from the entry's drop state, or
- * null where no cause belongs (not a slider, aggregate outside ok/meh, or
- * nothing recorded dropped). elements list head-to-tail; ticks count from
- * tickDrops, the others from the marks aligned with the object's own
- * head/repeat/tail nested elements */
-export function dropSummary(object: RenderObject, entry: ObjectLaneEntry): string | null {
+/** dropped slider elements by kind: one slider's, or every slider's summed.
+ * only the recorded drops count -- those on sliders whose aggregate landed
+ * ok/meh, since a fully missed slider carries no per-element marks */
+export interface DropCounts {
+	heads: number;
+	repeats: number;
+	ticks: number;
+	tails: number;
+}
+
+export const NO_DROPS: DropCounts = { heads: 0, repeats: 0, ticks: 0, tails: 0 };
+
+/** one entry's drop state counted by kind: ticks from tickDrops, the others
+ * from the marks aligned with the object's own head/repeat/tail nested
+ * elements. null where the entry carries no drop state at all (not a
+ * slider, or aggregate outside ok/meh) */
+function dropCounts(object: RenderObject, entry: ObjectLaneEntry): DropCounts | null {
 	if (object.kind.type !== "slider") return null;
 	if (entry.grade !== "ok" && entry.grade !== "meh") return null;
 	const marked = markedNested(object.kind);
 	const droppedOf = (kind: RenderNested["kind"]) =>
 		marked.filter((n, i) => n.kind === kind && entry.nestedMarks[i]?.dropped === true).length;
+	return {
+		heads: droppedOf("head"),
+		repeats: droppedOf("repeat"),
+		ticks: entry.tickDrops.length,
+		tails: droppedOf("tail")
+	};
+}
+
+/** the play's dropped slider elements, summed over the object lane */
+export function dropTotals(objects: readonly RenderObject[], objectLane: readonly ObjectLaneEntry[]): DropCounts {
+	const total = { ...NO_DROPS };
+	for (let index = 0; index < objectLane.length; index++) {
+		const counts = dropCounts(objects[index], objectLane[index]);
+		if (counts === null) continue;
+		total.heads += counts.heads;
+		total.repeats += counts.repeats;
+		total.ticks += counts.ticks;
+		total.tails += counts.tails;
+	}
+	return total;
+}
+
+/** the wording every drop readout shares -- `tail`, `2 ticks + tail`,
+ * `head + 2 repeats + tick + tail` -- elements listed head-to-tail, or null
+ * when nothing dropped */
+export function describeDrops(counts: DropCounts): string | null {
 	const counted = (count: number, name: string) => (count === 1 ? name : `${count} ${name}s`);
 	const parts: string[] = [];
-	if (droppedOf("head") > 0) parts.push("head");
-	const repeats = droppedOf("repeat");
-	if (repeats > 0) parts.push(counted(repeats, "repeat"));
-	const ticks = entry.tickDrops.length;
-	if (ticks > 0) parts.push(counted(ticks, "tick"));
-	if (droppedOf("tail") > 0) parts.push("tail");
-	if (parts.length === 0) return null;
-	return `dropped ${parts.join(" + ")}`;
+	if (counts.heads > 0) parts.push(counted(counts.heads, "head"));
+	if (counts.repeats > 0) parts.push(counted(counts.repeats, "repeat"));
+	if (counts.ticks > 0) parts.push(counted(counts.ticks, "tick"));
+	if (counts.tails > 0) parts.push(counted(counts.tails, "tail"));
+	return parts.length === 0 ? null : parts.join(" + ");
+}
+
+/** the hover readout's cause segment for a below-great slider -- `dropped
+ * tail`, `dropped 2 ticks + tail` -- worded from the entry's drop state, or
+ * null where no cause belongs (not a slider, aggregate outside ok/meh, or
+ * nothing recorded dropped) */
+export function dropSummary(object: RenderObject, entry: ObjectLaneEntry): string | null {
+	const counts = dropCounts(object, entry);
+	if (counts === null) return null;
+	const words = describeDrops(counts);
+	return words === null ? null : `dropped ${words}`;
 }
 
 /** the scene's HP curve with its lowest point and fail point. gated on an
@@ -303,7 +350,10 @@ function derivedHp(scene: LoadedScene): DerivedHp {
 
 export function deriveScene(scene: LoadedScene): DerivedScene {
 	const objects = scene.renderPlan.objects;
-	const firstAppear = objects.length > 0 ? objects[0].startTime - objects[0].preempt : 0;
+	// the min over every object, not the first's: an object appears at its
+	// start minus its OWN preempt, so a later-starting object with a longer
+	// preempt appears first, and the clock must reach it before it fades in
+	const firstAppear = objects.reduce((min, o) => Math.min(min, o.startTime - o.preempt), Infinity);
 	const lastEnd = objects.reduce((max, o) => Math.max(max, o.endTime), 0);
 	const firstFrame = scene.frames.length > 0 ? scene.frames[0].time : 0;
 	const lastFrame = scene.frames.length > 0 ? scene.frames[scene.frames.length - 1].time : 0;
@@ -427,6 +477,7 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		},
 		judgementsByObject,
 		objectLane,
+		drops: dropTotals(objects, objectLane),
 		severityTicks,
 		severityTargets: severityTargets(severityTicks, objects),
 		comboChanges: comboChanges(scene.simulation.status === "authoritative" ? scene.simulation.events : []),

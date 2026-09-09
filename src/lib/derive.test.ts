@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { testScene } from "../test/scene";
 import type { Grade, HpCurve, JudgementEventDto, LoadedScene, RenderNested, RenderObject } from "./scene-types";
-import { deriveScene, dropSummary, type ObjectLaneEntry } from "./derive";
+import { deriveScene, describeDrops, dropSummary, type ObjectLaneEntry } from "./derive";
 
 describe("deriveScene", () => {
 	describe("hp", () => {
@@ -62,6 +62,19 @@ describe("deriveScene", () => {
 		expect(d.bounds.minTime).toBe(-1500);
 		// max(lastFrame, lastEnd + 800)
 		expect(d.bounds.maxTime).toBe(1800);
+	});
+
+	test("bounds reach an object that appears before the earliest-starting one", () => {
+		// the second object starts later but carries the longer preempt, so it
+		// is the first to appear: 1200 - 3000 = -1800, past the lead-in's -1500
+		const base = testScene();
+		const d = deriveScene(
+			testScene({
+				renderPlan: { ...base.renderPlan, objects: [circle(1000), { ...circle(1200), preempt: 3000 }] }
+			})
+		);
+		expect(d.bounds.minTime).toBe(-1800);
+		expect(d.timelineBounds.minTime).toBe(-1800);
 	});
 
 	test("timelineBounds are the judgement deadline bound, immune to event times", () => {
@@ -734,6 +747,68 @@ describe("dropSummary", () => {
 		expect(dropSummary(object, entryWith([false, false, false, true], [], "great"))).toBeNull();
 		expect(dropSummary(object, entryWith([false, false, false, true], [], "miss"))).toBeNull();
 		expect(dropSummary(circle(1000), { grade: "ok", tether: null, nestedMarks: [], tickDrops: [] })).toBeNull();
+	});
+});
+
+describe("deriveScene drop totals", () => {
+	test("sums the lane's recorded drops by kind across every slider", () => {
+		const d = deriveScene(
+			laneScene(
+				[
+					slider(1000, 1500, [nested("head", 1000), nested("tick", 1250), nested("tail", 1500)]),
+					slider(2000, 2500, [nested("head", 2000), nested("repeat", 2250), nested("tail", 2500)]),
+					slider(3000, 3500, [nested("head", 3000), nested("tail", 3500)])
+				],
+				[
+					event(1100, 0, { type: "sliderHead", hit: false }),
+					event(1250, 0, { type: "sliderTick", hit: false }),
+					event(1464, 0, { type: "sliderTail", hit: true }),
+					event(1500, 0, { type: "sliderAggregate", grade: "meh" }),
+					event(2010, 1, { type: "sliderHead", hit: true }),
+					event(2250, 1, { type: "sliderRepeat", hit: false, repeatIndex: 0 }),
+					event(2464, 1, { type: "sliderTail", hit: false }),
+					event(2500, 1, { type: "sliderAggregate", grade: "meh" }),
+					event(3010, 2, { type: "sliderHead", hit: true }),
+					event(3464, 2, { type: "sliderTail", hit: false }),
+					event(3500, 2, { type: "sliderAggregate", grade: "ok" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.drops).toEqual({ heads: 1, repeats: 1, ticks: 1, tails: 2 });
+	});
+
+	test("a fully missed slider's elements are not recorded, so they are not counted", () => {
+		const d = deriveScene(
+			laneScene(
+				[slider(1000, 1500, [nested("head", 1000), nested("tick", 1250), nested("tail", 1500)])],
+				[
+					event(1400, 0, { type: "sliderHead", hit: false }),
+					event(1250, 0, { type: "sliderTick", hit: false }),
+					event(1464, 0, { type: "sliderTail", hit: false }),
+					event(1500, 0, { type: "sliderAggregate", grade: "miss" })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.drops).toEqual({ heads: 0, repeats: 0, ticks: 0, tails: 0 });
+	});
+
+	test("an unsimulated scene counts nothing", () => {
+		const d = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+		expect(d.drops).toEqual({ heads: 0, repeats: 0, ticks: 0, tails: 0 });
+	});
+});
+
+describe("describeDrops", () => {
+	test("lists the kinds head-to-tail, pluralising counts above one", () => {
+		expect(describeDrops({ heads: 0, repeats: 0, ticks: 1, tails: 3 })).toBe("tick + 3 tails");
+		expect(describeDrops({ heads: 2, repeats: 1, ticks: 0, tails: 0 })).toBe("2 heads + repeat");
+		expect(describeDrops({ heads: 1, repeats: 2, ticks: 1, tails: 1 })).toBe("head + 2 repeats + tick + tail");
+	});
+
+	test("answers null when nothing dropped", () => {
+		expect(describeDrops({ heads: 0, repeats: 0, ticks: 0, tails: 0 })).toBeNull();
 	});
 });
 
