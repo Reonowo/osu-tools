@@ -49,7 +49,9 @@ export function remapSelection(selection: readonly number[], changes: FrameChang
 
 /** remaps a queued computed payload through a landed delta: move and delete
  * targets shift with the splice, members whose target was deleted drop,
- * inserts and metadata pass through. null when nothing actionable remains */
+ * inserts and metadata pass through. null only when the payload empties
+ * entirely -- a metadata member survives its commit's frame members all
+ * dying, since it never depended on the frames the splice removed */
 export function remapQueuedOps(ops: EditOp[], changes: FrameChanges): EditOp[] | null {
 	const out: EditOp[] = [];
 	for (const op of ops) {
@@ -82,8 +84,5 @@ export function remapQueuedOps(ops: EditOp[], changes: FrameChanges): EditOp[] |
 				out.push(op);
 		}
 	}
-	const actionable = out.some((op) => op.kind !== "setPlayerName" && op.kind !== "setTimestamp");
-	const metadataOnly = ops.every((op) => op.kind === "setPlayerName" || op.kind === "setTimestamp");
-	if (out.length === 0 || (!actionable && !metadataOnly)) return null;
-	return out;
+	return out.length === 0 ? null : out;
 }

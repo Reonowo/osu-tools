@@ -79,6 +79,19 @@ describe("remapQueuedOps", () => {
 		expect(remapQueuedOps([{ kind: "deleteFrames", indices: [1] }], mixed)).toBeNull();
 	});
 
+	test("a metadata member outlives its commit's frame members all dying", () => {
+		// the move's only target is the deleted frame; the rename never
+		// depended on it and stays queued alone
+		const ops = remapQueuedOps(
+			[
+				{ kind: "moveFrames", moves: [{ index: 1, x: 5, y: 5 }] },
+				{ kind: "setPlayerName", name: "p" }
+			],
+			mixed
+		);
+		expect(ops).toEqual([{ kind: "setPlayerName", name: "p" }]);
+	});
+
 	test("inserts and metadata pass through untouched", () => {
 		const ops = remapQueuedOps(
 			[
