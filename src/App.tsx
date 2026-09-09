@@ -13,7 +13,7 @@ import { StartScreen } from "@/components/StartScreen";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { invokeSetViewerPrefs } from "@/lib/ipc";
 import { rootMotionAttributes } from "@/lib/motion";
-import { installDropHandler, pickBeatmapFor } from "@/lib/openers";
+import { installDropHandler, installSecondInstanceHandler, pickBeatmapFor } from "@/lib/openers";
 import { describeIpcError } from "@/state/errors";
 import { installFocusModality } from "@/playback/focus-modality";
 import { warmBundledSamples } from "@/playback/hitsounds";
@@ -60,6 +60,11 @@ export default function App() {
 
 	useEffect(() => {
 		const cleanup = installDropHandler();
+		return () => void cleanup.then((unlisten) => unlisten());
+	}, []);
+
+	useEffect(() => {
+		const cleanup = installSecondInstanceHandler();
 		return () => void cleanup.then((unlisten) => unlisten());
 	}, []);
 

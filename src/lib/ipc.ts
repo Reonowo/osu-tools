@@ -208,6 +208,14 @@ export function invokeRedetectVideoEncoder(): Promise<Settings> {
 	return invoke<Settings>("redetect_video_encoder");
 }
 
+/** subscribes to a second launch's open request: the `.osr` path on the
+ * command line of an instance that found this one already running
+ * (src-tauri/src/second_instance.rs). only the path travels, exactly as
+ * invokeLoadReplay takes only the path */
+export function onOpenReplayRequest(handler: (osrPath: string) => void): Promise<UnlistenFn> {
+	return listen<string>("open-replay", (event) => handler(event.payload));
+}
+
 /** subscribes to the one video progress channel. every operation --
  * export stages and install alike -- reports here, each under its own job id */
 export function onVideoProgress(handler: (event: VideoProgressEvent) => void): Promise<UnlistenFn> {

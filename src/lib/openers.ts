@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { toast } from "sonner";
+import { onOpenReplayRequest } from "./ipc";
 import { viewerStore } from "../state/store";
 
 export async function pickReplay(): Promise<void> {
@@ -21,6 +22,13 @@ export async function pickBeatmapFor(osrPath: string): Promise<void> {
 
 function extensionOf(path: string): string {
 	return path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+}
+
+/** routes a second launch's replay (double-clicking an `.osr` while the app
+ * runs) through the same guarded open a drop takes, so the discard prompt
+ * stands between it and an edited document; returns the unlisten fn */
+export function installSecondInstanceHandler(): Promise<() => void> {
+	return onOpenReplayRequest((osrPath) => void viewerStore.getState().openReplay(osrPath));
 }
 
 /** routes native file drops; returns the unlisten fn */
