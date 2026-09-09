@@ -3,7 +3,14 @@
 //! rename semantics when overwrite consent is absent, so a destination
 //! appearing mid-write fails typed instead of being clobbered. any failure
 //! deletes the temp file; the destination is only ever a complete file or
-//! the untouched original, never truncated or partial
+//! the untouched original, never truncated or partial.
+//!
+//! that is the whole claim: complete-or-untouched, not durability. the file's
+//! contents are flushed, but the rename is never fsynced through its parent
+//! directory, so a power loss right after the publish can lose it -- and
+//! nothing in any testing tier reaches that window to verify it either way.
+//! ruled deliberately, to keep the promise the same on every platform
+//! (TODO.md, "Export claims non-truncation, not durability")
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
