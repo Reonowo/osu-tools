@@ -20,7 +20,7 @@ import {
 	lifeBarGraphNote,
 	rowVerdict
 } from "@/lib/integrity";
-import type { DerivedHp } from "@/lib/derive";
+import { describeDrops, type DerivedHp } from "@/lib/derive";
 import { formatLatticeStep, type Lattice, type OffLatticeSummary } from "@/lib/lattice";
 import type { Incompleteness, IntegrityReport } from "@/lib/scene-types";
 import { useViewerStore } from "@/state/store";
@@ -432,6 +432,12 @@ export function AnalysisPanel() {
 					<StatRow label="mean hold" value={`${Math.round(analysis.meanHoldMs)}ms`} />
 					<StatRow label="frames" value={analysis.frameCount.toLocaleString()} />
 					<StatRow label="median Δt" value={`${analysis.medianDeltaMs.toFixed(1)}ms`} />
+					{/* the slider elements the cursor let go of, summed off the object
+					lane's own drop lists in the lane's own words (derive.ts's
+					describeDrops), so this row and a slider's hover readout can
+					never disagree. only sliders that still scored carry drop
+					state -- a fully missed slider says everything with its miss */}
+					{authoritative && <StatRow label="dropped" value={describeDrops(derived.drops) ?? "none"} />}
 				</dl>
 
 				{scene.integrity !== null && (
