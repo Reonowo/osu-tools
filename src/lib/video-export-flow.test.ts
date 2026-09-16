@@ -33,18 +33,24 @@ describe("videoExportGate", () => {
 		expect(videoExportGate(sceneWith({})).available).toBe(true);
 		// modded plays render (the renderer applies mods itself)
 		expect(
-			videoExportGate(sceneWith({ simulation: { status: "notSimulated", reason: "unsupportedMods" } })).available
+			videoExportGate(
+				sceneWith({
+					simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
+				})
+			).available
 		).toBe(true);
 	});
 
 	test("a consented mismatch is refused with the stated reason", () => {
-		const gate = videoExportGate(sceneWith({ simulation: { status: "notSimulated", reason: "beatmapMismatch" } }));
+		const gate = videoExportGate(
+			sceneWith({ simulation: { status: "notSimulated", reason: { kind: "beatmapMismatch" } } })
+		);
 		expect(gate).toEqual({ available: false, reason: "video export needs a matching beatmap" });
 	});
 
 	test("the menu carries the gate's refusal on the video entry only", () => {
 		const entries = exportMenuEntries(
-			sceneWith({ simulation: { status: "notSimulated", reason: "beatmapMismatch" } })
+			sceneWith({ simulation: { status: "notSimulated", reason: { kind: "beatmapMismatch" } } })
 		);
 		expect(entries.map((e) => e.id)).toEqual(["replay", "video"]);
 		expect(entries[0].disabledReason).toBeNull();

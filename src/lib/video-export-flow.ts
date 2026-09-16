@@ -37,7 +37,7 @@ export type VideoExportGate = { available: true } | { available: false; reason: 
  * one the replay carries, and an external renderer resolves beatmaps by
  * exactly that hash. TODO.md records the deferred md5-rewrite alternative */
 export function videoExportGate(scene: LoadedScene): VideoExportGate {
-	if (scene.simulation.status === "notSimulated" && scene.simulation.reason === "beatmapMismatch") {
+	if (scene.simulation.status === "notSimulated" && scene.simulation.reason.kind === "beatmapMismatch") {
 		return { available: false, reason: "video export needs a matching beatmap" };
 	}
 	return { available: true };
