@@ -32,6 +32,10 @@ pub struct FakeRenderer {
     /// the prepared inputs the last render received, for asserting the
     /// orchestrator's handoff
     pub last_inputs: Mutex<Option<RenderInputs>>,
+    /// the temp `.osr` the last render was handed, read while it still
+    /// exists -- the job dir is cleaned after the render, so a test that
+    /// wants to know what was staged cannot read the path afterwards
+    pub last_osr_bytes: Mutex<Option<Vec<u8>>>,
 }
 
 pub const FAKE_VIDEO_BYTES: &[u8] = b"fake rendered video";
@@ -45,6 +49,7 @@ impl FakeRenderer {
                 percents: vec![0.0, 50.0, 100.0],
             }),
             last_inputs: Mutex::new(None),
+            last_osr_bytes: Mutex::new(None),
         }
     }
 }
@@ -100,6 +105,7 @@ impl VideoRenderer for FakeRenderer {
         cancel: &CancelToken,
     ) -> Result<PathBuf, IpcError> {
         *self.last_inputs.lock().expect("fake inputs lock") = Some(inputs.clone());
+        *self.last_osr_bytes.lock().expect("fake osr lock") = std::fs::read(&inputs.osr_path).ok();
         match &*self.script.lock().expect("fake script lock") {
             FakeScript::Succeed { percents } => {
                 for percent in percents {

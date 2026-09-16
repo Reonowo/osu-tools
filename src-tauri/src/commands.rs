@@ -17,10 +17,10 @@ use crate::settings::{
 use crate::skin::{SkinEntry, SkinEra, SkinLocator, SkinManifest, SkinSource};
 use crate::state::AppState;
 use engine::beatmap::ProcessedBeatmap;
-use engine::formats::osr::FIRST_LAZER_VERSION;
+use engine::configuration::{Capability, PlayConfiguration};
 use engine::replay::frames::ReplayFrame;
-use engine::score::{DrainRateSearch, HealthCurve, ScoreContext};
-use engine::simulation::{simulate, JudgementTimeline};
+use engine::score::ScoreContext;
+use engine::simulation::simulate;
 
 fn join_err(task: &str, e: tauri::Error) -> IpcError {
     IpcError::Internal {
@@ -37,8 +37,11 @@ fn join_err(task: &str, e: tauri::Error) -> IpcError {
 struct Resimulation {
     processed: Arc<ProcessedBeatmap>,
     snapshot: Vec<ReplayFrame>,
+    /// the play configuration, which decides the profile the re-judgement
+    /// runs under and the status it publishes as
+    configuration: PlayConfiguration,
     score_context: ScoreContext,
-    search: Option<DrainRateSearch>,
+    drain: Option<crate::load::DrainCache>,
     /// the session's cached stars, for the same reason the search is cached:
     /// they read the map alone, so an edit re-walks the score curve over them
     /// rather than re-deriving them
@@ -50,8 +53,9 @@ impl Resimulation {
         Resimulation {
             processed: Arc::clone(&session.processed),
             snapshot: session.document.frames().to_vec(),
+            configuration: session.configuration.clone(),
             score_context: session.score_context,
-            search: session.drain_search.clone(),
+            drain: session.drain.clone(),
             peppy_stars: session.peppy_stars,
         }
     }
@@ -67,25 +71,33 @@ impl Resimulation {
         let Resimulation {
             processed,
             snapshot,
+            configuration,
             score_context,
-            search,
+            drain,
             peppy_stars,
         } = self;
         let folded = tauri::async_runtime::spawn_blocking(move || {
-            let timeline = simulate(&processed, &snapshot)?;
-            // a simulatable session always carries the search; recomputing it
-            // here rather than unwrapping keeps the fold total if it ever does
-            // not, at the cost of one search on a path nothing reaches
-            let search =
-                search.unwrap_or_else(|| engine::score::drain_rate_search(&processed, &score_context));
-            let health =
-                engine::score::derive_health_with_search(&processed, &timeline, &score_context, search);
-            let score = crate::load::score_curve_for(&timeline, &processed, peppy_stars);
-            Ok::<_, engine::EngineError>(Refold {
-                timeline,
-                health,
-                score,
-            })
+            let mut timeline = simulate(&processed, &snapshot, &configuration)?;
+            // a session with a timeline always carries the search; recomputing
+            // it here rather than unwrapping keeps the fold total if it ever
+            // does not, at the cost of one search on a path nothing reaches
+            let drain = drain
+                .unwrap_or_else(|| crate::load::search_drain(&processed, &configuration, &score_context));
+            let folds = crate::load::fold_timeline(
+                &processed,
+                &mut timeline,
+                &configuration,
+                &score_context,
+                &drain,
+                peppy_stars,
+            );
+            let simulation = crate::scene::SimulationDto::simulated(
+                &configuration.capabilities.simulate,
+                &timeline,
+                folds.hp_curve,
+                folds.score.as_deref(),
+            );
+            Ok::<_, engine::EngineError>(Refold { simulation })
         })
         .await;
         match folded {
@@ -98,12 +110,12 @@ impl Resimulation {
     }
 }
 
-/// what one re-judgement produces: the timeline and the two folds over it the
-/// authoritative wire type carries
+/// what one re-judgement produces: the timeline and the two folds over it,
+/// already in the wire shape under the status the configuration resolved
+/// (authoritative or approximate), so the three commands that re-simulate
+/// publish it identically
 struct Refold {
-    timeline: JudgementTimeline,
-    health: HealthCurve,
-    score: Option<Vec<engine::score::ScoreStep>>,
+    simulation: crate::scene::SimulationDto,
 }
 
 /// media files ride the asset protocol; the runtime scope allowance is what
@@ -556,23 +568,25 @@ pub fn clear_recents(state: State<'_, AppState>) -> Result<Settings, IpcError> {
     Ok(settings.clone())
 }
 
-/// the frame/keypress editing gate: NotSimulated scenes cannot re-derive
-/// results, and a lazer-native play would re-derive under the wrong rules
-/// profile (TODO.md's lazer-native item). metadata ops never pass through here
+/// the frame/keypress editing gate: the configuration's own answer, with
+/// its own reason -- the same string the frontend shows in a tooltip, since
+/// both read the same field. metadata ops never pass through here
 fn frame_edit_gate(session: &SessionState) -> Result<(), IpcError> {
-    if !session.simulatable {
-        return Err(IpcError::NotEditable {
-            reason: "this replay was not simulated, so frame edits cannot re-derive its results".into(),
-        });
+    capability_gate(&session.configuration.capabilities.edit_frames)
+}
+
+/// the regenerating export's gate, on the same terms
+fn regenerate_gate(session: &SessionState) -> Result<(), IpcError> {
+    capability_gate(&session.configuration.capabilities.regenerate_export)
+}
+
+fn capability_gate(capability: &Capability) -> Result<(), IpcError> {
+    match capability {
+        Capability::Allowed => Ok(()),
+        Capability::Refused { reason } => Err(IpcError::NotEditable {
+            reason: reason.clone(),
+        }),
     }
-    if session.document.header().version >= FIRST_LAZER_VERSION {
-        return Err(IpcError::NotEditable {
-            reason: "lazer-native replays would re-derive their header under the wrong rules profile; \
-                     metadata editing stays available"
-                .into(),
-        });
-    }
-    Ok(())
 }
 
 /// pushes the new label (clearing redo labels, as the document cleared its
@@ -682,16 +696,11 @@ pub async fn apply_edit(
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok(Refold {
-            timeline,
-            health,
-            score,
-        }) => {
+        Ok(Refold { simulation }) => {
             session.document.commit_last();
             session.revision += 1;
             sync_labels(session, Some(label));
-            session.simulation =
-                crate::scene::SimulationDto::authoritative(&timeline, &health, score.as_deref());
+            session.simulation = simulation;
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -735,7 +744,7 @@ async fn history_step(
                 HistoryDirection::Redo => "nothing to redo".into(),
             },
         })?;
-        if !(session.simulatable && edit::frame_changed(&report)) {
+        if !(session.configuration.has_timeline() && edit::frame_changed(&report)) {
             session.revision += 1;
             move_history_label(session, &direction);
             let frames = edit::frame_changes(&report, session.document.frames());
@@ -754,15 +763,10 @@ async fn history_step(
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok(Refold {
-            timeline,
-            health,
-            score,
-        }) => {
+        Ok(Refold { simulation }) => {
             session.revision += 1;
             move_history_label(session, &direction);
-            session.simulation =
-                crate::scene::SimulationDto::authoritative(&timeline, &health, score.as_deref());
+            session.simulation = simulation;
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -817,7 +821,7 @@ pub async fn revert_all(state: State<'_, AppState>, epoch: u64) -> Result<EditDe
             // already at the baseline: nothing changed
             return Ok(assemble_delta(session, None, None));
         };
-        if !session.simulatable {
+        if !session.configuration.has_timeline() {
             session.document.commit_last();
             session.revision += 1;
             sync_labels(session, Some("revert all".into()));
@@ -836,16 +840,11 @@ pub async fn revert_all(state: State<'_, AppState>, epoch: u64) -> Result<EditDe
         return Err(IpcError::StaleSession);
     }
     match sim {
-        Ok(Refold {
-            timeline,
-            health,
-            score,
-        }) => {
+        Ok(Refold { simulation }) => {
             session.document.commit_last();
             session.revision += 1;
             sync_labels(session, Some("revert all".into()));
-            session.simulation =
-                crate::scene::SimulationDto::authoritative(&timeline, &health, score.as_deref());
+            session.simulation = simulation;
             let frames = edit::frame_changes(&report, session.document.frames());
             let simulation = Some(session.simulation.clone());
             Ok(assemble_delta(session, frames, simulation))
@@ -885,10 +884,31 @@ enum PreparedExport {
     Resimulate {
         frames: Vec<engine::replay::frames::ReplayFrame>,
         processed: Arc<engine::beatmap::ProcessedBeatmap>,
+        configuration: PlayConfiguration,
         score_context: engine::score::ScoreContext,
+        /// the session's cached drain search, which the native export's
+        /// rank reads: a play that fails is F
+        drain: Option<crate::load::DrainCache>,
+        /// the source's own block, whose user id and pauses a native
+        /// regeneration carries
+        source_block: Option<engine::formats::score_info::ScoreInfo>,
         revision: u64,
     },
 }
+
+/// what a regenerating export derived, under the profile the document's
+/// play runs under: stable's header fields, or lazer's header projection
+/// with a fresh block
+enum Regenerated {
+    Stable(engine::score::DerivedFields),
+    /// the fields plus the instant they stop at, when the play failed
+    Native(engine::score::NativeExportFields, Option<f64>),
+}
+
+/// the identifier a regenerated block names as its writing client: this
+/// app, never the source's client, since the source's client did not
+/// compute what the block now claims
+pub const CLIENT_VERSION: &str = concat!("osu-replay-editor ", env!("CARGO_PKG_VERSION"));
 
 /// export works end to end here: the three-path branch on the document's
 /// dirty split, the derived-field regeneration for frame-dirty documents
@@ -937,16 +957,18 @@ async fn prepared_export_bytes(
         if !session.document.frames_dirty() {
             PreparedExport::Encoded(session.document.export_with_derived(None)?)
         } else {
-            // a frame-dirty document normally implies the frame-edit gate
-            // passed; the one exception is revert_all's marker (Op::Restore
-            // dirties both kinds on any scene), where re-derivation is
-            // impossible without an authoritative simulation -- refuse typed
-            // rather than deriving from a non-authoritative timeline
-            frame_edit_gate(session)?;
+            // a frame-dirty document implies the frame-edit gate passed for
+            // the edit that dirtied it (a reverted document reads clean and
+            // never reaches here); the regenerating export has its own
+            // capability, checked here with the configuration's own reason
+            regenerate_gate(session)?;
             PreparedExport::Resimulate {
                 frames: session.document.frames().to_vec(),
                 processed: Arc::clone(&session.processed),
+                configuration: session.configuration.clone(),
                 score_context: session.score_context,
+                drain: session.drain.clone(),
+                source_block: session.document.file().trailer.score_info().cloned(),
                 revision: session.revision,
             }
         }
@@ -957,23 +979,62 @@ async fn prepared_export_bytes(
         PreparedExport::Resimulate {
             frames,
             processed,
+            configuration,
             score_context,
+            drain,
+            source_block,
             revision,
         } => {
             // phase 2: re-simulate the final frames and derive every field
-            // off the lock
+            // off the lock, under the play's own profile
             let sim_processed = Arc::clone(&processed);
             let (derived_frames, derived) = tauri::async_runtime::spawn_blocking(move || {
-                let timeline = simulate(&sim_processed, &frames).map_err(|e| IpcError::InvalidEdit {
+                let mut timeline = simulate(&sim_processed, &frames, &configuration).map_err(|e| IpcError::InvalidEdit {
                     message: format!("the edited replay exceeded simulation limits: {e}"),
                 })?;
-                let wide = engine::score::derive_score(&sim_processed, &timeline, &score_context)?;
-                let narrowed = engine::score::DerivedFields::narrow(&wide).map_err(|overflow| {
-                    IpcError::ExportOverflow {
-                        field: overflow.field.into(),
+                let overflow = |overflow: engine::score::OverflowField| IpcError::ExportOverflow {
+                    field: overflow.field.into(),
+                };
+                let derived = match configuration.simulated_profile() {
+                    Some(engine::configuration::RulesProfile::Native) => {
+                        // the health fold decides the rank: a play that
+                        // fails is F whatever its accuracy reads
+                        let drain = drain.unwrap_or_else(|| {
+                            crate::load::search_drain(&sim_processed, &configuration, &score_context)
+                        });
+                        let folds = crate::load::fold_timeline(
+                            &sim_processed,
+                            &mut timeline,
+                            &configuration,
+                            &score_context,
+                            &drain,
+                            None,
+                        );
+                        // a play that failed exports what lazer's processor
+                        // counted up to the fail, never the whole-timeline
+                        // fold the panels display -- the same truncation the
+                        // integrity report compares a rank-F block under
+                        let truncated = folds
+                            .fail_event_index
+                            .and_then(|index| engine::simulation::outcome_up_to(&sim_processed, &timeline, index));
+                        let identity = engine::score::CarriedIdentity::from_source(source_block.as_ref());
+                        let fields = engine::score::derive_native_export(
+                            &timeline,
+                            timeline.totals.rank,
+                            truncated.as_ref(),
+                            &configuration.mods,
+                            &identity,
+                            CLIENT_VERSION,
+                        )
+                        .map_err(overflow)?;
+                        Regenerated::Native(fields, truncated.as_ref().and(folds.fail_time))
                     }
-                })?;
-                Ok::<_, IpcError>((frames, narrowed))
+                    _ => {
+                        let wide = engine::score::derive_score(&sim_processed, &timeline, &score_context)?;
+                        Regenerated::Stable(engine::score::DerivedFields::narrow(&wide).map_err(overflow)?)
+                    }
+                };
+                Ok::<_, IpcError>((frames, derived))
             })
             .await
             .map_err(|e| join_err("export derivation", e))??;
@@ -1007,8 +1068,17 @@ async fn prepared_export_bytes(
             if !session.document.frames_dirty() {
                 return Err(IpcError::StaleSession);
             }
-            let bytes = session.document.export_with_derived(Some(&derived))?;
-            Ok((bytes, Some(crate::scene::RegeneratedDto::from(&derived))))
+            let (bytes, summary) = match &derived {
+                Regenerated::Stable(fields) => (
+                    session.document.export_with_derived(Some(fields))?,
+                    crate::scene::RegeneratedDto::from(fields),
+                ),
+                Regenerated::Native(fields, truncated_at) => (
+                    session.document.export_regenerated_native(fields)?,
+                    crate::scene::RegeneratedDto::native(&fields.header, *truncated_at),
+                ),
+            };
+            Ok((bytes, Some(summary)))
         }
     }
 }
@@ -1201,7 +1271,7 @@ pub async fn export_video<R: Runtime>(
         if matches!(
             session.simulation,
             crate::scene::SimulationDto::NotSimulated {
-                reason: crate::scene::NotSimulatedReason::BeatmapMismatch,
+                reason: engine::configuration::RefusalReason::BeatmapMismatch,
             }
         ) {
             return Err(IpcError::StagingFailed {
@@ -1769,7 +1839,7 @@ mod tests {
         let session = guard.as_ref().unwrap();
         assert_eq!(session.epoch, second.epoch);
         assert_eq!(session.revision, 0);
-        assert!(session.simulatable);
+        assert!(session.configuration.is_authoritative());
         assert!(session.undo_labels.is_empty() && session.redo_labels.is_empty());
     }
 
@@ -2474,7 +2544,8 @@ Name: Audible
         // settings.rs, load.rs); this is the one that fails as "the app
         // silently loaded the wrong beatmap"
         use crate::error::Warning;
-        use crate::scene::{NotSimulatedReason, SimulationDto};
+        use crate::scene::SimulationDto;
+        use engine::configuration::RefusalReason;
 
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("config");
@@ -2548,7 +2619,7 @@ Name: Audible
         assert!(matches!(
             &reopened.simulation,
             SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::BeatmapMismatch
+                reason: RefusalReason::BeatmapMismatch
             }
         ));
 
@@ -2700,7 +2771,7 @@ Name: Audible
             guard
                 .as_ref()
                 .expect("a scene is installed")
-                .drain_search
+                .drain
                 .clone()
                 .expect("a simulatable session caches its drain-rate search")
         };
@@ -2732,7 +2803,7 @@ Name: Audible
 
         let after = {
             let guard = state.session.lock().expect("session lock");
-            guard.as_ref().unwrap().drain_search.clone().unwrap()
+            guard.as_ref().unwrap().drain.clone().unwrap()
         };
         assert_eq!(after, search, "no edit rewrites the cached search");
     }
@@ -3005,22 +3076,254 @@ Name: Audible
     }
 
     #[test]
-    fn lazer_native_scenes_refuse_frame_ops() {
+    fn lazer_native_scenes_accept_every_frame_op_and_rederive_natively() {
+        // the flip at the command seam: a lazer-native NoMod scene opens
+        // both gates, and a move, an insert, a delete and a keypress each
+        // land and re-derive -- events, totals with the statistics map, the
+        // hp curve and the score curve -- with undo, redo and revert-all
+        // behaving as on a stable scene
         let dir = tempfile::tempdir().unwrap();
         let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
         let scene = editable_scene(&app, dir.path(), 0, 30_000_001);
-        let err = tauri::async_runtime::block_on(apply_edit(
+        assert!(scene.configuration.capabilities.edit_frames.allowed);
+        assert!(scene.configuration.capabilities.regenerate_export.allowed);
+        let native_totals = |simulation: &crate::scene::SimulationDto| match simulation {
+            crate::scene::SimulationDto::Authoritative {
+                totals,
+                hp_curve,
+                score_curve,
+                events,
+            } => {
+                assert!(!events.is_empty());
+                assert!(!hp_curve.is_empty());
+                assert!(score_curve.is_some());
+                totals.clone()
+            }
+            other => panic!("expected an authoritative simulation, got {other:?}"),
+        };
+        let loaded = native_totals(&scene.simulation);
+        assert!(loaded.statistics.is_some(), "the native totals carry the statistics map");
+
+        let ops = [
+            ("move", move_op(5, 200.0, 150.0)),
+            (
+                "insert",
+                crate::edit::EditOp::InsertFrames {
+                    frames: vec![crate::scene::FrameDto {
+                        time: 40.0,
+                        x: 1.0,
+                        y: 1.0,
+                        buttons: 1,
+                    }],
+                },
+            ),
+            ("delete", crate::edit::EditOp::DeleteFrames { indices: vec![2] }),
+            (
+                "press",
+                crate::edit::EditOp::SetButtons {
+                    sets: vec![crate::edit::ButtonSet { index: 3, buttons: 2 }],
+                },
+            ),
+        ];
+        let mut revision = 0;
+        for (label, op) in ops {
+            let delta = tauri::async_runtime::block_on(apply_edit(
+                app.state(),
+                scene.epoch,
+                revision,
+                vec![op],
+                label.into(),
+            ))
+            .unwrap_or_else(|e| panic!("{label} lands on a native scene: {e:?}"));
+            revision = delta.revision;
+            assert!(delta.frames_dirty, "{label} dirties the frames");
+            let totals = native_totals(&delta.simulation.expect("a frame op re-simulates"));
+            assert!(totals.statistics.is_some(), "{label}: the re-derivation carries the map");
+        }
+
+        let undone = tauri::async_runtime::block_on(undo(app.state(), scene.epoch)).unwrap();
+        native_totals(&undone.simulation.expect("undo re-simulates"));
+        let redone = tauri::async_runtime::block_on(redo(app.state(), scene.epoch)).unwrap();
+        native_totals(&redone.simulation.expect("redo re-simulates"));
+        let reverted = tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+        assert!(!reverted.dirty);
+        let restored = native_totals(&reverted.simulation.expect("revert re-simulates"));
+        assert_eq!(restored.statistics, loaded.statistics, "the baseline's own map comes back");
+    }
+
+    #[test]
+    fn a_lazer_nomod_scene_is_authoritative_and_regenerates_a_block_on_a_frame_edit() {
+        // the command seam over the flipped profile: an authoritative native
+        // timeline with the statistics map; the video export staging the
+        // source bytes while the scene is pristine; a metadata op carried
+        // with the block byte for byte; a frame op regenerating the header
+        // projection and a fresh block at the encoder's latest version,
+        // which the video export then stages too; revert-all back to
+        // passthrough
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::video::fake::FakeRenderer::new(true));
+        let app = mock_app_with_renderer(dir.path().join("config"), dir.path().join("cache"), Arc::clone(&fake));
+        let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("stacking-v14.osu")).unwrap();
+        let md5 = format!("{:x}", md5::compute(&osu_bytes));
+        std::fs::write(dir.path().join("map.osu"), &osu_bytes).unwrap();
+        write_fixture_audio(dir.path());
+        let osr_path = dir.path().join("replay.osr");
+        std::fs::write(
+            &osr_path,
+            crate::testutil::osr_bytes_with_trailer(
+                &md5,
+                0,
+                Some(many_actions()),
+                30000016,
+                crate::testutil::lazer_trailer(&[]),
+            ),
+        )
+        .unwrap();
+        let source = std::fs::read(&osr_path).unwrap();
+        let scene = tauri::async_runtime::block_on(load_replay_with_beatmap(
+            app.handle().clone(),
+            app.state(),
+            osr_path.display().to_string(),
+            dir.path().join("map.osu").display().to_string(),
+            false,
+        ))
+        .unwrap();
+
+        match &scene.simulation {
+            crate::scene::SimulationDto::Authoritative {
+                events,
+                totals,
+                hp_curve,
+                score_curve,
+            } => {
+                assert!(!events.is_empty());
+                assert!(totals.count_300 + totals.count_100 + totals.count_50 + totals.count_miss > 0);
+                assert!(totals.statistics.as_ref().is_some_and(|s| !s.is_empty()));
+                assert!(!hp_curve.is_empty());
+                assert!(score_curve.is_some());
+            }
+            other => panic!("expected an authoritative simulation, got {other:?}"),
+        }
+        assert!(scene.configuration.capabilities.edit_frames.allowed);
+        assert!(scene.configuration.capabilities.regenerate_export.allowed);
+        assert_eq!(
+            scene.integrity.as_ref().map(|i| i.profile),
+            Some(engine::configuration::RulesProfile::Native)
+        );
+
+        // the video export of the unedited scene stages the source bytes
+        tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            scene.epoch,
+            dir.path().join("out.mp4").display().to_string(),
+        ))
+        .unwrap();
+        assert_eq!(fake.last_osr_bytes.lock().unwrap().clone().unwrap(), source);
+
+        // a metadata op lands, and the replay export is carried with the
+        // block byte for byte
+        let delta = tauri::async_runtime::block_on(apply_edit(
             app.state(),
             scene.epoch,
             0,
+            vec![rename_op("renamed")],
+            "rename".into(),
+        ))
+        .unwrap();
+        assert!(delta.metadata_dirty && !delta.frames_dirty);
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none());
+        let out = engine::formats::osr::decode_osr(&std::fs::read(&dest).unwrap()).unwrap();
+        assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
+        let original = engine::formats::osr::decode_osr(&source).unwrap();
+        assert_eq!(out.trailer, original.trailer);
+
+        // a frame op regenerates: lazer's header projection and a fresh
+        // block at the encoder's latest version, carrying the source's user
+        // id and this app's client version
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            delta.revision,
             vec![move_op(5, 200.0, 150.0)],
             "move".into(),
         ))
-        .unwrap_err();
-        match err {
-            IpcError::NotEditable { reason } => assert!(reason.contains("lazer")),
-            other => panic!("expected NotEditable, got {other:?}"),
-        }
+        .unwrap();
+        let regenerated_path = dir.path().join("regenerated.osr");
+        let result = export_to(&app, scene.epoch, &regenerated_path, false).unwrap();
+        let reported = result.regenerated.expect("a frame-dirty native export regenerates");
+        let bytes = std::fs::read(&regenerated_path).unwrap();
+        let out = engine::formats::osr::decode_osr(&bytes).unwrap();
+        assert_eq!(out.header.version, engine::formats::osr::LATEST_LAZER_VERSION);
+        assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
+        assert_eq!((out.header.count_geki, out.header.count_katsu), (0, 0));
+        assert_eq!(out.header.count_300, reported.count_300);
+        assert_eq!(out.header.total_score, reported.total_score);
+        assert_eq!(out.header.max_combo, reported.max_combo);
+        assert_eq!(out.header.life_graph.as_deref(), Some(""));
+        let block = out.trailer.score_info().expect("a fresh block");
+        assert_eq!(block.online_id, -1);
+        assert_eq!(block.user_id, 7, "the source block's user id is carried");
+        assert_eq!(block.client_version, CLIENT_VERSION);
+        assert!(!block.statistics.is_empty());
+        // written only when positive, as lazer writes it; this synthetic play
+        // presses nothing, so its total is zero and the field is absent
+        let total = i64::from(out.header.total_score);
+        assert_eq!(block.total_score_without_mods, (total > 0).then_some(total));
+
+        // the exported frames re-simulate to what the header and block claim.
+        // this synthetic play presses nothing, so it fails partway: the file
+        // carries rank F and what lazer's processor would have counted up to
+        // the fail -- the same truncation the integrity report compares
+        // under -- and the fresh fold is read the same way
+        let map = engine::formats::beatmap::decode_beatmap_path(&dir.path().join("map.osu")).unwrap();
+        let processed = engine::beatmap::process_beatmap(&map).unwrap();
+        let frames = engine::replay::frames::convert_frames(&out.actions, map.format_version);
+        let fresh = engine::simulation::simulate_native(&processed, &frames).unwrap();
+        let fresh_native = fresh.native.as_ref().unwrap();
+        let drain = engine::score::native_drain(&processed, map.hp_drain_rate);
+        let health = engine::score::native_health(&processed, &fresh, map.hp_drain_rate, drain);
+        let fail = health.fail_event_index.expect("a play that presses nothing fails");
+        assert_eq!(block.rank, Some(engine::score::ScoreRank::F));
+        let truncated = engine::simulation::outcome_up_to(&processed, &fresh, fail).unwrap();
+        let fresh_statistics: Vec<(String, i64)> = truncated
+            .statistics
+            .iter()
+            .map(|(r, c)| (r.snake_name().to_owned(), i64::from(*c)))
+            .collect();
+        let block_statistics: Vec<(String, i64)> =
+            block.statistics.iter().map(|e| (e.result.clone(), e.count)).collect();
+        assert_eq!(block_statistics, fresh_statistics);
+        assert_eq!(u32::from(out.header.max_combo), truncated.max_combo);
+        assert_eq!(i64::from(out.header.total_score), truncated.total_score);
+        assert_eq!(
+            u32::from(out.header.count_miss),
+            truncated.count_miss,
+            "the header's counts are the truncated map's"
+        );
+        assert!(
+            fresh_native.statistics != truncated.statistics,
+            "the whole-timeline fold keeps counting past the fail; the file does not"
+        );
+
+        // the video export stages the very bytes the replay export wrote
+        tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            scene.epoch,
+            dir.path().join("edited.mp4").display().to_string(),
+        ))
+        .unwrap();
+        assert_eq!(fake.last_osr_bytes.lock().unwrap().clone().unwrap(), bytes);
+
+        // and revert-all takes both back to passthrough
+        tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+        let reverted_path = dir.path().join("reverted.osr");
+        let result = export_to(&app, scene.epoch, &reverted_path, false).unwrap();
+        assert!(result.regenerated.is_none());
+        assert_eq!(std::fs::read(&reverted_path).unwrap(), source);
     }
 
     #[test]
@@ -3222,7 +3525,7 @@ Name: Audible
             vec!["move".to_string(), "revert all".to_string()]
         );
         assert_eq!(delta.history.cursor, 2);
-        assert!(delta.dirty, "the restore op sits on the undo stack");
+        assert!(!delta.dirty, "the restore lands on the baseline and the markers say so");
         assert!(delta.can_undo);
 
         // and it is itself one undoable step
@@ -3412,7 +3715,12 @@ Name: Audible
         let map = engine::formats::beatmap::decode_beatmap_path(&dir.path().join("map.osu")).unwrap();
         let processed = engine::beatmap::process_beatmap(&map).unwrap();
         let frames = engine::replay::frames::convert_frames(&out.actions, map.format_version);
-        let timeline = engine::simulation::simulate(&processed, &frames).unwrap();
+        let timeline = engine::simulation::simulate(
+            &processed,
+            &frames,
+            &engine::configuration::PlayConfiguration::nomod(engine::configuration::RulesProfile::Stable),
+        )
+        .unwrap();
         let wide = engine::score::derive_score(
             &processed,
             &timeline,
@@ -3448,7 +3756,7 @@ Name: Audible
         let scene = editable_scene(&app, dir.path(), 0, 20151228);
         assert_eq!(
             scene.integrity.as_ref().unwrap().life_bar_graph,
-            crate::scene::LifeBarGraphDto::Absent,
+            Some(crate::scene::LifeBarGraphDto::Absent),
             "the synthetic source carries no graph, so the report starts absent"
         );
 
@@ -3477,14 +3785,14 @@ Name: Audible
         // score -- every sample of it, since the file it describes is the
         // very play this simulation just re-derived
         let compared = reopened.integrity.as_ref().unwrap().life_bar_graph;
-        let crate::scene::LifeBarGraphDto::Compared { matched, total, .. } = compared else {
+        let Some(crate::scene::LifeBarGraphDto::Compared { matched, total, .. }) = compared else {
             panic!("the regenerated graph reads back as a present life bar, got {compared:?}");
         };
         assert!(total > 0 && matched == total, "{matched} of {total} samples match");
     }
 
     #[test]
-    fn export_matrix_revert_all_takes_the_regenerating_path() {
+    fn export_matrix_revert_all_is_passthrough() {
         let dir = tempfile::tempdir().unwrap();
         let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
         let scene = editable_scene(&app, dir.path(), 0, 20151228);
@@ -3498,30 +3806,32 @@ Name: Audible
             "move".into(),
         ))
         .unwrap();
-        tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+        let delta = tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+        assert!(!delta.dirty && !delta.frames_dirty && !delta.metadata_dirty);
+        assert!(delta.can_undo, "the revert is still one undoable step");
 
-        // content-equal to baseline but marker-dirty: deliberately the
-        // conservative reserialize, never a silent passthrough
+        // content-equal to the baseline and the markers say so: the original
+        // bytes come back out, on the passthrough path
         let dest = dir.path().join("out.osr");
         let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none());
+        assert_eq!(std::fs::read(&dest).unwrap(), source);
+
+        // undoing the revert brings the edited state and its markers back,
+        // and the export regenerates again
+        let delta = tauri::async_runtime::block_on(undo(app.state(), scene.epoch)).unwrap();
+        assert!(delta.frames_dirty);
+        let result = export_to(&app, scene.epoch, &dir.path().join("out2.osr"), false).unwrap();
         assert!(result.regenerated.is_some());
-        let bytes = std::fs::read(&dest).unwrap();
-        assert_ne!(bytes, source);
-        let out = engine::formats::osr::decode_osr(&bytes).unwrap();
-        // a marker-dirty document regenerates like any frame-dirty one, so
-        // the graph is written rather than emptied or carried
-        let graph = out.header.life_graph.as_deref().expect("the graph is written");
-        assert!(graph.ends_with(','), "stable's trailing comma: {graph}");
-        assert!(graph.contains('|'), "time|value pairs: {graph}");
-        assert_eq!(out.header.player_name.as_deref(), Some("test"));
     }
 
     #[test]
-    fn not_simulated_scenes_export_carried_but_refuse_the_reverted_marker() {
+    fn not_simulated_scenes_export_carried_and_revert_all_to_passthrough() {
         let dir = tempfile::tempdir().unwrap();
         let app = mock_app(dir.path().join("config"), dir.path().join("cache"));
         // hard rock: loads fine, simulates as NotSimulated
         let scene = editable_scene(&app, dir.path(), 16, 20151228);
+        let source = std::fs::read(dir.path().join("replay.osr")).unwrap();
 
         tauri::async_runtime::block_on(apply_edit(
             app.state(),
@@ -3537,12 +3847,51 @@ Name: Audible
         let out = engine::formats::osr::decode_osr(&std::fs::read(&dest).unwrap()).unwrap();
         assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
 
-        // revert_all marks frames dirty on any scene; without an
-        // authoritative simulation the regenerating path cannot derive, so
-        // the export refuses typed instead of writing fiction
+        // reverted, the document is the source again and exports as such:
+        // no simulation is needed to write bytes that were never derived
         tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
-        let err = export_to(&app, scene.epoch, &dir.path().join("out2.osr"), false).unwrap_err();
-        assert!(matches!(err, IpcError::NotEditable { .. }));
+        let dest = dir.path().join("out2.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none());
+        assert_eq!(std::fs::read(&dest).unwrap(), source);
+    }
+
+    #[test]
+    fn lazer_native_scenes_revert_all_to_passthrough_for_both_exports() {
+        // the twin of the not-simulated case on the other gated scene, and
+        // the video export beside the replay one: both stage the source's
+        // own bytes once the document is reverted
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::video::fake::FakeRenderer::new(true));
+        let app = mock_app_with_renderer(dir.path().join("config"), dir.path().join("cache"), Arc::clone(&fake));
+        let scene = editable_scene(&app, dir.path(), 0, 30000001);
+        let source = std::fs::read(dir.path().join("replay.osr")).unwrap();
+
+        tauri::async_runtime::block_on(apply_edit(
+            app.state(),
+            scene.epoch,
+            0,
+            vec![rename_op("renamed")],
+            "rename".into(),
+        ))
+        .unwrap();
+        tauri::async_runtime::block_on(revert_all(app.state(), scene.epoch)).unwrap();
+
+        let dest = dir.path().join("out.osr");
+        let result = export_to(&app, scene.epoch, &dest, false).unwrap();
+        assert!(result.regenerated.is_none());
+        assert_eq!(std::fs::read(&dest).unwrap(), source);
+
+        let video = dir.path().join("out.mp4");
+        tauri::async_runtime::block_on(export_video(
+            app.handle().clone(),
+            app.state(),
+            scene.epoch,
+            video.display().to_string(),
+        ))
+        .unwrap();
+        let staged = fake.last_osr_bytes.lock().unwrap().clone().expect("the fake saw a render");
+        assert_eq!(staged, source, "the video export stages the source bytes");
     }
 
     #[test]
@@ -3564,8 +3913,9 @@ Name: Audible
         assert!(result.regenerated.is_none());
         let out = engine::formats::osr::decode_osr(&std::fs::read(&dest).unwrap()).unwrap();
         assert_eq!(out.header.player_name.as_deref(), Some("renamed"));
-        // the lazer score-info framing replaced the stripped trailer
-        assert_eq!(out.trailer, 0i32.to_le_bytes());
+        // the source's own trailer is carried: this synthetic file's is the
+        // framed empty array, so that is what comes back out
+        assert_eq!(out.trailer, engine::formats::osr::OsrTrailer::empty_block());
     }
 
     #[test]
