@@ -47,6 +47,7 @@
 //! times sit within one frame gap of the live client's
 
 pub(crate) mod buttons;
+pub mod native;
 pub(crate) mod presses;
 pub mod score;
 pub(crate) mod slider;
@@ -57,10 +58,13 @@ use std::cell::Cell;
 
 use crate::beatmap::difficulty::HitGrade;
 use crate::beatmap::{ProcessedBeatmap, ProcessedKind};
+use crate::configuration::{PlayConfiguration, RulesProfile};
 use crate::error::{resource_limit, EngineError, Result};
 use crate::limits;
 use crate::replay::frames::{Buttons, ReplayFrame};
+use crate::score::{rank_from_accuracy, standard_accuracy, ScoreRank};
 use buttons::ButtonMachine;
+pub use native::{outcome_up_to, simulate_native, AppliedResult, NativeOutcome, TruncatedOutcome};
 use score::{JudgementKind, ScoreState};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,13 +76,45 @@ pub struct JudgementEvent {
     pub accuracy_after: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// the play's end-state totals. accuracy and rank ride here rather than
+/// being recomputed by whoever displays them, so the engine is the one
+/// author of both: under the stable profile they are the displayed
+/// accuracy over the four counts and lazer's rank rule
+/// (`score::rank`), the same rule the header's own counts are read with
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitTotals {
     pub count_300: u32,
     pub count_100: u32,
     pub count_50: u32,
     pub count_miss: u32,
     pub max_combo: u32,
+    /// 0..1
+    pub accuracy: f64,
+    pub rank: ScoreRank,
+}
+
+impl Default for HitTotals {
+    /// nothing judged: zero everywhere, which the rank rule reads as D
+    fn default() -> HitTotals {
+        HitTotals::from_counts(0, 0, 0, 0, 0)
+    }
+}
+
+impl HitTotals {
+    /// the stable profile's totals: accuracy and rank folded from the four
+    /// counts by the shared rule
+    pub fn from_counts(count_300: u32, count_100: u32, count_50: u32, count_miss: u32, max_combo: u32) -> HitTotals {
+        let accuracy = standard_accuracy(count_300, count_100, count_50, count_miss);
+        HitTotals {
+            count_300,
+            count_100,
+            count_50,
+            count_miss,
+            max_combo,
+            accuracy,
+            rank: rank_from_accuracy(accuracy, count_miss),
+        }
+    }
 }
 
 /// one increment of stable's scoring half-spin counter: the replay frame
@@ -118,8 +154,14 @@ pub struct SpinnerScoring {
 pub struct JudgementTimeline {
     pub events: Vec<JudgementEvent>,
     pub totals: HitTotals,
-    /// one record per spinner object, in object order
+    /// one record per spinner object, in object order -- the stable
+    /// profile's disc records; empty under the native profile, whose
+    /// spinners score by lazer's own rotation
     pub spinner_scoring: Vec<SpinnerScoring>,
+    /// the native profile's own end state beyond the totals -- lazer's
+    /// statistics map and standardised total; `None` under the stable
+    /// profile, whose derived fields come from `score`
+    pub native: Option<NativeOutcome>,
 }
 
 #[derive(Debug)]
@@ -192,12 +234,34 @@ impl Ctx<'_> {
     }
 }
 
-/// frames must be time-sorted ascending -- `replay::frames::convert_frames`
-/// guarantees this for every replay this crate decodes (and already applies
-/// stable's own first-frame fixups, intro-frame removal and seed-frame drop,
-/// so the walk consumes the converted stream as-is); an empty frame list is
-/// rejected below rather than assumed away
-pub fn simulate(beatmap: &ProcessedBeatmap, frames: &[ReplayFrame]) -> Result<JudgementTimeline> {
+/// the simulation entry point: judges `frames` over `beatmap` under the
+/// profile the configuration says a timeline is computed under -- the
+/// play's own when simulation is authoritative, a neighbouring one when it
+/// is approximate. a configuration that refuses simulation is refused here
+/// too, typed, rather than judged under a profile nobody chose. the stable
+/// path ignores everything about the configuration but the profile: its
+/// matrix is NoMod and the resolver has already said so
+pub fn simulate(
+    beatmap: &ProcessedBeatmap,
+    frames: &[ReplayFrame],
+    configuration: &PlayConfiguration,
+) -> Result<JudgementTimeline> {
+    match configuration.simulated_profile() {
+        Some(RulesProfile::Stable) => simulate_stable(beatmap, frames),
+        Some(RulesProfile::Native) => simulate_native(beatmap, frames),
+        None => Err(EngineError::InvalidArgument(
+            "the play configuration refuses simulation".into(),
+        )),
+    }
+}
+
+/// the stable profile's walk. frames must be time-sorted ascending --
+/// `replay::frames::convert_frames` guarantees this for every replay this
+/// crate decodes (and already applies stable's own first-frame fixups,
+/// intro-frame removal and seed-frame drop, so the walk consumes the
+/// converted stream as-is); an empty frame list is rejected below rather
+/// than assumed away
+pub fn simulate_stable(beatmap: &ProcessedBeatmap, frames: &[ReplayFrame]) -> Result<JudgementTimeline> {
     simulate_with_budgets(
         beatmap,
         frames,
@@ -359,13 +423,13 @@ fn simulate_with_budgets(
         time += 1.0;
     }
 
-    let totals = HitTotals {
-        count_300: ctx.score.count_300,
-        count_100: ctx.score.count_100,
-        count_50: ctx.score.count_50,
-        count_miss: ctx.score.count_miss,
-        max_combo: ctx.score.max_combo,
-    };
+    let totals = HitTotals::from_counts(
+        ctx.score.count_300,
+        ctx.score.count_100,
+        ctx.score.count_50,
+        ctx.score.count_miss,
+        ctx.score.max_combo,
+    );
     // spinner states persist to the end of the run, so the records read
     // straight off the final states rather than being collected mid-loop
     let spinner_scoring = ctx
@@ -384,6 +448,7 @@ fn simulate_with_budgets(
         events: ctx.events,
         totals,
         spinner_scoring,
+        native: None,
     })
 }
 
@@ -721,8 +786,32 @@ mod tests {
     #[test]
     fn simulating_with_no_frames_is_rejected() {
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let result = simulate(&beatmap, &[]);
+        let result = simulate_stable(&beatmap, &[]);
         assert!(matches!(result, Err(EngineError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn the_entry_point_dispatches_on_the_configurations_simulated_profile() {
+        let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
+        let frames = wrap(vec![frame(1010.0, 256.0, 192.0, Buttons::LEFT_1)]);
+        // a stable configuration runs the stable walk
+        let stable = simulate(&beatmap, &frames, &PlayConfiguration::nomod(RulesProfile::Stable)).unwrap();
+        assert_eq!(stable, simulate_stable(&beatmap, &frames).unwrap());
+        // a refusing configuration is refused, typed, never judged
+        let mut refused = PlayConfiguration::nomod(RulesProfile::Stable);
+        refused.capabilities.simulate = crate::configuration::SimulationSupport::Refused {
+            reason: crate::configuration::RefusalReason::BeatmapMismatch,
+        };
+        assert!(matches!(
+            simulate(&beatmap, &frames, &refused),
+            Err(EngineError::InvalidArgument(_))
+        ));
+        // an approximate configuration runs the profile it names
+        let mut approximate = PlayConfiguration::nomod(RulesProfile::Native);
+        approximate.capabilities.simulate = crate::configuration::SimulationSupport::Approximate {
+            profile: RulesProfile::Stable,
+        };
+        assert_eq!(simulate(&beatmap, &frames, &approximate).unwrap(), stable);
     }
 
     #[test]
@@ -753,7 +842,7 @@ mod tests {
     #[test]
     fn a_press_on_the_circle_in_the_great_window_judges_great() {
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(
+        let timeline = simulate_stable(
             &beatmap,
             &wrap(vec![frame(1010.0, 256.0, 192.0, Buttons::LEFT_1)]),
         )
@@ -766,6 +855,8 @@ mod tests {
         assert_eq!(e.combo_after, 1);
         assert_eq!(timeline.totals.count_300, 1);
         assert_eq!(timeline.totals.max_combo, 1);
+        assert_eq!(timeline.totals.accuracy, 1.0);
+        assert_eq!(timeline.totals.rank, ScoreRank::X);
     }
 
     #[test]
@@ -783,7 +874,7 @@ mod tests {
             (-160.0, JudgementKind::Circle(HitGrade::Miss)), // early press inside 400
         ] {
             let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-            let timeline = simulate(
+            let timeline = simulate_stable(
                 &beatmap,
                 &wrap(vec![frame(1000.0 + offset, 256.0, 192.0, Buttons::LEFT_1)]),
             )
@@ -799,12 +890,12 @@ mod tests {
         // lands on that trailing frame -- and a frame exactly at end + 150
         // is NOT yet a miss (strict greater-than, circle.go:104)
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(&beatmap, &wrap(vec![frame(1150.0, 50.0, 50.0, 0)])).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(vec![frame(1150.0, 50.0, 50.0, 0)])).unwrap();
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
         assert_eq!(timeline.events[0].time, 100_000.0);
 
-        let timeline = simulate(&beatmap, &wrap(vec![frame(1151.0, 50.0, 50.0, 0)])).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(vec![frame(1151.0, 50.0, 50.0, 0)])).unwrap();
         assert_eq!(timeline.events[0].time, 1151.0);
         assert_eq!(timeline.totals.count_miss, 1);
     }
@@ -814,7 +905,7 @@ mod tests {
         // 600ms early is at-or-past the 400ms hittable range -> shake, no
         // judgement; the circle still times out on its own later
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(&beatmap, &wrap(vec![frame(400.0, 256.0, 192.0, Buttons::LEFT_1)])).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(vec![frame(400.0, 256.0, 192.0, Buttons::LEFT_1)])).unwrap();
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
         assert_eq!(timeline.events[0].time, 100_000.0);
@@ -829,7 +920,7 @@ mod tests {
         // locked; only a later press can hit b. (an expiry-aware read was
         // measured and rejected -- see the note in presses.rs)
         let beatmap = circle_map(&[(1200.0, 100.0, 100.0), (1300.0, 300.0, 100.0)]);
-        let timeline = simulate(
+        let timeline = simulate_stable(
             &beatmap,
             &wrap(vec![
                 frame(1250.0, 300.0, 100.0, Buttons::LEFT_1), // locked: a unhit
@@ -855,7 +946,7 @@ mod tests {
         // same position, 100ms apart: the earlier circle draws on top and
         // eats the first press; the second press falls to the later circle
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0), (1100.0, 256.0, 192.0)]);
-        let timeline = simulate(
+        let timeline = simulate_stable(
             &beatmap,
             &wrap(vec![
                 frame(1000.0, 256.0, 192.0, Buttons::LEFT_1),
@@ -877,7 +968,7 @@ mod tests {
         // the later circle consumes right in the same pass (the earlier one
         // is judged mid-walk, so it neither locks nor shields the later)
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0), (1049.0, 256.0, 192.0)]);
-        let timeline = simulate(
+        let timeline = simulate_stable(
             &beatmap,
             &wrap(vec![frame(
                 1000.0,
@@ -898,7 +989,7 @@ mod tests {
         // out of range with a clickable action is a positional miss: edges
         // are kept, nothing judges, the circle times out on the trailing frame
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(&beatmap, &wrap(vec![frame(1000.0, 500.0, 50.0, Buttons::LEFT_1)])).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(vec![frame(1000.0, 500.0, 50.0, Buttons::LEFT_1)])).unwrap();
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
         assert_eq!(timeline.events[0].time, 100_000.0);
     }
@@ -915,7 +1006,7 @@ mod tests {
             (1290.0, 256.0, 192.0),
         ]);
         assert!(beatmap.objects[1].stack_height > 0);
-        let timeline = simulate(
+        let timeline = simulate_stable(
             &beatmap,
             &wrap(vec![
                 frame(1200.0, 256.0, 192.0, Buttons::LEFT_1), // hits circle 0
@@ -941,7 +1032,7 @@ mod tests {
             (1290.0, 100.0, 100.0), // seeds prev's stack height; never touched by any press
         ]);
         assert!(beatmap.objects[0].stack_height > 0);
-        let timeline = simulate(
+        let timeline = simulate_stable(
             &beatmap,
             &wrap(vec![frame(1250.0, 300.0, 100.0, Buttons::LEFT_1)]),
         )
@@ -978,7 +1069,7 @@ mod tests {
         frames.extend(test_support::spin_frames_for(&beatmap, 2, 8.0));
         frames.push(frame(6010.0, 0.0, 100.0, 0)); // idle frame past spinner end
         frames.push(frame(6500.0, 256.0, 192.0, Buttons::LEFT_1)); // circle 3: great
-        let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(frames)).unwrap();
 
         use crate::beatmap::difficulty::HitGrade::*;
         use JudgementKind::*;
@@ -987,27 +1078,38 @@ mod tests {
             .iter()
             .filter(|k| matches!(k, SpinnerSpin | SpinnerBonus))
             .count();
+        // the slider's lazer nested list is head, tick, tail: the tick and
+        // tail events name their element by index into it
         let expected = [
             Circle(Great),
-            SliderHead { hit: true },
-            SliderTick { hit: true },
-            SliderTail { hit: true },
+            SliderHead { grade: Great },
+            SliderTick {
+                hit: true,
+                nested_index: Some(1),
+            },
+            SliderTail {
+                hit: true,
+                nested_index: Some(2),
+            },
             SliderAggregate(Great),
+            SliderEnd { complete: true },
         ];
         // spinner spin/bonus counts vary with sampling; assert around them
-        assert_eq!(&kinds[..5], &expected[..5]);
+        assert_eq!(&kinds[..6], &expected[..6]);
         assert!(spins >= 1);
         // The fast eight-revolution input earns stable Ok (the same
         // disc/cursor split pinned in spinner::tests), while its lazer
         // spin events remain presentation data.
-        assert_eq!(kinds[5 + spins], SpinnerFinal(Ok));
-        assert_eq!(kinds[6 + spins], Circle(Great));
+        assert_eq!(kinds[6 + spins], SpinnerFinal(Ok));
+        assert_eq!(kinds[7 + spins], Circle(Great));
 
         // combo walk: 1 (circle), 2 (head), 3 (tick), 4 (tail), aggregate
-        // holds 4, spins hold 4, spinner final 5, last circle 6
+        // and the lifecycle end hold 4, spins hold 4, spinner final 5, last
+        // circle 6
         assert_eq!(timeline.events[0].combo_after, 1);
         assert_eq!(timeline.events[3].combo_after, 4);
         assert_eq!(timeline.events[4].combo_after, 4);
+        assert_eq!(timeline.events[5].combo_after, 4);
         assert_eq!(timeline.events.last().unwrap().combo_after, 6);
         assert_eq!(timeline.totals.max_combo, 6);
         assert_eq!(timeline.totals.count_300, 3); // circle, aggregate, circle
@@ -1017,12 +1119,16 @@ mod tests {
         // accuracy after each basic result is the stable formula
         assert_eq!(timeline.events[0].accuracy_after, 1.0);
         assert_eq!(timeline.events.last().unwrap().accuracy_after, 1000.0 / 1200.0);
+        // and the totals carry the same accuracy with lazer's rank for it:
+        // 83.3% with no miss is a B
+        assert_eq!(timeline.totals.accuracy, 1000.0 / 1200.0);
+        assert_eq!(timeline.totals.rank, ScoreRank::B);
     }
 
     #[test]
     fn events_are_time_ordered_and_totals_fold_from_events() {
         let beatmap = test_support::mixed_map();
-        let timeline = simulate(&beatmap, &wrap(vec![frame(0.0, 0.0, 0.0, 0)])).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(vec![frame(0.0, 0.0, 0.0, 0)])).unwrap();
         for pair in timeline.events.windows(2) {
             assert!(pair[0].time <= pair[1].time, "events must be time-sorted");
         }
@@ -1060,7 +1166,7 @@ mod tests {
         // click still lands -- as a miss, since 150 is outside the meh
         // window: the click walk decides the circle, not the post walk
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
-        let timeline = simulate(
+        let timeline = simulate_stable(
             &beatmap,
             &wrap(vec![frame(1150.0, 256.0, 192.0, Buttons::LEFT_1)]),
         )
@@ -1077,7 +1183,7 @@ mod tests {
         // start + 150
         let beatmap = circle_map(&[(1000.0, 256.0, 192.0)]);
         let frames = vec![frame(-1000.0, 0.0, 0.0, 0), frame(500.0, 0.0, 0.0, 0)];
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(timeline.events[0].kind, JudgementKind::Circle(HitGrade::Miss));
         assert_eq!(timeline.events[0].time, 1151.0);

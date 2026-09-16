@@ -207,7 +207,7 @@ pub(crate) fn note_point(
 mod tests {
     use super::*;
     use crate::replay::frames::Buttons;
-    use crate::simulation::simulate;
+    use crate::simulation::simulate_stable;
     use crate::simulation::test_support::{frame, slider_map, wrap};
 
     #[test]
@@ -220,10 +220,10 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let untraced = simulate(&beatmap, &frames).unwrap();
+        let untraced = simulate_stable(&beatmap, &frames).unwrap();
 
         start();
-        let traced = simulate(&beatmap, &frames).unwrap();
+        let traced = simulate_stable(&beatmap, &frames).unwrap();
         let decisions = finish();
 
         assert_eq!(untraced, traced, "a trace must not perturb the timeline");
@@ -239,7 +239,7 @@ mod tests {
     fn tracing_off_records_nothing() {
         let beatmap = slider_map(2.0, 0);
         let frames = wrap(vec![frame(1000.0, 100.0, 100.0, Buttons::LEFT_1)]);
-        simulate(&beatmap, &frames).unwrap();
+        simulate_stable(&beatmap, &frames).unwrap();
         assert!(finish().is_empty());
     }
 }
