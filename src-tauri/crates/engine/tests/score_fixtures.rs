@@ -103,21 +103,32 @@ fn full_combo_timeline(processed: &ProcessedBeatmap) -> JudgementTimeline {
                     slider.stable_points.len(),
                     "object {index}: lazer nested and stable point counts diverge"
                 );
-                for nested in &slider.nested {
+                for (nested_index, nested) in slider.nested.iter().enumerate() {
+                    let nested_index = Some(nested_index as u32);
                     let kind = match nested.kind {
-                        NestedKind::Head => JudgementKind::SliderHead { hit: true },
-                        NestedKind::Tick => JudgementKind::SliderTick { hit: true },
+                        NestedKind::Head => JudgementKind::SliderHead {
+                            grade: HitGrade::Great,
+                        },
+                        NestedKind::Tick => JudgementKind::SliderTick {
+                            hit: true,
+                            nested_index,
+                        },
                         // the repeat that ends span `span_index` is repeat
                         // `span_index` (beatmap::slider_events)
                         NestedKind::Repeat => JudgementKind::SliderRepeat {
                             hit: true,
                             repeat_index: nested.span_index.max(0) as u32,
+                            nested_index,
                         },
-                        NestedKind::Tail => JudgementKind::SliderTail { hit: true },
+                        NestedKind::Tail => JudgementKind::SliderTail {
+                            hit: true,
+                            nested_index,
+                        },
                     };
                     push(index, nested.time, kind);
                 }
                 push(index, object.end_time, JudgementKind::SliderAggregate(HitGrade::Great));
+                push(index, object.end_time, JudgementKind::SliderEnd { complete: true });
             }
             ProcessedKind::Spinner(_) => {
                 panic!("full_combo_timeline is for spinner-free maps only")
@@ -129,6 +140,7 @@ fn full_combo_timeline(processed: &ProcessedBeatmap) -> JudgementTimeline {
         events,
         totals: HitTotals::default(),
         spinner_scoring: Vec::new(),
+        native: None,
     }
 }
 
@@ -280,6 +292,7 @@ fn the_stable_spinner_tick_model_reaches_the_lazer_dumped_bonus_at_the_cap() {
             // increments it always does
             increments: Vec::new(),
         }],
+        native: None,
     };
     let map = decode_beatmap_path(&fixture_util::fixtures_dir().join("beatmaps/spinner-od0.osu")).unwrap();
     let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).unwrap();

@@ -1,15 +1,17 @@
 mod fixture_util;
 
 use engine::beatmap::process_beatmap;
+use engine::configuration::{resolve_play_configuration, PlayConfiguration, RulesProfile};
 use engine::formats::beatmap::decode_beatmap_path;
 use engine::formats::osr::decode_osr;
 use engine::replay::frames::convert_frames;
 use engine::score::{
     compare_life_bar_graph, derive_health, drain_rate_search, format_graph_number, life_bar_graph,
-    max_achievable_combo, peppy_stars, section_tally, total_score, ScoreContext, NOMOD_SCORE_MULTIPLIER,
+    max_achievable_combo, native_drain, native_health, peppy_stars, section_tally, total_score, HitResult,
+    ScoreContext, ScoreRank, NOMOD_SCORE_MULTIPLIER,
 };
 use engine::simulation::score::JudgementKind;
-use engine::simulation::{simulate, JudgementEvent};
+use engine::simulation::{outcome_up_to, simulate, simulate_native, JudgementEvent};
 
 /// human-ratified deliberate divergences in the local corpus -- a visible
 /// exception ledger, never a silent allowlist. each entry names the replay
@@ -91,7 +93,34 @@ fn local_nomod_replays_self_verify() {
         let map = decode_beatmap_path(&osu_path).unwrap_or_else(|e| panic!("{name}: beatmap: {e}"));
         let processed = process_beatmap(&map).unwrap_or_else(|e| panic!("{name}: process: {e}"));
         let frames = convert_frames(&osr.actions, map.format_version);
-        let timeline = simulate(&processed, &frames).unwrap_or_else(|e| panic!("{name}: simulate: {e}"));
+        let configuration = resolve_play_configuration(&osr, false);
+
+        // a lazer-written play is the native profile's oracle, on lazer's
+        // own terms: its block's statistics map and rank, the header's max
+        // combo and standardised total. it never reaches the stable
+        // comparison below, whose oracle is stable's own header. every
+        // native pair needs its ledger row first -- provenance is what keeps
+        // historical lazer gameplay drift from being counted as an engine bug
+        if configuration.profile == RulesProfile::Native {
+            match native_ledger_row(&dir, &name) {
+                Err(complaint) => {
+                    failures.push(complaint);
+                    continue;
+                }
+                Ok(row) => eprintln!(
+                    "corpus: {name}: native pair from {} ({}), against pin {}",
+                    row.client, row.origin, row.pin
+                ),
+            }
+            match verify_native_pair(&name, &osr, &processed, &frames, map.hp_drain_rate) {
+                Ok(()) => checked += 1,
+                Err(complaint) => failures.push(complaint),
+            }
+            continue;
+        }
+
+        let timeline =
+            simulate(&processed, &frames, &configuration).unwrap_or_else(|e| panic!("{name}: simulate: {e}"));
 
         let simulated = (
             timeline.totals.count_300,
@@ -217,6 +246,150 @@ fn local_nomod_replays_self_verify() {
         failures.len()
     );
     eprintln!("corpus: verified {checked} replays exact, {ratified} on the ratified-divergence ledger");
+}
+
+/// one native pair's provenance, from `fixtures/replays/local/native_ledger.json`
+/// (documented in fixtures/README.md): which client wrote the play, whether
+/// it is the original play or a re-run in the reference client, and the
+/// engine pin the parity claim names. a pair without a row is refused, not
+/// skipped: a native play with unknown provenance cannot be a parity claim
+#[derive(serde::Deserialize)]
+struct NativeLedgerRow {
+    stem: String,
+    client: String,
+    /// `original` or `re-run`
+    origin: String,
+    pin: String,
+}
+
+fn native_ledger_row(dir: &std::path::Path, stem: &str) -> Result<NativeLedgerRow, String> {
+    let path = dir.join("native_ledger.json");
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        format!("{stem}: a lazer-native pair needs a row in {} (see fixtures/README.md): {e}", path.display())
+    })?;
+    let rows: Vec<NativeLedgerRow> =
+        serde_json::from_str(&text).map_err(|e| format!("{stem}: the native ledger does not parse: {e}"))?;
+    let row = rows
+        .into_iter()
+        .find(|row| row.stem == stem)
+        .ok_or_else(|| format!("{stem}: no row in the native ledger names this pair (see fixtures/README.md)"))?;
+    if row.origin != "original" && row.origin != "re-run" {
+        return Err(format!(
+            "{stem}: the native ledger's origin must be `original` or `re-run`, got {:?}",
+            row.origin
+        ));
+    }
+    Ok(row)
+}
+
+/// the native corpus oracle: the block lazer wrote beside the header. a
+/// rank-F source failed, so lazer's score processor stopped counting at the
+/// failing result; the comparison then runs up to the engine's own fail
+/// point, and a disagreement past that rule is a parity finding, never
+/// absorbed by widening the comparison. every other source compares whole
+fn verify_native_pair(
+    name: &str,
+    osr: &engine::formats::osr::OsrFile,
+    processed: &engine::beatmap::ProcessedBeatmap,
+    frames: &[engine::replay::frames::ReplayFrame],
+    hp_drain_rate: f32,
+) -> Result<(), String> {
+    let Some(block) = osr.trailer.score_info() else {
+        return Err(format!("{name}: a lazer-written play with no readable block has no oracle"));
+    };
+    let timeline = simulate_native(processed, frames).map_err(|e| format!("{name}: simulate natively: {e}"))?;
+    let native = timeline.native.as_ref().expect("the native walk carries its outcome");
+    let drain = native_drain(processed, hp_drain_rate);
+    let health = native_health(processed, &timeline, hp_drain_rate, drain);
+
+    let block_statistics: Vec<(String, i64)> = block.statistics.iter().map(|e| (e.result.clone(), e.count)).collect();
+    let block_maximum: Vec<(String, i64)> = block
+        .maximum_statistics
+        .iter()
+        .map(|e| (e.result.clone(), e.count))
+        .collect();
+    let named = |counts: &[(HitResult, u32)]| -> Vec<(String, i64)> {
+        counts
+            .iter()
+            .map(|(r, c)| (r.snake_name().to_owned(), i64::from(*c)))
+            .collect()
+    };
+
+    let (statistics, maximum, max_combo, total_score, rank) = match (block.rank, health.fail_event_index) {
+        (Some(ScoreRank::F), Some(fail_event_index)) => {
+            let truncated = outcome_up_to(processed, &timeline, fail_event_index)
+                .expect("the native walk carries its applied results");
+            eprintln!(
+                "corpus: {name}: rank F source, compared up to the engine's fail point at {:.1}ms (event {fail_event_index})",
+                health.fail_time.unwrap_or(f64::NAN)
+            );
+            (
+                named(&truncated.statistics),
+                named(&truncated.maximum_statistics),
+                truncated.max_combo,
+                truncated.total_score,
+                ScoreRank::F,
+            )
+        }
+        (Some(ScoreRank::F), None) => {
+            return Err(format!(
+                "{name}: the block records a fail (rank F) but the native health fold never reaches zero"
+            ));
+        }
+        _ => (
+            named(&native.statistics),
+            named(&native.maximum_statistics),
+            timeline.totals.max_combo,
+            native.total_score,
+            if health.fail_time.is_some() {
+                ScoreRank::F
+            } else {
+                timeline.totals.rank
+            },
+        ),
+    };
+
+    let mut complaints = Vec::new();
+    // the curve's last step against the WHOLE-timeline fold, never the
+    // truncated one: the truncation is the comparison's rule for a rank-F
+    // source, while the curve is what the panels read over the full play
+    let curve_end = native.score_curve.last().map(|step| step.score);
+    if curve_end != Some(u64::try_from(native.total_score).unwrap_or(0)) {
+        complaints.push(format!(
+            "the score curve ends at {curve_end:?} against the fold's total {}",
+            native.total_score
+        ));
+    }
+    if statistics != block_statistics {
+        complaints.push(format!("statistics {statistics:?} against the block's {block_statistics:?}"));
+    }
+    if maximum != block_maximum {
+        complaints.push(format!("maximum statistics {maximum:?} against the block's {block_maximum:?}"));
+    }
+    if max_combo != u32::from(osr.header.max_combo) {
+        complaints.push(format!("max combo {max_combo} against the header's {}", osr.header.max_combo));
+    }
+    if total_score != i64::from(osr.header.total_score) {
+        complaints.push(format!("total score {total_score} against the header's {}", osr.header.total_score));
+    }
+    if let Some(without_mods) = block.total_score_without_mods {
+        if total_score != without_mods {
+            complaints.push(format!("total score {total_score} against the block's {without_mods} without mods"));
+        }
+    }
+    if Some(rank) != block.rank {
+        complaints.push(format!("rank {rank:?} against the block's {:?}", block.rank));
+    }
+    if complaints.is_empty() {
+        eprintln!(
+            "corpus: {name}: native play verified against its block ({} results; client {})",
+            statistics.len(),
+            block.client_version
+        );
+        Ok(())
+    } else {
+        Err(format!("{name}: {}", complaints.join("; ")))
+    }
 }
 
 /// one fixture's expected drain-rate search products, as the python model in
@@ -421,7 +594,9 @@ fn local_corpus_life_bar_samples_match_the_headers() {
         let map = decode_beatmap_path(&osu_path).unwrap_or_else(|e| panic!("{name}: beatmap: {e}"));
         let processed = process_beatmap(&map).unwrap_or_else(|e| panic!("{name}: process: {e}"));
         let frames = convert_frames(&osr.actions, map.format_version);
-        let timeline = simulate(&processed, &frames).unwrap_or_else(|e| panic!("{name}: simulate: {e}"));
+        let configuration = resolve_play_configuration(&osr, false);
+        let timeline =
+            simulate(&processed, &frames, &configuration).unwrap_or_else(|e| panic!("{name}: simulate: {e}"));
         let curve = derive_health(&processed, &timeline, &ScoreContext::from_beatmap(&map));
         if !curve.search.converged {
             failures.push(format!("{name}: the drain-rate search did not converge"));
@@ -630,11 +805,15 @@ fn synthetic_full_combo_on_the_fixture_map() {
     // otherwise. the map has no circles or spinners by construction -- every
     // object is a slider
     let frames = engine_test_helpers::full_combo_frames(&processed);
-    let timeline = simulate(&processed, &frames).unwrap();
+    let timeline = simulate(&processed, &frames, &PlayConfiguration::nomod(RulesProfile::Stable)).unwrap();
 
     let expected_basics = processed.objects.len() as u32;
     assert_eq!(timeline.totals.count_300, expected_basics, "everything greats");
     assert_eq!(timeline.totals.count_miss, 0);
+    // a full combo of greats is full accuracy and lazer's X, the engine's
+    // own answer for what the panel used to compute from the counts
+    assert_eq!(timeline.totals.accuracy, 1.0);
+    assert_eq!(timeline.totals.rank, engine::score::ScoreRank::X);
 
     // stable max combo: circles 1 each; sliders head + ticks + repeats + tail.
     // for this map (five sliders, no circles) the per-object nested counts
