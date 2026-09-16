@@ -12,7 +12,9 @@
 mod derive;
 mod hash;
 mod health;
+mod hit_result;
 mod peppy;
+mod rank;
 mod scorev1;
 mod sections;
 mod spin;
@@ -23,8 +25,14 @@ pub use health::{
     format_graph_number, life_bar_graph, DrainRateSearch, HealthCurve, HealthPoint, LifeBarComparison,
     LifeBarPair, LifeBarSample, NearestSample,
 };
+pub use crate::simulation::native::export::{
+    derive_native_export, maximum_achievable_combo, CarriedIdentity, NativeExportFields,
+};
+pub use crate::simulation::native::health::{native_drain, native_health, NativeDrain, NativeHealth};
 pub use hash::{invariant_date_string, replay_hash};
+pub use hit_result::HitResult;
 pub use peppy::peppy_stars;
+pub use rank::{accuracy_from_statistics, rank_from_accuracy, standard_accuracy, ScoreRank};
 pub use scorev1::{score_curve, stable_slider_point_values, total_score, ScoreStep};
 pub use sections::{
     combo_end_additions, is_perfect, max_achievable_combo, section_tally, ComboEndAddition, SectionTally,
