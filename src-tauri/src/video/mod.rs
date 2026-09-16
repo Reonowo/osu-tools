@@ -14,7 +14,23 @@
 //! success/failure arrives via the command's Result, never the event stream.
 //!
 //! spawning is backend-side `std::process::Command` only -- no shell plugin,
-//! no capability changes, nothing an external page could reach
+//! no capability changes, nothing an external page could reach.
+//!
+//! # lazer replays
+//!
+//! a lazer-written `.osr` renders through the same seam unchanged, and the
+//! 2026-09-16 spike (`fixtures/danser/README.md`, the two lazer transcripts
+//! beside the stable one) recorded the pinned renderer's own limits, which
+//! are the renderer's and not the engine's: danser 0.11.0 accepts the file
+//! with the score-info block present or stripped, never reads the block,
+//! marks the play `LZ` off the header version alone with the legacy bitfield
+//! zero, prints the header's standardised total as the expected score, and
+//! plays it under its own lazer path rather than Classic. a regenerating
+//! native export (`replay::document::export_regenerated_native`: the latest
+//! version, a fresh block, the bitfield projected from the effective mods)
+//! therefore stages and renders exactly as its source did; whether the
+//! renderer's judgement agrees with lazer's is its own question and is not
+//! what the app's export claims
 
 pub mod danser;
 pub mod staging;

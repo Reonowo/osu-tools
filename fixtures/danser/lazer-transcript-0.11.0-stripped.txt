@@ -1,0 +1,269 @@
+2026/09/16 17:30:03 danser-go version: 0.11.0
+2026/09/16 17:30:03 SettingsManager: Loading "C:\Users\admin\AppData\Local\replay.reowo.me\danser\0.11.0\settings\replay-viewer.json"
+2026/09/16 17:30:03 SettingsManager: "C:\Users\admin\AppData\Local\replay.reowo.me\danser\0.11.0\settings\replay-viewer.json" loaded!
+2026/09/16 17:30:03 ApiConnector: Loading "C:\Users\admin\AppData\Local\replay.reowo.me\danser\0.11.0\settings\credentials.json"
+2026/09/16 17:30:03 Current config: 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
+2026/09/16 17:30:03 DatabaseManager: Initializing database...
+2026/09/16 17:30:03 DatabaseManager: Database schema version: 20220622
+2026/09/16 17:30:03 DatabaseManager: Database data version: 20220622
+2026/09/16 17:30:03 DatabaseManager: Scanning "C:\Users\admin\AppData\Local\replay.reowo.me\danser-songs" for .osu files...
+2026/09/16 17:30:03 DatabaseManager: Scan complete. Found 13 files.
+2026/09/16 17:30:03 DatabaseManager: Comparing files with database...
+2026/09/16 17:30:03 DatabaseManager: Compare complete.
+2026/09/16 17:30:03 DatabaseManager: Loading beatmaps from database...
+2026/09/16 17:30:03 DatabaseManager: Loaded 13 total.
+2026/09/16 17:30:03 Initializing GLFW...
+2026/09/16 17:30:04 GLFW Initialized!
+2026/09/16 17:30:04 Creating window...
+2026/09/16 17:30:04 Window created!
+2026/09/16 17:30:04 Initializing OpenGL...
+2026/09/16 17:30:04 GL Vendor:     NVIDIA Corporation
+2026/09/16 17:30:04 GL Renderer:   NVIDIA GeForce RTX 5080/PCIe/SSE2
+2026/09/16 17:30:04 GL Version:    3.3.0 NVIDIA 610.74
+2026/09/16 17:30:04 GLSL Version:  3.30 NVIDIA via Cg compiler
+2026/09/16 17:30:04 GL Extensions: GL_AMD_multi_draw_indirect GL_AMD_seamless_cubemap_per_texture GL_AMD_vertex_shader_viewport_index GL_AMD_vertex_shader_layer GL_ARB_arrays_of_arrays GL_ARB_base_instance GL_ARB_bindless_texture GL_ARB_blend_func_extended GL_ARB_buffer_storage GL_ARB_clear_buffer_object GL_ARB_clear_texture GL_ARB_clip_control GL_ARB_color_buffer_float GL_ARB_compressed_texture_pixel_storage GL_ARB_conservative_depth GL_ARB_compute_shader GL_ARB_compute_variable_group_size GL_ARB_conditional_render_inverted GL_ARB_copy_buffer GL_ARB_copy_image GL_ARB_cull_distance GL_ARB_debug_output GL_ARB_depth_buffer_float GL_ARB_depth_clamp GL_ARB_depth_texture GL_ARB_derivative_control GL_ARB_direct_state_access GL_ARB_draw_buffers GL_ARB_draw_buffers_blend GL_ARB_draw_indirect GL_ARB_draw_elements_base_vertex GL_ARB_draw_instanced GL_ARB_enhanced_layouts GL_ARB_ES2_compatibility GL_ARB_ES3_compatibility GL_ARB_ES3_1_compatibility GL_ARB_ES3_2_compatibility GL_ARB_explicit_attrib_location GL_ARB_explicit_uniform_location GL_ARB_fragment_coord_conventions GL_ARB_fragment_layer_viewport GL_ARB_fragment_program GL_ARB_fragment_program_shadow GL_ARB_fragment_shader GL_ARB_fragment_shader_interlock GL_ARB_framebuffer_no_attachments GL_ARB_framebuffer_object GL_ARB_framebuffer_sRGB GL_ARB_geometry_shader4 GL_ARB_get_program_binary GL_ARB_get_texture_sub_image GL_ARB_gl_spirv GL_ARB_gpu_shader5 GL_ARB_gpu_shader_fp64 GL_ARB_gpu_shader_int64 GL_ARB_half_float_pixel GL_ARB_half_float_vertex GL_ARB_imaging GL_ARB_indirect_parameters GL_ARB_instanced_arrays GL_ARB_internalformat_query GL_ARB_internalformat_query2 GL_ARB_invalidate_subdata GL_ARB_map_buffer_alignment GL_ARB_map_buffer_range GL_ARB_multi_bind GL_ARB_multi_draw_indirect GL_ARB_multisample GL_ARB_multitexture GL_ARB_occlusion_query GL_ARB_occlusion_query2 GL_ARB_parallel_shader_compile GL_ARB_pipeline_statistics_query GL_ARB_pixel_buffer_object GL_ARB_point_parameters GL_ARB_point_sprite GL_ARB_polygon_offset_clamp GL_ARB_post_depth_coverage GL_ARB_program_interface_query GL_ARB_provoking_vertex GL_ARB_query_buffer_object GL_ARB_robust_buffer_access_behavior GL_ARB_robustness GL_ARB_sample_locations GL_ARB_sample_shading GL_ARB_sampler_objects GL_ARB_seamless_cube_map GL_ARB_seamless_cubemap_per_texture GL_ARB_separate_shader_objects GL_ARB_shader_atomic_counter_ops GL_ARB_shader_atomic_counters GL_ARB_shader_ballot GL_ARB_shader_bit_encoding GL_ARB_shader_clock GL_EXT_shader_realtime_clock GL_ARB_shader_draw_parameters GL_ARB_shader_group_vote GL_ARB_shader_image_load_store GL_ARB_shader_image_size GL_ARB_shader_objects GL_ARB_shader_precision GL_ARB_shader_storage_buffer_object GL_ARB_shader_subroutine GL_ARB_shader_texture_image_samples GL_ARB_shader_texture_lod GL_ARB_shading_language_100 GL_ARB_shader_viewport_layer_array GL_ARB_shading_language_420pack GL_ARB_shading_language_include GL_ARB_shading_language_packing GL_ARB_shadow GL_ARB_sparse_buffer GL_ARB_sparse_texture GL_ARB_sparse_texture2 GL_ARB_sparse_texture_clamp GL_ARB_spirv_extensions GL_ARB_stencil_texturing GL_ARB_sync GL_ARB_tessellation_shader GL_ARB_texture_barrier GL_ARB_texture_border_clamp GL_ARB_texture_buffer_object GL_ARB_texture_buffer_object_rgb32 GL_ARB_texture_buffer_range GL_ARB_texture_compression GL_ARB_texture_compression_bptc GL_ARB_texture_compression_rgtc GL_ARB_texture_cube_map GL_ARB_texture_cube_map_array GL_ARB_texture_env_add GL_ARB_texture_env_combine GL_ARB_texture_env_crossbar GL_ARB_texture_env_dot3 GL_ARB_texture_filter_anisotropic GL_ARB_texture_filter_minmax GL_ARB_texture_float GL_ARB_texture_gather GL_ARB_texture_mirror_clamp_to_edge GL_ARB_texture_mirrored_repeat GL_ARB_texture_multisample GL_ARB_texture_non_power_of_two GL_ARB_texture_query_levels GL_ARB_texture_query_lod GL_ARB_texture_rectangle GL_ARB_texture_rg GL_ARB_texture_rgb10_a2ui GL_ARB_texture_stencil8 GL_ARB_texture_storage GL_ARB_texture_storage_multisample GL_ARB_texture_swizzle GL_ARB_texture_view GL_ARB_timer_query GL_ARB_transform_feedback2 GL_ARB_transform_feedback3 GL_ARB_transform_feedback_instanced GL_ARB_transform_feedback_overflow_query GL_ARB_transpose_matrix GL_ARB_uniform_buffer_object GL_ARB_vertex_array_bgra GL_ARB_vertex_array_object GL_ARB_vertex_attrib_64bit GL_ARB_vertex_attrib_binding GL_ARB_vertex_buffer_object GL_ARB_vertex_program GL_ARB_vertex_shader GL_ARB_vertex_type_10f_11f_11f_rev GL_ARB_vertex_type_2_10_10_10_rev GL_ARB_viewport_array GL_ARB_window_pos GL_ATI_draw_buffers GL_ATI_texture_float GL_ATI_texture_mirror_once GL_S3_s3tc GL_EXT_texture_env_add GL_EXT_abgr GL_EXT_bgra GL_EXT_bindable_uniform GL_EXT_blend_color GL_EXT_blend_equation_separate GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_compiled_vertex_array GL_EXT_Cg_shader GL_EXT_depth_bounds_test GL_EXT_direct_state_access GL_EXT_draw_buffers2 GL_EXT_draw_instanced GL_EXT_draw_range_elements GL_EXT_fog_coord GL_EXT_framebuffer_blit GL_EXT_framebuffer_multisample GL_EXTX_framebuffer_mixed_formats GL_EXT_framebuffer_multisample_blit_scaled GL_EXT_framebuffer_object GL_EXT_framebuffer_sRGB GL_EXT_geometry_shader4 GL_EXT_gpu_program_parameters GL_EXT_gpu_shader4 GL_EXT_multi_draw_arrays GL_EXT_multiview_texture_multisample GL_EXT_multiview_timer_query GL_EXT_packed_depth_stencil GL_EXT_packed_float GL_EXT_packed_pixels GL_EXT_pixel_buffer_object GL_EXT_point_parameters GL_EXT_polygon_offset_clamp GL_EXT_post_depth_coverage GL_EXT_provoking_vertex GL_EXT_raster_multisample GL_EXT_rescale_normal GL_EXT_secondary_color GL_EXT_separate_shader_objects GL_EXT_separate_specular_color GL_EXT_shader_image_load_formatted GL_EXT_shader_image_load_store GL_EXT_shader_integer_mix GL_EXT_shadow_funcs GL_EXT_sparse_texture2 GL_EXT_stencil_two_side GL_EXT_stencil_wrap GL_EXT_texture3D GL_EXT_texture_array GL_EXT_texture_buffer_object GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_latc GL_EXT_texture_compression_rgtc GL_EXT_texture_compression_s3tc GL_EXT_texture_cube_map GL_EXT_texture_edge_clamp GL_EXT_texture_env_combine GL_EXT_texture_env_dot3 GL_EXT_texture_filter_anisotropic GL_EXT_texture_filter_minmax GL_EXT_texture_integer GL_EXT_texture_lod GL_EXT_texture_lod_bias GL_EXT_texture_mirror_clamp GL_EXT_texture_object GL_EXT_texture_shadow_lod GL_EXT_texture_shared_exponent GL_EXT_texture_sRGB GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_decode GL_EXT_texture_storage GL_EXT_texture_swizzle GL_EXT_timer_query GL_EXT_transform_feedback2 GL_EXT_vertex_array GL_EXT_vertex_array_bgra GL_EXT_vertex_attrib_64bit GL_EXT_window_rectangles GL_EXT_import_sync_object GL_IBM_rasterpos_clip GL_IBM_texture_mirrored_repeat GL_KHR_context_flush_control GL_KHR_debug GL_EXT_memory_object GL_EXT_memory_object_win32 GL_NV_memory_object_sparse GL_EXT_win32_keyed_mutex GL_KHR_parallel_shader_compile GL_KHR_no_error GL_KHR_robust_buffer_access_behavior GL_KHR_robustness GL_EXT_semaphore GL_EXT_semaphore_win32 GL_NV_timeline_semaphore GL_KHR_shader_subgroup GL_KTX_buffer_region GL_NV_alpha_to_coverage_dither_control GL_NV_bindless_multi_draw_indirect GL_NV_bindless_multi_draw_indirect_count GL_NV_bindless_texture GL_NV_blend_equation_advanced GL_NV_blend_equation_advanced_coherent GL_NVX_blend_equation_advanced_multi_draw_buffers GL_NV_blend_minmax_factor GL_NV_blend_square GL_NV_clip_space_w_scaling GL_NV_command_list GL_NV_compute_program5 GL_NV_compute_shader_derivatives GL_NV_conditional_render GL_NV_conservative_raster GL_NV_conservative_raster_dilate GL_NV_conservative_raster_pre_snap GL_NV_conservative_raster_pre_snap_triangles GL_NV_conservative_raster_underestimation GL_NV_copy_depth_to_color GL_NV_copy_image GL_NV_depth_buffer_float GL_NV_depth_clamp GL_NV_draw_texture GL_NV_draw_vulkan_image GL_NV_ES1_1_compatibility GL_NV_ES3_1_compatibility GL_NV_explicit_multisample GL_NV_feature_query GL_NV_fence GL_NV_fill_rectangle GL_NV_float_buffer GL_NV_fog_distance GL_NV_fragment_coverage_to_color GL_NV_fragment_program GL_NV_fragment_program_option GL_NV_fragment_program2 GL_NV_fragment_shader_barycentric GL_NV_fragment_shader_interlock GL_NV_framebuffer_mixed_samples GL_NV_framebuffer_multisample_coverage GL_NV_geometry_shader4 GL_NV_geometry_shader_passthrough GL_NV_gpu_program4 GL_NV_internalformat_sample_query GL_NV_gpu_program4_1 GL_NV_gpu_program5 GL_NV_gpu_program5_mem_extended GL_NV_gpu_program_fp64 GL_NV_gpu_program_multiview GL_NV_gpu_shader5 GL_NV_half_float GL_NV_light_max_exponent GL_NV_memory_attachment GL_NV_mesh_shader GL_NV_multisample_coverage GL_NV_multisample_filter_hint GL_NV_occlusion_query GL_NV_packed_depth_stencil GL_NV_parameter_buffer_object GL_NV_parameter_buffer_object2 GL_NV_path_rendering GL_NV_path_rendering_shared_edge GL_NV_pixel_data_range GL_NV_point_sprite GL_NV_primitive_restart GL_NV_primitive_shading_rate GL_NV_query_resource GL_NV_query_resource_tag GL_NV_register_combiners GL_NV_register_combiners2 GL_NV_representative_fragment_test GL_NV_sample_locations GL_NV_sample_mask_override_coverage GL_NV_scissor_exclusive GL_NV_shader_atomic_counters GL_NV_shader_atomic_float GL_NV_shader_atomic_float64 GL_NV_shader_atomic_fp16_vector GL_NV_shader_atomic_int64 GL_NV_shader_buffer_load GL_NV_shader_storage_buffer_object GL_NV_shader_subgroup_partitioned GL_NV_shader_texture_footprint GL_NV_shading_rate_image GL_NV_stereo_view_rendering GL_NV_texgen_reflection GL_NV_texture_barrier GL_NV_texture_compression_vtc GL_NV_texture_dirty_tile_map GL_NV_texture_env_combine4 GL_NV_texture_multisample GL_NV_texture_rectangle GL_NV_texture_rectangle_compressed GL_NV_texture_shader GL_NV_texture_shader2 GL_NV_texture_shader3 GL_NV_transform_feedback GL_NV_transform_feedback2 GL_NV_uniform_buffer_unified_memory GL_NV_uniform_buffer_std430_layout GL_NV_vertex_array_range GL_NV_vertex_array_range2 GL_NV_vertex_attrib_integer_64bit GL_NV_vertex_buffer_unified_memory GL_NV_vertex_program GL_NV_vertex_program1_1 GL_NV_vertex_program2 GL_NV_vertex_program2_option GL_NV_vertex_program3 GL_NV_viewport_array2 GL_NV_viewport_swizzle GL_NVX_conditional_render GL_NVX_linked_gpu_multicast GL_NV_gpu_multicast GL_NVX_gpu_multicast2 GL_NVX_progress_fence GL_NVX_gpu_memory_info GL_NVX_multigpu_info GL_NVX_nvenc_interop GL_NV_shader_thread_group GL_NV_shader_thread_shuffle GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_OVR_multiview GL_OVR_multiview2 GL_SGIS_generate_mipmap GL_SGIS_texture_lod GL_SGIX_depth_texture GL_SGIX_shadow GL_SUN_slice_accum GL_WIN_swap_hint WGL_EXT_swap_control 
+2026/09/16 17:30:04 OpenGL initialized!
+2026/09/16 17:30:04 Quicksand Bold loaded!
+2026/09/16 17:30:04 Initializing BASS...
+2026/09/16 17:30:04 BASS Initialized!
+2026/09/16 17:30:04 BASS Version:        2.4.17.41
+2026/09/16 17:30:04 BASS FX Version:     2.4.12.14
+2026/09/16 17:30:04 BASS Mix Version:    2.4.12.8
+2026/09/16 17:30:04 SkinManager: Skin "default" loaded.
+2026/09/16 17:30:04 Loading texture into atlas: assets/textures/cursor.png
+2026/09/16 17:30:04 Loading texture into atlas: assets/textures/cursor-top.png
+2026/09/16 17:30:04 Loading texture into atlas: assets/default-skin/hit50.png
+2026/09/16 17:30:04 Loading texture into atlas: assets/default-skin/hit100.png
+2026/09/16 17:30:04 Loading texture into atlas: assets/textures/triangle.png
+2026/09/16 17:30:04 Loading texture into atlas: assets/textures/triangle-shadow.png
+2026/09/16 17:30:04 Loading texture into atlas: assets/textures/triangle-small.png
+2026/09/16 17:30:04 Loading texture into atlas: assets/textures/cross.png
+2026/09/16 17:30:04 Loading texture: assets/textures/cursortrail.png
+2026/09/16 17:30:04 Playing: MY FIRST STORY feat. chelly (EGOIST) - 1,000,000 TIMES [SOTARKS' MILLION]
+2026/09/16 17:30:04 Audio track: audio.mp3
+2026/09/16 17:30:04 Loading texture into atlas: assets/textures/warning.png
+2026/09/16 17:30:04 Trying to load storyboard from:  C:\Users\admin\AppData\Local\replay.reowo.me\danser-songs\f18de7a0\MY FIRST STORY feat. chelly (EGOIST) - 1,000,000 TIMES (A r M i N) [SOTARKS' MILLION].osu
+2026/09/16 17:30:04 Storyboard not found!
+2026/09/16 17:30:04 Loading:  F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\lazer-export-stripped.osr
+2026/09/16 17:30:04 Loading replay for "<player>":
+2026/09/16 17:30:04 	Mods: LZ
+2026/09/16 17:30:04 	Median cv frametime: 17.00ms
+2026/09/16 17:30:04 	Replay duration: 29041ms
+2026/09/16 17:30:04 	Expected score: 147051
+2026/09/16 17:30:04 	Replay loaded!
+2026/09/16 17:30:04 Creating osu! ruleset...
+2026/09/16 17:30:04 Using pp calc version 2025-03-06: https://osu.ppy.sh/home/news/2025-03-06-performance-points-star-rating-updates
+2026/09/16 17:30:04 Calculating step SR for mods: NM
+2026/09/16 17:30:04 Calculations finished! Took  3ms
+2026/09/16 17:30:04 Stars:
+2026/09/16 17:30:04 	Aim:   3.2702913136168625
+2026/09/16 17:30:04 	Speed: 2.6467646462296583
+2026/09/16 17:30:04 	Total: 6.278705010761876
+2026/09/16 17:30:04 SS PP:
+2026/09/16 17:30:04 	Aim:   141.5316247434293
+2026/09/16 17:30:04 	Tap:   77.48366926745699
+2026/09/16 17:30:04 	Acc:   95.33057253065569
+2026/09/16 17:30:04 	Total: 328.1965331414265
+2026/09/16 17:30:04 Calculating HP rates for "<player>"...
+2026/09/16 17:30:04 	Passive drain rate: 0.080108642578125
+2026/09/16 17:30:04 Ubuntu Regular loaded!
+2026/09/16 17:30:05 Error connecting to osu!api: oauth2: "invalid_request" "The request is missing a required parameter, includes an invalid parameter value, includes a parameter more than once, or is otherwise malformed."
+2026/09/16 17:30:05 Creating HitObject container...
+2026/09/16 17:30:05 Container created.
+2026/09/16 17:30:05 SkinManager: Texture uploaded as single texture: cursor-ripple.png
+2026/09/16 17:30:05 SkinManager: Texture uploaded as single texture: scorebar-bg.png
+2026/09/16 17:30:05 SkinManager: Texture uploaded as single texture: menu-button-background.png
+2026/09/16 17:30:05 FFmpeg exec location: C:\Users\admin\AppData\Local\replay.reowo.me\danser\0.11.0\ffmpeg\ffmpeg.exe
+2026/09/16 17:30:05 Starting encoding!
+2026/09/16 17:30:05 Running ffmpeg with options: [-y -an -f rawvideo -c:v rawvideo -s 1280x720 -pix_fmt yuv420p -r 30 -color_range 1 -colorspace 1 -color_trc 1 -color_primaries 1 -i - -c:v h264_nvenc -color_range 1 -colorspace 1 -color_trc 1 -color_primaries 1 -movflags +write_colr -rc vbr -b:v 400M -cq 22 -profile:v high -preset p7 F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\video.mp4]
+2026/09/16 17:30:05 Running ffmpeg with options: [-y -f f32le -acodec pcm_f32le -ar 48000 -ac 2 -i - -nostats -vn -c:a aac -strict -2 -b:a 192k F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\audio.mp4]
+
+2026/09/16 17:30:05 Progress: 0%, Speed: 13.05x, ETA: 7s
+ffmpeg version n7.1-198-g9abf2aef37-20250225 Copyright (c) 2000-2024 the FFmpeg developers
+  built with gcc 14.2.0 (crosstool-NG 1.26.0.120_4d36f27)
+  configuration: --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-gpl --enable-version3 --disable-debug --disable-autodetect --disable-ffplay --disable-postproc --enable-nvenc --enable-amf --enable-libsvtav1 --disable-decoders --enable-decoder='h263,flv,h264,hevc,mjpeg,vp9,rawvideo,pcm_f32le,pcm_f32be,wrapped_avframe' --disable-devices --enable-indev=lavfi --disable-encoders --enable-encoder='libx264,libx265,h264_nvenc,hevc_nvenc,av1_nvenc,h264_qsv,hevc_qsv,h264_amf,hevc_amf,av1_amf,libsvtav1,aac,libmp3lame,libopus,flac,rawvideo' --disable-demuxers --enable-demuxer='matroska,mov,avi,flv,rawvideo,wav,pcm_f32le,pcm_f32be,lavfi' --disable-muxers --enable-muxer='mov,rawvideo,mp4,matroska,mp3,flac,ogg,null' --disable-protocols --enable-protocol='file,pipe,fd' --enable-shared --disable-static --disable-w32threads --enable-pthreads --disable-iconv --disable-zlib --disable-libfreetype --disable-libfribidi --disable-gmp --disable-libxml2 --disable-lzma --disable-fontconfig --disable-libvorbis --disable-opencl --disable-libpulse --disable-libvmaf --disable-libxcb --disable-xlib --enable-amf --disable-libaom --disable-libaribb24 --disable-avisynth --disable-chromaprint --disable-libdav1d --disable-libdavs2 --enable-libdvdread --enable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --disable-libgme --disable-libkvazaar --disable-libaribcaption --disable-libass --disable-libbluray --disable-libjxl --enable-libmp3lame --enable-libopus --disable-librist --disable-libssh --disable-libtheora --disable-libvpx --disable-libwebp --enable-libzmq --disable-lv2 --enable-libvpl --disable-openal --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --disable-librav1e --disable-librubberband --disable-schannel --disable-sdl2 --enable-libsnappy --disable-libsoxr --disable-libsrt --enable-libsvtav1 --disable-libtwolame --disable-libuavs3d --disable-libdrm --disable-vaapi --disable-libvidstab --disable-vulkan --disable-libshaderc --disable-libplacebo --disable-libvvenc --enable-libx264 --enable-libx265 --disable-libxavs2 --disable-libxvid --disable-libzimg --disable-libzvbi --extra-cflags= --extra-cxxflags= --extra-libs= --extra-ldflags= --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20250225
+  libavutil      59. 39.100 / 59. 39.100
+  libavcodec     61. 19.101 / 61. 19.101
+  libavformat    61.  7.100 / 61.  7.100
+  libavdevice    61.  3.100 / 61.  3.100
+  libavfilter    10.  4.100 / 10.  4.100
+  libswscale      8.  3.100 /  8.  3.100
+  libswresample   5.  3.100 /  5.  3.100
+Input #0, rawvideo, from 'fd:':
+  Duration: N/A, start: 0.000000, bitrate: 331776 kb/s
+  Stream #0:0: Video: rawvideo (I420 / 0x30323449), yuv420p(tv, bt709), 1280x720, 331776 kb/s, 30 tbr, 30 tbn
+ffmpeg version n7.1-198-g9abf2aef37-20250225 Copyright (c) 2000-2024 the FFmpeg developers
+  built with gcc 14.2.0 (crosstool-NG 1.26.0.120_4d36f27)
+  configuration: --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-gpl --enable-version3 --disable-debug --disable-autodetect --disable-ffplay --disable-postproc --enable-nvenc --enable-amf --enable-libsvtav1 --disable-decoders --enable-decoder='h263,flv,h264,hevc,mjpeg,vp9,rawvideo,pcm_f32le,pcm_f32be,wrapped_avframe' --disable-devices --enable-indev=lavfi --disable-encoders --enable-encoder='libx264,libx265,h264_nvenc,hevc_nvenc,av1_nvenc,h264_qsv,hevc_qsv,h264_amf,hevc_amf,av1_amf,libsvtav1,aac,libmp3lame,libopus,flac,rawvideo' --disable-demuxers --enable-demuxer='matroska,mov,avi,flv,rawvideo,wav,pcm_f32le,pcm_f32be,lavfi' --disable-muxers --enable-muxer='mov,rawvideo,mp4,matroska,mp3,flac,ogg,null' --disable-protocols --enable-protocol='file,pipe,fd' --enable-shared --disable-static --disable-w32threads --enable-pthreads --disable-iconv --disable-zlib --disable-libfreetype --disable-libfribidi --disable-gmp --disable-libxml2 --disable-lzma --disable-fontconfig --disable-libvorbis --disable-opencl --disable-libpulse --disable-libvmaf --disable-libxcb --disable-xlib --enable-amf --disable-libaom --disable-libaribb24 --disable-avisynth --disable-chromaprint --disable-libdav1d --disable-libdavs2 --enable-libdvdread --enable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --disable-libgme --disable-libkvazaar --disable-libaribcaption --disable-libass --disable-libbluray --disable-libjxl --enable-libmp3lame --enable-libopus --disable-librist --disable-libssh --disable-libtheora --disable-libvpx --disable-libwebp --enable-libzmq --disable-lv2 --enable-libvpl --disable-openal --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --disable-librav1e --disable-librubberband --disable-schannel --disable-sdl2 --enable-libsnappy --disable-libsoxr --disable-libsrt --enable-libsvtav1 --disable-libtwolame --disable-libuavs3d --disable-libdrm --disable-vaapi --disable-libvidstab --disable-vulkan --disable-libshaderc --disable-libplacebo --disable-libvvenc --enable-libx264 --enable-libx265 --disable-libxavs2 --disable-libxvid --disable-libzimg --disable-libzvbi --extra-cflags= --extra-cxxflags= --extra-libs= --extra-ldflags= --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20250225
+  libavutil      59. 39.100 / 59. 39.100
+  libavcodec     61. 19.101 / 61. 19.101
+  libavformat    61.  7.100 / 61.  7.100
+  libavdevice    61.  3.100 / 61.  3.100
+  libavfilter    10.  4.100 / 10.  4.100
+  libswscale      8.  3.100 /  8.  3.100
+  libswresample   5.  3.100 /  5.  3.100
+Stream mapping:
+  Stream #0:0 -> #0:0 (rawvideo (native) -> h264 (h264_nvenc))
+
+2026/09/16 17:30:05 Progress: 1%, Speed: 18.04x, ETA: 5s
+Output #0, mp4, to 'F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\video.mp4':
+  Metadata:
+    encoder         : Lavf61.7.100
+  Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1280x720, q=2-31, 30 fps, 15360 tbn
+      Metadata:
+        encoder         : Lavc61.19.101 h264_nvenc
+      Side data:
+        cpb: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A
+
+2026/09/16 17:30:05 Progress: 2%, Speed: 4.15x, ETA: 23s
+
+2026/09/16 17:30:05 Progress: 3%, Speed: 44.76x, ETA: 2s
+
+2026/09/16 17:30:05 Progress: 4%, Speed: 24.65x, ETA: 3s
+[aist#0:0/pcm_f32le @ 0000024322c901c0] Guessed Channel Layout: stereo
+Input #0, f32le, from 'fd:':
+  Duration: N/A, bitrate: 3072 kb/s
+  Stream #0:0: Audio: pcm_f32le, 48000 Hz, stereo, flt, 3072 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (pcm_f32le (native) -> aac (native))
+Output #0, mp4, to 'F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\audio.mp4':
+  Metadata:
+    encoder         : Lavf61.7.100
+  Stream #0:0: Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 192 kb/s
+      Metadata:
+        encoder         : Lavc61.19.101 aac
+
+2026/09/16 17:30:05 Progress: 5%, Speed: 22.78x, ETA: 4s
+
+2026/09/16 17:30:05 Progress: 6%, Speed: 22.90x, ETA: 4s
+
+2026/09/16 17:30:05 Progress: 7%, Speed: 22.69x, ETA: 4s
+
+2026/09/16 17:30:05 Progress: 8%, Speed: 22.80x, ETA: 3s
+frame=  175 fps=0.0 q=16.0 size=     256KiB time=00:00:05.73 bitrate= 365.8kbits/s speed=11.1x    
+2026/09/16 17:30:05 Progress: 9%, Speed: 18.58x, ETA: 4s
+
+2026/09/16 17:30:05 Progress: 10%, Speed: 14.14x, ETA: 6s
+
+2026/09/16 17:30:05 Progress: 11%, Speed: 20.28x, ETA: 4s
+
+2026/09/16 17:30:05 Progress: 12%, Speed: 16.98x, ETA: 5s
+
+2026/09/16 17:30:06 Progress: 13%, Speed: 17.35x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 14%, Speed: 22.22x, ETA: 3s
+
+2026/09/16 17:30:06 Progress: 15%, Speed: 19.27x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 16%, Speed: 19.01x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 17%, Speed: 17.16x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 18%, Speed: 16.12x, ETA: 4s
+frame=  479 fps=465 q=18.0 size=    4096KiB time=00:00:15.86 bitrate=2114.8kbits/s speed=15.4x    
+2026/09/16 17:30:06 Progress: 19%, Speed: 18.55x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 20%, Speed: 18.15x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 21%, Speed: 17.73x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 22%, Speed: 18.98x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 23%, Speed: 18.17x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 24%, Speed: 16.91x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 25%, Speed: 20.51x, ETA: 3s
+
+2026/09/16 17:30:06 Progress: 26%, Speed: 17.72x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 27%, Speed: 18.26x, ETA: 3s
+
+2026/09/16 17:30:06 Progress: 28%, Speed: 18.48x, ETA: 3s
+frame=  772 fps=496 q=17.0 size=    9216KiB time=00:00:25.63 bitrate=2945.3kbits/s speed=16.5x    
+2026/09/16 17:30:06 Progress: 29%, Speed: 15.46x, ETA: 4s
+
+2026/09/16 17:30:06 Progress: 30%, Speed: 15.04x, ETA: 4s
+
+2026/09/16 17:30:07 Progress: 31%, Speed: 18.31x, ETA: 3s
+2026/09/16 17:30:07 Player failed!
+
+2026/09/16 17:30:07 Progress: 32%, Speed: 20.81x, ETA: 3s
+2026/09/16 17:30:07 Finishing rendering...
+2026/09/16 17:30:07 Waiting for video to finish writing...
+2026/09/16 17:30:07 Finished! Stopping video pipe...
+2026/09/16 17:30:07 Video pipe closed. Waiting for video ffmpeg process to finish...
+[out#0/mp4 @ 0000020da1cb52c0] video:11600KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.107689%
+frame=  978 fps=509 q=17.0 Lsize=   11613KiB time=00:00:32.50 bitrate=2927.1kbits/s speed=16.9x    
+2026/09/16 17:30:07 Video process finished.
+2026/09/16 17:30:07 Audio finished! Stopping audio pipe...
+2026/09/16 17:30:07 Audio pipe closed. Waiting for audio ffmpeg process to finish...
+[out#0/mp4 @ 0000024320d64d80] video:0KiB audio:644KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 1.053849%
+size=     650KiB time=00:00:32.60 bitrate= 163.4kbits/s speed=19.6x    
+[aac @ 0000024320da6ac0] Qavg: 12736.679
+2026/09/16 17:30:07 Audio process finished.
+2026/09/16 17:30:07 Ffmpeg finished.
+2026/09/16 17:30:07 Starting composing audio and video into one file...
+2026/09/16 17:30:07 Running ffmpeg with options: [-y -i F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\video.mp4 -i F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\audio.mp4 -c:v copy -c:a copy -strict -2 -movflags +faststart F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped.mp4]
+ffmpeg version n7.1-198-g9abf2aef37-20250225 Copyright (c) 2000-2024 the FFmpeg developers
+  built with gcc 14.2.0 (crosstool-NG 1.26.0.120_4d36f27)
+  configuration: --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-gpl --enable-version3 --disable-debug --disable-autodetect --disable-ffplay --disable-postproc --enable-nvenc --enable-amf --enable-libsvtav1 --disable-decoders --enable-decoder='h263,flv,h264,hevc,mjpeg,vp9,rawvideo,pcm_f32le,pcm_f32be,wrapped_avframe' --disable-devices --enable-indev=lavfi --disable-encoders --enable-encoder='libx264,libx265,h264_nvenc,hevc_nvenc,av1_nvenc,h264_qsv,hevc_qsv,h264_amf,hevc_amf,av1_amf,libsvtav1,aac,libmp3lame,libopus,flac,rawvideo' --disable-demuxers --enable-demuxer='matroska,mov,avi,flv,rawvideo,wav,pcm_f32le,pcm_f32be,lavfi' --disable-muxers --enable-muxer='mov,rawvideo,mp4,matroska,mp3,flac,ogg,null' --disable-protocols --enable-protocol='file,pipe,fd' --enable-shared --disable-static --disable-w32threads --enable-pthreads --disable-iconv --disable-zlib --disable-libfreetype --disable-libfribidi --disable-gmp --disable-libxml2 --disable-lzma --disable-fontconfig --disable-libvorbis --disable-opencl --disable-libpulse --disable-libvmaf --disable-libxcb --disable-xlib --enable-amf --disable-libaom --disable-libaribb24 --disable-avisynth --disable-chromaprint --disable-libdav1d --disable-libdavs2 --enable-libdvdread --enable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --disable-libgme --disable-libkvazaar --disable-libaribcaption --disable-libass --disable-libbluray --disable-libjxl --enable-libmp3lame --enable-libopus --disable-librist --disable-libssh --disable-libtheora --disable-libvpx --disable-libwebp --enable-libzmq --disable-lv2 --enable-libvpl --disable-openal --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --disable-librav1e --disable-librubberband --disable-schannel --disable-sdl2 --enable-libsnappy --disable-libsoxr --disable-libsrt --enable-libsvtav1 --disable-libtwolame --disable-libuavs3d --disable-libdrm --disable-vaapi --disable-libvidstab --disable-vulkan --disable-libshaderc --disable-libplacebo --disable-libvvenc --enable-libx264 --enable-libx265 --disable-libxavs2 --disable-libxvid --disable-libzimg --disable-libzvbi --extra-cflags= --extra-cxxflags= --extra-libs= --extra-ldflags= --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20250225
+  libavutil      59. 39.100 / 59. 39.100
+  libavcodec     61. 19.101 / 61. 19.101
+  libavformat    61.  7.100 / 61.  7.100
+  libavdevice    61.  3.100 / 61.  3.100
+  libavfilter    10.  4.100 / 10.  4.100
+  libswscale      8.  3.100 /  8.  3.100
+  libswresample   5.  3.100 /  5.  3.100
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\video.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf61.7.100
+  Duration: 00:00:32.60, start: 0.000000, bitrate: 2918 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1280x720 [SAR 1:1 DAR 16:9], 2915 kb/s, 30 fps, 30 tbr, 15360 tbn (default)
+      Metadata:
+        handler_name    : VideoHandler
+        vendor_id       : [0][0][0][0]
+        encoder         : Lavc61.19.101 h264_nvenc
+[aist#1:0/aac @ 000001355abffb00] Guessed Channel Layout: stereo
+Input #1, mov,mp4,m4a,3gp,3g2,mj2, from 'F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped_temp\audio.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2mp41
+    encoder         : Lavf61.7.100
+  Duration: 00:00:32.60, start: 0.000000, bitrate: 163 kb/s
+  Stream #1:0[0x1](und): Audio: aac (mp4a / 0x6134706D), 48000 Hz, stereo, 161 kb/s (default)
+      Metadata:
+        handler_name    : SoundHandler
+        vendor_id       : [0][0][0][0]
+Stream mapping:
+  Stream #0:0 -> #0:0 (copy)
+  Stream #1:0 -> #0:1 (copy)
+[mp4 @ 000001355ac04cc0] track 1: codec frame size is not set
+Output #0, mp4, to 'F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf61.7.100
+  Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1280x720 [SAR 1:1 DAR 16:9], q=2-31, 2915 kb/s, 30 fps, 30 tbr, 15360 tbn (default)
+      Metadata:
+        handler_name    : VideoHandler
+        vendor_id       : [0][0][0][0]
+        encoder         : Lavc61.19.101 h264_nvenc
+  Stream #0:1(und): Audio: aac (mp4a / 0x6134706D), 48000 Hz, stereo, 161 kb/s (default)
+      Metadata:
+        handler_name    : SoundHandler
+        vendor_id       : [0][0][0][0]
+Press [q] to stop, [?] for help
+[mp4 @ 000001355ac04cc0] Starting second pass: moving the moov atom to the beginning of the file
+[out#0/mp4 @ 000001355abc5400] video:11600KiB audio:644KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.298148%
+frame=  978 fps=0.0 q=-1.0 Lsize=   12280KiB time=00:00:32.50 bitrate=3095.4kbits/s speed= 912x    
+2026/09/16 17:30:07 Finished!
+2026/09/16 17:30:07 Video is available at: F:\Projects\Personal\Others\osu-replay-editor\.scratch\lazer-replay-support\spike\spike-stripped.mp4
+2026/09/16 17:30:07 Cleaning up intermediate files...
+2026/09/16 17:30:07 Finished.
+2026/09/16 17:30:07 Exiting normally.
