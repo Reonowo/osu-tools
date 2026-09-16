@@ -11,12 +11,14 @@ rust_decimal = { version = "1", default-features = false, features = ["std"] }
 md-5 = "0.10"
 rosu-map = "0.2"
 serde = { version = "1", features = ["derive"] }
+# formats::score_info reads and writes lazer's json score-info block.
+# float_roundtrip: without it serde_json's fast float path can land 1 ulp off the
+# value .net wrote, which shows up as spurious "deviation" against fixtures that
+# the port actually reproduces bit-for-bit -- and would round-trip a mod
+# setting's double through this codec as a different number
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 
 [dev-dependencies]
 # 0.2.1 is newer than 0.3.0 (see the app crate's manifest); pinned together
 osu-db = { version = "0.2.1", default-features = false }
-# float_roundtrip: without it serde_json's fast float path can land 1 ulp off the
-# value .net wrote, which shows up as spurious "deviation" against fixtures that
-# the port actually reproduces bit-for-bit
-serde_json = { version = "1", features = ["float_roundtrip"] }

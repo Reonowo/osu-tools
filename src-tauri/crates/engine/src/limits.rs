@@ -28,6 +28,12 @@
 //! | [`MAX_OSR_FILE_BYTES`] | 32 MiB | raw `.osr` file byte length, checked in `formats::osr::decode_osr` before any framing is parsed | `formats::osr::tests::osr_file_size_cap_boundary` |
 //! | [`MAX_LZMA_DECOMPRESSED_BYTES`] | 128 MiB | the lzma-alone replay frame payload's decompressed size, enforced three ways in `formats::osr::decompress_lzma_capped`: a header precheck against the stream's declared uncompressed size, a `CappedWriter` bound on bytes actually produced, and lzma-rs's own `memlimit` guarding its internal dictionary buffer | `formats::osr::tests::lzma_bomb_declared_size_hits_cap` (declared-size precheck), `...::lzma_decompressed_size_cap_boundary` (accept-at-cap via the real decode path, which is also `CappedWriter`'s accept branch), `...::lzma_capped_writer_is_the_sole_guard_for_small_dict_sentinel_streams` (`CappedWriter`'s reject branch, on the one stream shape where neither of the other two layers can fire), `...::lzma_inflated_dict_size_hits_internal_memlimit` (lzma-rs's own memlimit) |
 //! | [`MAX_REPLAY_FRAMES`] | 4,000,000 | parsed replay frame count, checked in `formats::osr::parse_actions` | `formats::osr::tests::frame_count_cap_boundary` |
+//! | [`MAX_SCORE_INFO_BYTES`] | 4 MiB | the decompressed size of a lazer `.osr`'s score-info block (`formats::score_info`), bounded the same three ways `MAX_LZMA_DECOMPRESSED_BYTES` bounds the frame payload, through the shared `formats::lzma` decompressor. sized against the JSON the block holds -- a few hundred bytes on a real play, since it carries the mods, two statistics maps and the pauses -- never against the file: the block is its own lzma stream with its own declared size, so the frame payload's cap says nothing about it | `formats::score_info::tests::decompressed_size_cap_boundary` |
+//! | [`MAX_SCORE_INFO_JSON_DEPTH`] | 32 | the bracket nesting of that JSON, counted in a pre-parse scan (`formats::score_info::check_json_depth`) so the breach is this crate's own typed error rather than serde_json's recursion limit. a real block nests four deep (a mod's settings inside the mods array); unknown top-level keys are kept as opaque values and are the one place a crafted block could nest arbitrarily | `formats::score_info::tests::json_depth_cap_boundary` |
+//! | [`MAX_SCORE_INFO_MODS`] | 64 | entries in the block's `mods` array. the osu! ruleset declares about fifty and a play activates a handful; the array is otherwise bounded only by the byte cap | `formats::score_info::tests::mods_cap_boundary` |
+//! | [`MAX_SCORE_INFO_MOD_SETTINGS`] | 64 | entries in one mod's `settings` map, kept as opaque json values per entry. the most configurable mod ships single digits | `formats::score_info::tests::mod_settings_cap_boundary` |
+//! | [`MAX_SCORE_INFO_STATISTICS`] | 64 | entries in either statistics map. `HitResult` has seventeen members and an unknown name is kept rather than dropped, so a crafted map could otherwise grow to the byte cap | `formats::score_info::tests::statistics_cap_boundary` |
+//! | [`MAX_SCORE_INFO_PAUSES`] | 100,000 | entries in the `pauses` array. a pause is a user action, so a real play's count is human-bounded; the cap admits one every few milliseconds of the longest map | `formats::score_info::tests::pauses_cap_boundary` |
 //! | [`MAX_EDIT_BATCH_MEMBERS`] | 4,000,000 (= [`MAX_REPLAY_FRAMES`]) | member count of one `replay::document::ReplayDocument::apply_edit_batch` call, so a legitimate whole-stream edit is never amplification-capped | `replay::document::tests::batch_member_cap_boundary` |
 //! | [`MAX_UNDO_DEPTH`] | 1,000 | undo history entries retained per `replay::document::ReplayDocument`; the oldest entry evicts at the cap, and an eviction sets a sticky per-kind dirty flag so a diverged document can never read back as pristine | `replay::document::tests::undo_depth_cap_evicts_the_oldest_and_dirtiness_sticks` |
 //! | [`MAX_UNDO_RETAINED_MEMBERS`] | 8,000,000 (= 2 × [`MAX_REPLAY_FRAMES`]) | the member total retained across the undo history's entries, bounding memory where [`MAX_UNDO_DEPTH`] alone cannot: a whole-stream batch or a restore snapshot weighs up to [`MAX_REPLAY_FRAMES`] members on its own, so counting entries admits gigabytes; oldest entries evict past the budget with the same sticky-flag latch, and the entry just pushed never evicts so one over-budget step still lands | `replay::document::tests::undo_history_evicts_by_retained_members_too` and `...::the_newest_entry_survives_a_budget_it_alone_exceeds` |
@@ -277,6 +283,32 @@ pub const MAX_REPLAYS_FOLDER_FILES: usize = 100_000;
 pub const MAX_OSR_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_LZMA_DECOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_REPLAY_FRAMES: usize = 4_000_000;
+
+/// the decompressed size of a lazer `.osr`'s score-info block
+/// (`formats::score_info`), enforced through the same three-layer
+/// decompressor the frame payload uses (`formats::lzma`). the block is its
+/// own lzma stream with its own declared size, so it gets its own ceiling:
+/// a real play's block is a few hundred bytes of json, and 4 MiB admits a
+/// crafted one four orders of magnitude larger while keeping the resident
+/// buffer small
+pub const MAX_SCORE_INFO_BYTES: u64 = 4 * 1024 * 1024;
+
+/// the bracket nesting of the score-info json, counted before parsing. a
+/// real block nests four deep; unknown top-level keys, which this codec
+/// keeps verbatim, are where a crafted block could nest without bound
+pub const MAX_SCORE_INFO_JSON_DEPTH: usize = 32;
+
+/// entries in the score-info block's `mods` array
+pub const MAX_SCORE_INFO_MODS: usize = 64;
+
+/// entries in one score-info mod's `settings` map
+pub const MAX_SCORE_INFO_MOD_SETTINGS: usize = 64;
+
+/// entries in either score-info statistics map
+pub const MAX_SCORE_INFO_STATISTICS: usize = 64;
+
+/// entries in the score-info block's `pauses` array
+pub const MAX_SCORE_INFO_PAUSES: usize = 100_000;
 
 /// most members one edit batch may carry. a legitimate whole-stream snap or
 /// smooth touches every frame, so the cap prevents amplification, not scale;
