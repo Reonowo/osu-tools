@@ -153,12 +153,23 @@ pub fn editor_engine_error(e: EngineError) -> IpcError {
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Warning {
     AudioMissing,
+    /// the play's effective mods are outside the supported matrix. `mods`
+    /// is the header's legacy bitfield and `acronyms` the effective list the
+    /// configuration resolved; the frontend names the bits for a stable file
+    /// and the acronyms for a lazer one, which `profile` tells apart
     ModsNotSimulated {
         mods: u32,
+        acronyms: Vec<String>,
+        profile: engine::configuration::RulesProfile,
     },
     BeatmapMismatch {
         expected_md5: String,
         actual_md5: String,
+    },
+    /// a lazer file whose score-info block is framed but unreadable: the
+    /// frames play back, the simulation is withheld, and this says why
+    ScoreInfoUnreadable {
+        reason: String,
     },
 }
 
@@ -270,8 +281,20 @@ mod tests {
             json!({ "kind": "audioMissing" })
         );
         assert_eq!(
-            serde_json::to_value(Warning::ModsNotSimulated { mods: 8 }).unwrap(),
-            json!({ "kind": "modsNotSimulated", "mods": 8 })
+            serde_json::to_value(Warning::ModsNotSimulated {
+                mods: 8,
+                acronyms: vec!["HD".into()],
+                profile: engine::configuration::RulesProfile::Stable
+            })
+            .unwrap(),
+            json!({ "kind": "modsNotSimulated", "mods": 8, "acronyms": ["HD"], "profile": "stable" })
+        );
+        assert_eq!(
+            serde_json::to_value(Warning::ScoreInfoUnreadable {
+                reason: "not lzma".into()
+            })
+            .unwrap(),
+            json!({ "kind": "scoreInfoUnreadable", "reason": "not lzma" })
         );
         assert_eq!(
             serde_json::to_value(Warning::BeatmapMismatch {
