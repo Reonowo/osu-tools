@@ -7,6 +7,11 @@ export interface LoadedScene {
 	epoch: number;
 	beatmap: BeatmapMeta;
 	replay: ReplayMeta;
+	/** the play configuration the engine resolved for this file: the rules
+	 * profile, the effective mods, where they came from, and what the app may
+	 * do with the play. both edit gates read their answer here, and the
+	 * reasons are the engine's own words -- neither layer composes one */
+	configuration: PlayConfiguration;
 	frames: FrameDto[];
 	renderPlan: RenderPlan;
 	simulation: SimulationDto;
@@ -25,8 +30,10 @@ export interface LoadedScene {
 	 * the same shape `SkinManifest.files` has, for the same reason */
 	textureFiles: Record<string, string>;
 	warnings: LoadedSceneWarning[];
-	/// shipped only for pre-lazer authoritative scenes; always describes the
-	/// loaded file, never in-session edits
+	/// shipped for authoritative scenes against whichever record is that
+	/// profile's oracle: the header under the stable profile, the score-info
+	/// block under the native one. always describes the loaded file, never
+	/// in-session edits
 	integrity: IntegrityReport | null;
 	/// present when the play ended early: the header judged fewer objects
 	/// than the map has. the integrity report then annotates instead of
@@ -34,6 +41,98 @@ export interface LoadedScene {
 	/// export will contain. withheld on a consented beatmap mismatch
 	incompleteness: Incompleteness | null;
 }
+
+/** mirrors engine `configuration::RulesProfile`: the rule set a play was
+ * scored under. selected by the header version, never by the mods */
+export type RulesProfile = "stable" | "native";
+
+/** mirrors engine `configuration::ModProvenance`: where the effective mods
+ * came from. `inferredFromBitfield` is a lazer file whose block was absent or
+ * empty, read exactly as lazer's own reader falls back; `unresolvable` a lazer
+ * file whose block was framed but unreadable */
+export type ModProvenance = "bitfield" | "block" | "inferredFromBitfield" | "unresolvable";
+
+/** one effective mod: the acronym and the settings that differ from its
+ * defaults, opaque json values keyed by lazer's snake-case setting names */
+export interface EffectiveMod {
+	acronym: string;
+	settings: Record<string, unknown>;
+}
+
+/** mirrors engine `configuration::RefusalReason`: why a play is not simulated
+ * at all. `unsupportedMods` names every effective acronym outside the
+ * supported matrix; `unreadableScoreInfo` carries the codec's own reason */
+export type RefusalReason =
+	| { kind: "unsupportedMods"; acronyms: string[] }
+	| { kind: "beatmapMismatch" }
+	| { kind: "unreadableScoreInfo"; reason: string };
+
+/** whether and how the play can be simulated: under its own profile
+ * (authoritative), under a neighbouring one (approximate -- every surface
+ * that displays a timeline may read it, nothing that must be exact may), or
+ * not at all */
+export type SimulateCapability =
+	| { status: "authoritative"; profile: RulesProfile }
+	| { status: "approximate"; profile: RulesProfile }
+	| { status: "refused"; reason: RefusalReason };
+
+/** allowed, or refused with the engine's own reason -- the string a gate
+ * shows in its tooltip and the backend answers `notEditable` with */
+export type Capability = { allowed: true; reason?: undefined } | { allowed: false; reason: string };
+
+export interface Capabilities {
+	simulate: SimulateCapability;
+	editFrames: Capability;
+	regenerateExport: Capability;
+}
+
+/** mirrors engine `configuration::PlayConfiguration` field for field */
+export interface PlayConfiguration {
+	profile: RulesProfile;
+	mods: EffectiveMod[];
+	provenance: ModProvenance;
+	/** the playback rate; 1 for every configuration the matrix admits */
+	rate: number;
+	capabilities: Capabilities;
+}
+
+/** one entry of a score-info statistics map, in the block's own order and
+ * lazer's own result vocabulary (`great`, `large_tick_hit`,
+ * `slider_tail_hit`, ...) */
+export interface StatisticEntry {
+	result: string;
+	count: number;
+}
+
+/** mirrors scene.rs `ScoreInfoDto`: the file's own score-info record in the
+ * five states the codec tells apart. `opaque` is a stable file (nothing lazer
+ * wrote), `absent` lazer's first replay version, `empty` the framed empty
+ * array (what this app's own stripped exports used to write), `present` a
+ * readable block, `malformed` a framed block the codec could not read */
+export type ScoreInfoRecord =
+	| { status: "opaque" }
+	| { status: "absent" }
+	| { status: "empty" }
+	| {
+			status: "present";
+			statistics: StatisticEntry[];
+			maximumStatistics: StatisticEntry[];
+			/** the file's OWN accuracy, folded from the two maps above by the
+			 * engine under lazer's rule. lazer stores the maps and not the
+			 * fraction; a stable header's four counts cannot stand in, since the
+			 * native rule weighs slider tails and large ticks the legacy
+			 * projection does not carry. null when the maximum map weighs
+			 * nothing, which says nothing rather than 100% */
+			accuracy: number | null;
+			rank: WireRank | null;
+			totalScoreWithoutMods: number | null;
+			clientVersion: string;
+			/** a string for `ReplayMeta.onlineScoreId`'s reason */
+			onlineId: string;
+			userId: number;
+			pauseCount: number;
+	  }
+	| { status: "malformed"; reason: string };
 
 /// judged-vs-total identity computed at load from the header counts alone;
 /// judged < total by construction
@@ -43,19 +142,45 @@ export interface Incompleteness {
 }
 
 export interface IntegrityReport {
+	/** the profile the comparison ran under: stable's oracle is the header
+	 * (the cross-check and the life bar graph read it), the native one's is
+	 * the block lazer wrote */
+	profile: RulesProfile;
+	/** under the native profile a row is a statistics entry named by its
+	 * result (`great`, `large_tick_hit`), a `maximum:`-prefixed entry of the
+	 * maximum statistics, or one of the two header fields the block does not
+	 * carry (`maxCombo`, `totalScore`) */
 	rows: IntegrityRow[];
-	crossCheck: {
-		sections: number;
-		gekiKatsu: number;
-		/// sections − (geki + katu): the sections that ended without a burst
-		/// (stable awards neither geki nor katu to a section containing a
-		/// miss or a 50). signed, so an impossible header reads as the
-		/// inconsistency it is
-		sectionsWithoutBurst: number;
-		countMiss: number;
-		count50: number;
-	};
-	lifeBarGraph: LifeBarGraphReport;
+	/** stable's section identity; null under the native profile, which has
+	 * no sections */
+	crossCheck: IntegrityCrossCheck | null;
+	/** null under the native profile: a lazer client writes no graph */
+	lifeBarGraph: LifeBarGraphReport | null;
+	/** the native profile's comparison against the block beyond the rows;
+	 * null under stable */
+	block: BlockCheck | null;
+}
+
+export interface IntegrityCrossCheck {
+	sections: number;
+	gekiKatsu: number;
+	/// sections − (geki + katu): the sections that ended without a burst
+	/// (stable awards neither geki nor katu to a section containing a
+	/// miss or a 50). signed, so an impossible header reads as the
+	/// inconsistency it is
+	sectionsWithoutBurst: number;
+	countMiss: number;
+	count50: number;
+}
+
+/** mirrors scene.rs `BlockCheckDto`: the block's rank beside the simulated
+ * one, and -- when the block records a fail -- the engine's own fail point
+ * the rows were compared up to, since lazer counted nothing past it */
+export interface BlockCheck {
+	rankBlock: WireRank | null;
+	rankSimulated: WireRank;
+	rankMatch: boolean;
+	truncatedAt: number | null;
 }
 
 /** mirrors scene.rs `LifeBarGraphDto`: how the header's life bar graph
@@ -108,11 +233,24 @@ export interface ReplayMeta {
 	totalScore: number;
 	maxCombo: number;
 	perfect: boolean;
+	/** the header's own accuracy over its four counts and lazer's rank for
+	 * it, both computed rust-side by the rule the simulated totals use, so
+	 * the panel's "was" reference never re-derives either from the counts */
+	accuracy: number;
+	rank: WireRank;
 	/// .net ticks as a decimal string (exceeds 2^53)
 	timestampTicks: string;
 	onlineScoreId: string;
 	beatmapMd5: string | null;
+	/** the file's own score-info record; see ScoreInfoRecord */
+	scoreInfo: ScoreInfoRecord;
 }
+
+/** mirrors engine `score::ScoreRank`, serialized lowercase: lazer's own rank
+ * vocabulary. `x` is the full-accuracy rank the app displays as SS, `xh`/`sh`
+ * its hidden-mod variants (outside the supported mod matrix, but a lazer
+ * score-info block can spell them), `f` the native profile's fail */
+export type WireRank = "f" | "d" | "c" | "b" | "a" | "s" | "sh" | "x" | "xh";
 
 export interface FrameDto {
 	time: number;
@@ -153,9 +291,19 @@ export interface RegeneratedFields {
 	maxCombo: number;
 	perfect: boolean;
 	totalScore: number;
-	/** whether the drain-rate search behind the regenerated life bar graph
-	 * settled. the graph is written either way; this is what lets the summary
-	 * say so instead of claiming more than it knows */
+	/** the instant the regenerated fields stop at, when the play failed:
+	 * lazer's score processor counted nothing past the failing result, so a
+	 * failed native play's header and block carry the fold up to there and NOT
+	 * the whole-timeline fold the panels display. null on every other export */
+	truncatedAt: number | null;
+	/** whether a life bar graph was written at all. the stable projection
+	 * always writes one; the native projection never does, because a lazer
+	 * client writes none -- and the summary must not offer "regenerated" over
+	 * a field the export left empty */
+	lifeBarWritten: boolean;
+	/** whether the drain-rate search behind a WRITTEN life bar graph settled;
+	 * meaningless when none was written. this is what lets the summary say so
+	 * instead of claiming more than it knows */
 	lifeBarConverged: boolean;
 }
 
@@ -182,17 +330,31 @@ export interface EditDelta {
 
 export type Grade = "great" | "ok" | "meh" | "miss";
 
+/** mirrors scene.rs `JudgementKindDto`. the slider kinds carry the IDENTITY
+ * of the element they judged: the head its timing grade (great or miss under
+ * the stable profile, the grade lazer gave under the native one), every
+ * nested element its index into the slider's `RenderSlider.nested` list, so a
+ * consumer joins by identity and never by the nearest time -- the simulation
+ * and the render plan can time a tick differently by more than a tick
+ * spacing. `nestedIndex` is null only for a stable score point with no lazer
+ * counterpart (the recorded tick-count divergence) */
 export type JudgementKindDto =
 	| { type: "circle"; grade: Grade }
-	| { type: "sliderHead"; hit: boolean }
-	| { type: "sliderTick"; hit: boolean }
+	| { type: "sliderHead"; grade: Grade }
+	| { type: "sliderTick"; hit: boolean; nestedIndex: number | null }
 	/** `repeatIndex` is 0-based: the repeat that ends span `repeatIndex`, which
 	 * is lazer's node `repeatIndex + 1`. it rides on the event so a consumer
 	 * picking this repeat's samples never has to recover the node by counting
 	 * repeat events -- a positional join goes silently wrong the first time
 	 * emission order changes */
-	| { type: "sliderRepeat"; hit: boolean; repeatIndex: number }
-	| { type: "sliderTail"; hit: boolean }
+	| { type: "sliderRepeat"; hit: boolean; repeatIndex: number; nestedIndex: number | null }
+	| { type: "sliderTail"; hit: boolean; nestedIndex: number | null }
+	/** the slider's own lifecycle end, in both profiles: `complete` when any
+	 * nested element was hit, which is what gates the end sound. no grade, no
+	 * combo. under the stable profile it follows the aggregate at the
+	 * aggregate's time; under the native one it is the slider's only own event */
+	| { type: "sliderEnd"; complete: boolean }
+	/** stable's whole-slider grade; never emitted under the native profile */
 	| { type: "sliderAggregate"; grade: Grade }
 	| { type: "spinnerSpin" }
 	| { type: "spinnerBonus" }
@@ -212,6 +374,16 @@ export interface TotalsDto {
 	count50: number;
 	countMiss: number;
 	maxCombo: number;
+	/** 0-1, the engine's own fold under the play's profile. the frontend
+	 * displays it and never recomputes it from the counts, which is what
+	 * lets the native profile fill the same seat with lazer's rule */
+	accuracy: number;
+	rank: WireRank;
+	/** the native profile's statistics map in the block's own vocabulary and
+	 * order, every result kind lazer counts. null under the stable profile,
+	 * which has no such map; the wire always writes the key, and a test
+	 * literal may leave it out to mean the same absence */
+	statistics?: StatisticEntry[] | null;
 }
 
 export type SimulationDto =
@@ -222,7 +394,22 @@ export type SimulationDto =
 			hpCurve: HpCurve;
 			scoreCurve: ScoreCurve | null;
 	  }
-	| { status: "notSimulated"; reason: "unsupportedMods" | "beatmapMismatch" };
+	/** the same payload computed under a profile other than the play's own,
+	 * which `profile` names. everything that displays a timeline reads it;
+	 * nothing that must be exact (editing, regeneration, the integrity
+	 * report) does -- `lib/simulation.ts`'s hasTimeline is the one predicate */
+	| {
+			status: "approximate";
+			profile: RulesProfile;
+			events: JudgementEventDto[];
+			totals: TotalsDto;
+			hpCurve: HpCurve;
+			scoreCurve: ScoreCurve | null;
+	  }
+	| { status: "notSimulated"; reason: RefusalReason };
+
+/** the two arms that carry a timeline */
+export type SimulatedDto = Extract<SimulationDto, { status: "authoritative" | "approximate" }>;
 
 /** the engine's HP curve as it rides the wire: `[time, fraction]` breakpoints
  * in time order, the fraction being HP over 200 — never the header's life bar
@@ -367,8 +554,14 @@ export interface RenderNested {
 
 export type LoadedSceneWarning =
 	| { kind: "audioMissing" }
-	| { kind: "modsNotSimulated"; mods: number }
-	| { kind: "beatmapMismatch"; expectedMd5: string; actualMd5: string };
+	/** `mods` is the header's legacy bitfield and `acronyms` the effective
+	 * list the configuration resolved; the copy names the bits for a stable
+	 * file and the acronyms for a lazer one, which `profile` tells apart */
+	| { kind: "modsNotSimulated"; mods: number; acronyms: string[]; profile: RulesProfile }
+	| { kind: "beatmapMismatch"; expectedMd5: string; actualMd5: string }
+	/** a lazer file whose score-info block is framed but unreadable: the
+	 * frames play back, the simulation is withheld, and this says why */
+	| { kind: "scoreInfoUnreadable"; reason: string };
 
 export type IpcError =
 	| { kind: "replayParse"; message: string }

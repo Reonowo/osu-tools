@@ -132,7 +132,7 @@ function simulate(frames: readonly FrameDto[]): LoadedScene["simulation"] {
 		hpCurve: [],
 		scoreCurve: [],
 		events: [event(1002, 0), event(riseNear(2, 8000), 1), event(riseNear(4, 9100), 2)],
-		totals: { count300: 3, count100: 0, count50: 0, countMiss: 0, maxCombo: 3 }
+		totals: { count300: 3, count100: 0, count50: 0, countMiss: 0, maxCombo: 3, accuracy: 1, rank: "x" }
 	};
 }
 

@@ -55,16 +55,17 @@ describe("scene contract mirror", () => {
 		// literals copied from scene.rs's judgement_kinds_serialize_type_tagged
 		const kinds: JudgementKindDto[] = [
 			{ type: "circle", grade: "great" },
-			{ type: "sliderHead", hit: false },
+			{ type: "sliderHead", grade: "miss" },
 			{ type: "sliderAggregate", grade: "ok" },
 			{ type: "spinnerBonus" },
-			{ type: "sliderTick", hit: true },
-			{ type: "sliderRepeat", hit: true, repeatIndex: 2 },
-			{ type: "sliderTail", hit: true },
+			{ type: "sliderTick", hit: true, nestedIndex: 3 },
+			{ type: "sliderRepeat", hit: true, repeatIndex: 2, nestedIndex: 5 },
+			{ type: "sliderTail", hit: false, nestedIndex: null },
+			{ type: "sliderEnd", complete: true },
 			{ type: "spinnerSpin" },
 			{ type: "spinnerFinal", grade: "miss" }
 		];
-		expect(kinds).toHaveLength(9);
+		expect(kinds).toHaveLength(10);
 	});
 
 	test("the simulation union narrows on status", () => {
@@ -82,14 +83,32 @@ describe("scene contract mirror", () => {
 						accuracyAfter: 50 / 300
 					}
 				],
-				totals: { count300: 0, count100: 0, count50: 1, countMiss: 0, maxCombo: 1 }
+				totals: {
+					count300: 0,
+					count100: 0,
+					count50: 1,
+					countMiss: 0,
+					maxCombo: 1,
+					accuracy: 50 / 300,
+					rank: "d"
+				}
 			},
-			{ status: "notSimulated", reason: "unsupportedMods" },
-			{ status: "notSimulated", reason: "beatmapMismatch" }
+			{
+				status: "approximate",
+				profile: "stable",
+				hpCurve: [],
+				scoreCurve: [],
+				events: [],
+				totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0, accuracy: 0, rank: "d" }
+			},
+			{ status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } },
+			{ status: "notSimulated", reason: { kind: "beatmapMismatch" } },
+			{ status: "notSimulated", reason: { kind: "unreadableScoreInfo", reason: "not lzma" } }
 		];
 		for (const sim of sims) {
 			if (sim.status === "authoritative") expect(sim.events.length).toBeGreaterThan(0);
-			else expect(["unsupportedMods", "beatmapMismatch"]).toContain(sim.reason);
+			else if (sim.status === "approximate") expect(sim.profile).toBe("stable");
+			else expect(["unsupportedMods", "beatmapMismatch", "unreadableScoreInfo"]).toContain(sim.reason.kind);
 		}
 	});
 
@@ -245,9 +264,10 @@ describe("scene contract mirror", () => {
 	test("warnings carry their payload fields", () => {
 		const warnings: LoadedSceneWarning[] = [
 			{ kind: "audioMissing" },
-			{ kind: "modsNotSimulated", mods: 8 },
-			{ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" }
+			{ kind: "modsNotSimulated", mods: 8, acronyms: ["HD"], profile: "stable" },
+			{ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" },
+			{ kind: "scoreInfoUnreadable", reason: "not lzma" }
 		];
-		expect(warnings).toHaveLength(3);
+		expect(warnings).toHaveLength(4);
 	});
 });

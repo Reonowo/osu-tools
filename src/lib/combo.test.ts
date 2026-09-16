@@ -29,8 +29,8 @@ describe("comboChanges", () => {
 		// and an ok/meh aggregate neither increments nor resets. reading
 		// comboAfter rather than the kind is what gets this right with no table
 		const changes = comboChanges([
-			event(1000, 5, { type: "sliderHead", hit: true }),
-			event(1100, 5, { type: "sliderTail", hit: false }),
+			event(1000, 5, { type: "sliderHead", grade: "great" }),
+			event(1100, 5, { type: "sliderTail", hit: false, nestedIndex: null }),
 			event(1150, 5, { type: "sliderAggregate", grade: "ok" })
 		]);
 		expect(changes).toEqual([{ time: 1000, combo: 5, previous: 0 }]);

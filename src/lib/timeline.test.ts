@@ -96,8 +96,20 @@ describe("statsAt", () => {
 	test("several events at the same instant: the last one in sequence wins", () => {
 		const tied = [
 			{ time: 100, objectIndex: 0, kind: { type: "circle", grade: "great" }, comboAfter: 1, accuracyAfter: 1 },
-			{ time: 500, objectIndex: 1, kind: { type: "sliderTick", hit: true }, comboAfter: 2, accuracyAfter: 0.95 },
-			{ time: 500, objectIndex: 1, kind: { type: "sliderTick", hit: true }, comboAfter: 3, accuracyAfter: 0.96 },
+			{
+				time: 500,
+				objectIndex: 1,
+				kind: { type: "sliderTick", hit: true, nestedIndex: null },
+				comboAfter: 2,
+				accuracyAfter: 0.95
+			},
+			{
+				time: 500,
+				objectIndex: 1,
+				kind: { type: "sliderTick", hit: true, nestedIndex: null },
+				comboAfter: 3,
+				accuracyAfter: 0.96
+			},
 			{
 				time: 500,
 				objectIndex: 1,
