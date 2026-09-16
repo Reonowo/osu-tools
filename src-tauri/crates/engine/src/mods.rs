@@ -31,6 +31,8 @@ impl LegacyMods {
     pub const SPUN_OUT: u32 = 4096;
     pub const AUTOPILOT: u32 = 8192;
     pub const PERFECT: u32 = 16384;
+    pub const CINEMA: u32 = 1 << 22;
+    pub const TARGET: u32 = 1 << 23;
     pub const SCORE_V2: u32 = 536_870_912;
 
     pub fn contains(self, flag: u32) -> bool {
