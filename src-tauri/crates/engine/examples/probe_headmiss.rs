@@ -24,7 +24,7 @@ use engine::formats::osr::decode_osr;
 use engine::replay::frames::convert_frames;
 use engine::score::{peppy_stars, total_score, ScoreContext, NOMOD_SCORE_MULTIPLIER};
 use engine::simulation::score::JudgementKind;
-use engine::simulation::simulate;
+use engine::simulation::simulate_stable;
 
 #[derive(serde::Deserialize)]
 struct Entry {
@@ -284,7 +284,7 @@ fn probe(entry: &Entry, shapes: &mut BTreeMap<String, MapShape>) -> Result<PlayR
         decode_osr(&std::fs::read(&entry.replay_path).map_err(|e| format!("read: {e}"))?)
             .map_err(|e| format!("osr: {e}"))?;
     let frames = convert_frames(&osr.actions, map.format_version);
-    let timeline = simulate(&processed, &frames).map_err(|e| format!("simulate: {e}"))?;
+    let timeline = simulate_stable(&processed, &frames).map_err(|e| format!("simulate: {e}"))?;
     let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).map_err(|e| format!("stars: {e}"))?;
     let simulated = total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER);
     let delta = u64::from(osr.header.total_score) as i64 - simulated as i64;
@@ -295,9 +295,11 @@ fn probe(entry: &Entry, shapes: &mut BTreeMap<String, MapShape>) -> Result<PlayR
     let mut scored_points: Vec<Vec<usize>> = vec![Vec::new(); processed.objects.len()];
     for (k, event) in timeline.events.iter().enumerate() {
         match event.kind {
-            JudgementKind::SliderHead { hit } => head[event.object_index] = Some((k, hit)),
-            JudgementKind::SliderTail { hit } => tail[event.object_index] = Some((k, hit)),
-            JudgementKind::SliderTick { hit: true } | JudgementKind::SliderRepeat { hit: true, .. } => {
+            JudgementKind::SliderHead { grade } => {
+                head[event.object_index] = Some((k, grade != engine::beatmap::difficulty::HitGrade::Miss))
+            }
+            JudgementKind::SliderTail { hit, .. } => tail[event.object_index] = Some((k, hit)),
+            JudgementKind::SliderTick { hit: true, .. } | JudgementKind::SliderRepeat { hit: true, .. } => {
                 scored_points[event.object_index].push(k)
             }
             _ => {}

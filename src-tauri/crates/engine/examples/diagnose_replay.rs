@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use engine::beatmap::stable_points::StablePointKind;
 use engine::beatmap::{process_beatmap, NestedKind, ProcessedBeatmap, ProcessedKind};
 use engine::formats::beatmap::decode_beatmap_path;
+use engine::configuration::resolve_play_configuration;
 use engine::formats::osr::decode_osr;
 use engine::replay::frames::convert_frames;
 use engine::score::{
@@ -54,7 +55,8 @@ fn main() {
     let Some(replay_path) = replay_path else { return };
     let osr = decode_osr(&std::fs::read(&replay_path).expect("read replay")).expect("decode replay");
     let frames = convert_frames(&osr.actions, map.format_version);
-    let timeline = simulate(&processed, &frames).expect("simulate");
+    let configuration = resolve_play_configuration(&osr, false);
+    let timeline = simulate(&processed, &frames, &configuration).expect("simulate");
     let tally = section_tally(&processed, &timeline);
     let stars = peppy_stars(&ScoreContext::from_beatmap(&map)).expect("stars");
     let score = total_score(&timeline, &processed, stars, NOMOD_SCORE_MULTIPLIER);
@@ -110,18 +112,18 @@ fn main() {
         for event in &timeline.events {
             let combo_before = u64::from(state.combo);
             let added = match event.kind {
-                JudgementKind::SliderHead { hit } => {
-                    if hit {
+                JudgementKind::SliderHead { grade } => {
+                    if grade != engine::beatmap::difficulty::HitGrade::Miss {
                         30
                     } else {
                         0
                     }
                 }
-                JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit } => {
+                JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit, .. } => {
                     point_value(event.object_index, 30, hit)
                 }
-                JudgementKind::SliderTick { hit } => point_value(event.object_index, 10, hit),
-                JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => 0,
+                JudgementKind::SliderTick { hit, .. } => point_value(event.object_index, 10, hit),
+                JudgementKind::SliderEnd { .. } | JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => 0,
                 JudgementKind::Circle(grade)
                 | JudgementKind::SpinnerFinal(grade)
                 | JudgementKind::SliderAggregate(grade) => {
@@ -368,10 +370,11 @@ fn print_sliders(processed: &ProcessedBeatmap, timeline: &JudgementTimeline, all
         let all_scored = events.iter().all(|e| {
             !matches!(
                 e.kind,
-                JudgementKind::SliderHead { hit: false }
-                    | JudgementKind::SliderTick { hit: false }
+                JudgementKind::SliderHead {
+                    grade: engine::beatmap::difficulty::HitGrade::Miss
+                } | JudgementKind::SliderTick { hit: false, .. }
                     | JudgementKind::SliderRepeat { hit: false, .. }
-                    | JudgementKind::SliderTail { hit: false }
+                    | JudgementKind::SliderTail { hit: false, .. }
             )
         });
         // a part event count below nested len means points went unjudged

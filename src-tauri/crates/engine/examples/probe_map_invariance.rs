@@ -54,7 +54,7 @@ use engine::formats::beatmap::decode_beatmap_path;
 use engine::formats::osr::decode_osr;
 use engine::replay::frames::convert_frames;
 use engine::simulation::score::JudgementKind;
-use engine::simulation::{simulate, trace};
+use engine::simulation::{simulate_stable, trace};
 
 /// substrings naming the map subsets the triage brief called out as
 /// map-concentrated; these get the full per-play dump before the table
@@ -647,7 +647,7 @@ fn analyse(
     let frames = convert_frames(&osr.actions, processed.format_version);
 
     trace::start();
-    let simulated = simulate(processed, &frames);
+    let simulated = simulate_stable(processed, &frames);
     let decisions = trace::finish();
     let timeline = simulated.map_err(|e| format!("simulate: {e}"))?;
 
@@ -655,8 +655,11 @@ fn analyse(
     // decides whether a point is grade-load-bearing
     let mut head_hit: BTreeMap<u32, bool> = BTreeMap::new();
     for event in &timeline.events {
-        if let JudgementKind::SliderHead { hit } = event.kind {
-            head_hit.insert(event.object_index as u32, hit);
+        if let JudgementKind::SliderHead { grade } = event.kind {
+            head_hit.insert(
+                event.object_index as u32,
+                grade != engine::beatmap::difficulty::HitGrade::Miss,
+            );
         }
     }
 
