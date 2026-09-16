@@ -1,0 +1,213 @@
+{
+  "scenario": "native-ordered-lock",
+  "description": "NATIVE (no mods). StartTimeOrderedHitPolicy.CheckHittable: a press on B1 at 950 while A1 (start 1000) is unjudged is refused (time \u003C the blocking object\u0027s start time -- 50ms clear of that boundary), then A1 and B1 are hit on time. HandleHit: a press on B2 at 3080, 80ms past A2\u0027s start (3000) with A2 unjudged, is allowed and force-misses A2; B2 lands 20ms early (30ms clear of the great window\u0027s edge)",
+  "beatmap_file": "scenario-native-ordered-lock.osu",
+  "mods": [],
+  "clock_step_ms": 4,
+  "frames": [
+    {
+      "time": 0,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 500,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 934,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 950,
+      "pos": [
+        300,
+        100
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 966,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 984,
+      "pos": [
+        100,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1000,
+      "pos": [
+        100,
+        100
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 1020,
+      "pos": [
+        100,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1084,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1100,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 1120,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2000,
+      "pos": [
+        300,
+        300
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 3064,
+      "pos": [
+        300,
+        300
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 3080,
+      "pos": [
+        300,
+        300
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3100,
+      "pos": [
+        300,
+        300
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 3600,
+      "pos": [
+        300,
+        300
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 4000,
+      "pos": [
+        300,
+        300
+      ],
+      "left": false,
+      "right": false
+    }
+  ],
+  "events": [
+    {
+      "object_index": 0,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 1000,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 1
+    },
+    {
+      "object_index": 1,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 1100,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 2
+    },
+    {
+      "object_index": 2,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 3000,
+      "result": "Miss",
+      "is_hit": false,
+      "combo_after": 0
+    },
+    {
+      "object_index": 3,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 3100,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 1
+    }
+  ],
+  "end_state": {
+    "statistics": {
+      "great": 3,
+      "miss": 1
+    },
+    "maximum_statistics": {
+      "great": 4
+    },
+    "max_combo": 2,
+    "total_score": 326963,
+    "accuracy": 0.75,
+    "rank": "C"
+  }
+}

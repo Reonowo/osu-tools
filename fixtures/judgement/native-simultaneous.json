@@ -1,0 +1,131 @@
+{
+  "scenario": "native-simultaneous",
+  "description": "NATIVE (no mods). two circles at one start time (2000): neither blocks the other (StartTimeOrderedHitPolicy.enumerateHitObjectsUpTo takes only objects starting strictly before the target), so the later-listed one pressed first at 2000 and the earlier-listed one pressed at 2030 (20ms clear of the great window\u0027s edge) both judge great, in press order rather than map order",
+  "beatmap_file": "scenario-native-simultaneous.osu",
+  "mods": [],
+  "clock_step_ms": 4,
+  "frames": [
+    {
+      "time": 0,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1000,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1984,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2000,
+      "pos": [
+        300,
+        100
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2010,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2014,
+      "pos": [
+        100,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2030,
+      "pos": [
+        100,
+        100
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 2050,
+      "pos": [
+        100,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2600,
+      "pos": [
+        100,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 3000,
+      "pos": [
+        100,
+        100
+      ],
+      "left": false,
+      "right": false
+    }
+  ],
+  "events": [
+    {
+      "object_index": 1,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 2000,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 1
+    },
+    {
+      "object_index": 0,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 2000,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 2
+    }
+  ],
+  "end_state": {
+    "statistics": {
+      "great": 2
+    },
+    "maximum_statistics": {
+      "great": 2
+    },
+    "max_combo": 2,
+    "total_score": 1000000,
+    "accuracy": 1,
+    "rank": "X"
+  }
+}

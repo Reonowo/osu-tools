@@ -56,6 +56,45 @@ replays. `tests/replay_corpus.rs` also carries a second, committed test
 expected totals, so the pipeline is exercised end to end on every CI run
 even with an empty local corpus.
 
+### Native pairs
+
+A lazer-written `.osr` (header version at or past `30000000`) in the same
+directory is the **native profile's** oracle and is verified on lazer's own
+terms rather than stable's: the block's statistics map and maximum
+statistics, the header's max combo and standardised total, and the rank, all
+exact. A block recording rank F is a play that failed, and lazer's score
+processor counted nothing past the failing result, so the comparison runs
+only up to the engine's own fail point (the test says so in its notice); a
+block claiming a fail the engine never reaches is a failure of the test, not
+something it widens around. Admission is the configuration's: effective mods
+empty and a readable block.
+
+Every native pair needs a row in `replays/local/native_ledger.json` (also
+gitignored) before it is compared, and a pair without one fails the test
+rather than being skipped, because a parity claim over a play of unknown
+provenance is not a claim. The ledger is a JSON array of rows:
+
+```json
+[
+  {
+    "stem": "lazer-export",
+    "client": "osu!lazer 2025.xxx.0 (the block's client_version)",
+    "origin": "original",
+    "pin": "83b8a64bec19e1463353645c2d6d10c75e275b43"
+  }
+]
+```
+
+`origin` is `original` for a play recorded by the client named, or `re-run`
+for the same replay re-scored in the pinned reference client. The two are
+kept distinct in every parity table because lazer's own gameplay drifts
+between releases: an original play from an older client that disagrees with
+the port may be recording that drift, which is a finding about the pin, never
+an engine bug on its own. `pin` names the engine's pinned checkout the row was
+verified against. The sweep runner reports lazer-written plays as their own
+population (`native_population` in the manifest), admitted by the same rule
+and never blended into the stable rate.
+
 ## Sweep runner
 
 The sweep (`CONTEXT.md` § Parity) measures the engine's parity rate across a
@@ -116,17 +155,48 @@ command.
 fixtures whose inputs are hand-built to isolate one mechanic each, judged by
 lazer gameplay itself. `tools/fixture-gen/JudgementDumps.cs` boots a headless
 game host per scenario, plays the hand-built replay through a real
-`ReplayPlayer` under the Classic mod (the legacy rules path the engine
-ports), and dumps the per-element judgement timeline — result kind, hit
-flag, running combo, in application order. The committed minimal maps live
-in `judgement/maps/` (inputs, hand-authored; the dumps are the expectations
-and are never hand-edited).
+`ReplayPlayer` under the scenario's own mod list, and dumps the per-element
+judgement timeline — result kind, hit flag, running combo, in application
+order — plus the end state lazer's own `ScoreProcessor` derived from it:
+the statistics and maximum-statistics maps (snake-case `HitResult` names,
+the score-info block's spelling), max combo, the standardised total score,
+accuracy and rank. The committed minimal maps live in `judgement/maps/`
+(inputs, hand-authored; the dumps are the expectations and are never
+hand-edited).
 
-Scenarios: `baseline` (fully predictable pass — harness regressions show
-here), `spinner-accumulation` (spins past the bonus threshold + a partial
-spin, for the spinner scoring work), `slider-tracking` (follow-circle
-leave-and-return over a tick, plus a dropped tail without a combo break),
-`notelock-stack` (the note-lock predecessor-lifetime shielding case).
+Each dump's `mods` names its rules path. `["CL"]` is the Classic mod at
+default settings — what lazer's own reader appends to every stable replay,
+the legacy path the engine's **stable profile** ports. `[]` is lazer's
+default gameplay, the path the **native profile** ports. Three sets of
+frames are dumped both ways so the profiles are pinned apart on identical
+input: a late slider head is a `LargeTickHit` under classic and a graded
+`Ok` under native, the tail a `SmallTickHit` that leaves combo alone under
+classic and a `SliderTailHit` that increments it under native.
+
+Classic scenarios: `baseline` (fully predictable pass — harness regressions
+show here), `spinner-accumulation` (spins past the bonus threshold + a
+partial spin), `slider-tracking` (follow-circle leave-and-return over a
+tick, plus a dropped tail without a combo break), `notelock-stack` (the
+note-lock predecessor-lifetime shielding case), `pinned-apart-classic`.
+
+Native scenarios: `native-baseline` (the native canary: every basic grade,
+a tracked slider, a fast spinner), `pinned-apart-native`,
+`notelock-stack-native` and `slider-tracking-native` (the classic frames
+under lazer's own `StartTimeOrderedHitPolicy` and tail rule),
+`native-ordered-lock` (a press refused before the blocking circle's start
+time, and a later press force-missing the unjudged circle before it),
+`native-simultaneous` (two circles at one time, hit in press order),
+`native-duplicate-frames` (two frames at one timestamp, both applied),
+`native-sparse-frames` (frames farther apart than a hit window, the cursor
+interpolated between them), `native-incomplete` (frames ending before the
+last circle, which misses by timeout), `native-graded-heads` (slider heads
+great / ok / meh with everything tracked), `native-late-head-recovery` (a
+head pressed after its first tick's time), `native-tail-ordering` (the tail
+waits for the last tick, then hits at once or misses only at the end),
+`native-overlapping-sliders` (the accepted-key rule: a slider hit with the
+second key while the first is held tracks only that key until the first is
+released), `native-spinner-thresholds` (great / ok / meh / miss at 1.05,
+0.95, 0.8 and 0.5 of the required spins).
 
 Determinism is enforced, not assumed: the beatmap track follows a manually
 stepped clock, the framework runs single-threaded, each scenario generates

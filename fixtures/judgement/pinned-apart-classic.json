@@ -1,6 +1,6 @@
 {
-  "scenario": "baseline",
-  "description": "fully predictable pass over two circles (great, ok), one skipped circle (miss), and one cleanly tracked slider -- harness regressions show here independent of any engine change",
+  "scenario": "pinned-apart-classic",
+  "description": "CLASSIC half of the pinned-apart pair: the baseline map with the slider\u0027s head pressed 70ms late and tracked through. under classic the head judges as a tick (LargeTickHit, no timing grade) and the tail as the legacy tail judgement; the native half dumps the same frames with no mods, where the head is a timed Ok and the tail a SliderTailHit that increments combo",
   "beatmap_file": "scenario-baseline.osu",
   "mods": [
     "CL"
@@ -107,7 +107,7 @@
       "right": false
     },
     {
-      "time": 3984,
+      "time": 4054,
       "pos": [
         100,
         200
@@ -116,459 +116,423 @@
       "right": false
     },
     {
-      "time": 4000,
+      "time": 4070,
       "pos": [
-        100,
+        114,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4020,
+      "time": 4090,
       "pos": [
-        104,
+        118,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4040,
+      "time": 4110,
       "pos": [
-        108,
+        122,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4060,
+      "time": 4130,
       "pos": [
-        112,
+        126,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4080,
+      "time": 4150,
       "pos": [
-        116,
+        130,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4100,
+      "time": 4170,
       "pos": [
-        120,
+        134,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4120,
+      "time": 4190,
       "pos": [
-        124,
+        138,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4140,
+      "time": 4210,
       "pos": [
-        128,
+        142,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4160,
+      "time": 4230,
       "pos": [
-        132,
+        146,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4180,
+      "time": 4250,
       "pos": [
-        136,
+        150,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4200,
+      "time": 4270,
       "pos": [
-        140,
+        154,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4220,
+      "time": 4290,
       "pos": [
-        144,
+        158,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4240,
+      "time": 4310,
       "pos": [
-        148,
+        162,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4260,
+      "time": 4330,
       "pos": [
-        152,
+        166,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4280,
+      "time": 4350,
       "pos": [
-        156,
+        170,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4300,
+      "time": 4370,
       "pos": [
-        160,
+        174,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4320,
+      "time": 4390,
       "pos": [
-        164,
+        178,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4340,
+      "time": 4410,
       "pos": [
-        168,
+        182,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4360,
+      "time": 4430,
       "pos": [
-        172,
+        186,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4380,
+      "time": 4450,
       "pos": [
-        176,
+        190,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4400,
+      "time": 4470,
       "pos": [
-        180,
+        194,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4420,
+      "time": 4490,
       "pos": [
-        184,
+        198,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4440,
+      "time": 4510,
       "pos": [
-        188,
+        202,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4460,
+      "time": 4530,
       "pos": [
-        192,
+        206,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4480,
+      "time": 4550,
       "pos": [
-        196,
+        210,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4500,
+      "time": 4570,
       "pos": [
-        200,
+        214,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4520,
+      "time": 4590,
       "pos": [
-        204,
+        218,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4540,
+      "time": 4610,
       "pos": [
-        208,
+        222,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4560,
+      "time": 4630,
       "pos": [
-        212,
+        226,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4580,
+      "time": 4650,
       "pos": [
-        216,
+        230,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4600,
+      "time": 4670,
       "pos": [
-        220,
+        234,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4620,
+      "time": 4690,
       "pos": [
-        224,
+        238,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4640,
+      "time": 4710,
       "pos": [
-        228,
+        242,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4660,
+      "time": 4730,
       "pos": [
-        232,
+        246,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4680,
+      "time": 4750,
       "pos": [
-        236,
+        250,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4700,
+      "time": 4770,
       "pos": [
-        240,
+        254,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4720,
+      "time": 4790,
       "pos": [
-        244,
+        258,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4740,
+      "time": 4810,
       "pos": [
-        248,
+        262,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4760,
+      "time": 4830,
       "pos": [
-        252,
+        266,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4780,
+      "time": 4850,
       "pos": [
-        256,
+        270,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4800,
+      "time": 4870,
       "pos": [
-        260,
+        274,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4820,
+      "time": 4890,
       "pos": [
-        264,
+        278,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4840,
+      "time": 4910,
       "pos": [
-        268,
+        282,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4860,
+      "time": 4930,
       "pos": [
-        272,
+        286,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4880,
+      "time": 4950,
       "pos": [
-        276,
+        290,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4900,
+      "time": 4970,
       "pos": [
-        280,
+        294,
         200
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 4920,
+      "time": 4990,
       "pos": [
-        284,
-        200
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 4940,
-      "pos": [
-        288,
-        200
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 4960,
-      "pos": [
-        292,
-        200
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 4980,
-      "pos": [
-        296,
-        200
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 5000,
-      "pos": [
-        300,
+        298,
         200
       ],
       "left": true,

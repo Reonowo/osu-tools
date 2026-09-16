@@ -214,17 +214,28 @@ if (onlyFamily == null)
         "exact.",
 
         "judgement/*.json is the scenario judgement-dump family: lazer gameplay itself (a headless " +
-        "ReplayPlayer under the Classic mod, the legacy rules path the engine ports) judges the " +
-        "hand-built replays recorded in each dump's frames array over the committed minimal maps in " +
-        "judgement/maps/, and the events array records the per-element judgement timeline in " +
-        "application order. events carry result kind, hit flag, and running combo -- all " +
-        "compared exact -- and deliberately omit raw judgement times and spinner rotation, which " +
-        "sample at update-loop instants and are render-loop artifacts rather than mechanisms " +
-        "(see JudgementDumps.cs). each scenario is generated twice in fresh processes and must " +
-        "dump byte-identically or generation fails. note the events record lazer's own combo " +
-        "semantics: the classic slider tail (SmallTickHit) does not increment combo there, while " +
-        "the engine deliberately follows stable (the documented tail divergence), so engine-side " +
-        "consumers compare combo around that rule, never through it.",
+        "ReplayPlayer) judges the hand-built replays recorded in each dump's frames array over the " +
+        "committed minimal maps in judgement/maps/, and the events array records the per-element " +
+        "judgement timeline in application order. each dump's mods array is the scenario's own " +
+        "rules path: [\"CL\"] (the Classic mod at default settings, the legacy path the stable " +
+        "profile ports) for the four original scenarios, and [] (lazer's default gameplay, the " +
+        "path the native profile ports) for the native-* scenarios and the three dumped both ways " +
+        "(pinned-apart-classic/native, notelock-stack/-native, slider-tracking/-native), which pin " +
+        "the two profiles apart on one set of frames. events carry result kind, hit flag, and " +
+        "running combo -- all compared exact -- and deliberately omit raw judgement times and " +
+        "spinner rotation, which sample at update-loop instants and are render-loop artifacts " +
+        "rather than mechanisms (see JudgementDumps.cs). end_state is what lazer's ScoreProcessor " +
+        "derived once the play completed: statistics and maximum_statistics keyed by HitResult's " +
+        "snake-case names in display order with zero counts omitted, max_combo (HighestCombo), " +
+        "total_score (the standardised total, which under [\"CL\"] carries the Classic mod's " +
+        "score multiplier), accuracy, and rank as the ScoreRank name; a pure function of the " +
+        "events, so it inherits their determinism. each scenario is generated twice in fresh " +
+        "processes and must dump byte-identically or generation fails. note the events record " +
+        "lazer's own combo semantics: the classic slider tail (SmallTickHit) does not increment " +
+        "combo there, while the engine's stable profile deliberately follows stable (the documented " +
+        "tail divergence), so stable-side consumers compare combo around that rule, never through " +
+        "it; the native tail (SliderTailHit) does increment combo and the native profile follows " +
+        "it exactly.",
     },
 });
 

@@ -1,0 +1,30 @@
+osu file format v14
+
+[General]
+AudioFilename: audio.mp3
+AudioLeadIn: 0
+Mode: 0
+StackLeniency: 0.7
+
+[Metadata]
+Title:native spinner thresholds scenario
+Artist:fixture-gen
+Creator:fixture-gen
+Version:scenario
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:5
+ApproachRate:9
+SliderMultiplier:1
+SliderTickRate:1
+
+[TimingPoints]
+0,500,4,2,1,60,1,0
+
+[HitObjects]
+256,192,1000,12,0,3000,0:0:0:0:
+256,192,5000,12,0,7000,0:0:0:0:
+256,192,9000,12,0,11000,0:0:0:0:
+256,192,13000,12,0,15000,0:0:0:0:

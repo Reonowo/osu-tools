@@ -1,17 +1,15 @@
 {
-  "scenario": "slider-tracking",
-  "description": "slider 1: follow circle left after tick 1 and re-entered before the tail (tick 2 missed); slider 2: tracked through its tick then abandoned (tail dropped without a combo break)",
-  "beatmap_file": "scenario-slider-tracking.osu",
-  "mods": [
-    "CL"
-  ],
+  "scenario": "native-overlapping-sliders",
+  "description": "NATIVE (no mods). two parallel sliders 40px apart overlapping by 500ms, their balls vertically aligned throughout the overlap: the first\u0027s head pressed with left and held, the second\u0027s head pressed with right while left is still down, the cursor then kept between the two balls inside both follow areas. SliderInputManager\u0027s accepted-key rule: the first slider accepts any key (no other key was down at its head), the second accepts only right until left is released. right is released at \u002B220 into the second slider with left still held: the first keeps tracking through its tail, the second loses its tick and tail to the key it was hit with",
+  "beatmap_file": "scenario-native-overlapping.osu",
+  "mods": [],
   "clock_step_ms": 4,
   "frames": [
     {
       "time": 0,
       "pos": [
-        50,
-        50
+        100,
+        100
       ],
       "left": false,
       "right": false
@@ -19,8 +17,8 @@
     {
       "time": 1900,
       "pos": [
-        50,
-        50
+        100,
+        100
       ],
       "left": false,
       "right": false
@@ -28,8 +26,8 @@
     {
       "time": 2000,
       "pos": [
-        50,
-        50
+        100,
+        100
       ],
       "left": true,
       "right": false
@@ -37,8 +35,8 @@
     {
       "time": 2020,
       "pos": [
-        54,
-        50
+        104,
+        100
       ],
       "left": true,
       "right": false
@@ -46,8 +44,8 @@
     {
       "time": 2040,
       "pos": [
-        58,
-        50
+        108,
+        100
       ],
       "left": true,
       "right": false
@@ -55,8 +53,8 @@
     {
       "time": 2060,
       "pos": [
-        62,
-        50
+        112,
+        100
       ],
       "left": true,
       "right": false
@@ -64,8 +62,8 @@
     {
       "time": 2080,
       "pos": [
-        66,
-        50
+        116,
+        100
       ],
       "left": true,
       "right": false
@@ -73,8 +71,8 @@
     {
       "time": 2100,
       "pos": [
-        70,
-        50
+        120,
+        100
       ],
       "left": true,
       "right": false
@@ -82,8 +80,8 @@
     {
       "time": 2120,
       "pos": [
-        74,
-        50
+        124,
+        100
       ],
       "left": true,
       "right": false
@@ -91,8 +89,8 @@
     {
       "time": 2140,
       "pos": [
-        78,
-        50
+        128,
+        100
       ],
       "left": true,
       "right": false
@@ -100,8 +98,8 @@
     {
       "time": 2160,
       "pos": [
-        82,
-        50
+        132,
+        100
       ],
       "left": true,
       "right": false
@@ -109,8 +107,8 @@
     {
       "time": 2180,
       "pos": [
-        86,
-        50
+        136,
+        100
       ],
       "left": true,
       "right": false
@@ -118,8 +116,8 @@
     {
       "time": 2200,
       "pos": [
-        90,
-        50
+        140,
+        100
       ],
       "left": true,
       "right": false
@@ -127,8 +125,8 @@
     {
       "time": 2220,
       "pos": [
-        94,
-        50
+        144,
+        100
       ],
       "left": true,
       "right": false
@@ -136,8 +134,8 @@
     {
       "time": 2240,
       "pos": [
-        98,
-        50
+        148,
+        100
       ],
       "left": true,
       "right": false
@@ -145,8 +143,8 @@
     {
       "time": 2260,
       "pos": [
-        102,
-        50
+        152,
+        100
       ],
       "left": true,
       "right": false
@@ -154,8 +152,8 @@
     {
       "time": 2280,
       "pos": [
-        106,
-        50
+        156,
+        100
       ],
       "left": true,
       "right": false
@@ -163,8 +161,8 @@
     {
       "time": 2300,
       "pos": [
-        110,
-        50
+        160,
+        100
       ],
       "left": true,
       "right": false
@@ -172,8 +170,8 @@
     {
       "time": 2320,
       "pos": [
-        114,
-        50
+        164,
+        100
       ],
       "left": true,
       "right": false
@@ -181,8 +179,8 @@
     {
       "time": 2340,
       "pos": [
-        118,
-        50
+        168,
+        100
       ],
       "left": true,
       "right": false
@@ -190,8 +188,8 @@
     {
       "time": 2360,
       "pos": [
-        122,
-        50
+        172,
+        100
       ],
       "left": true,
       "right": false
@@ -199,8 +197,8 @@
     {
       "time": 2380,
       "pos": [
-        126,
-        50
+        176,
+        100
       ],
       "left": true,
       "right": false
@@ -208,8 +206,8 @@
     {
       "time": 2400,
       "pos": [
-        130,
-        50
+        180,
+        100
       ],
       "left": true,
       "right": false
@@ -217,8 +215,8 @@
     {
       "time": 2420,
       "pos": [
-        134,
-        50
+        184,
+        100
       ],
       "left": true,
       "right": false
@@ -226,8 +224,8 @@
     {
       "time": 2440,
       "pos": [
-        138,
-        50
+        188,
+        100
       ],
       "left": true,
       "right": false
@@ -235,8 +233,8 @@
     {
       "time": 2460,
       "pos": [
-        142,
-        50
+        192,
+        100
       ],
       "left": true,
       "right": false
@@ -244,8 +242,8 @@
     {
       "time": 2480,
       "pos": [
-        146,
-        50
+        196,
+        100
       ],
       "left": true,
       "right": false
@@ -253,62 +251,242 @@
     {
       "time": 2500,
       "pos": [
-        150,
-        50
+        200,
+        140
       ],
       "left": true,
-      "right": false
+      "right": true
     },
     {
       "time": 2520,
       "pos": [
-        154,
-        50
+        204,
+        120
       ],
       "left": true,
-      "right": false
+      "right": true
     },
     {
       "time": 2540,
       "pos": [
-        158,
-        50
+        208,
+        120
       ],
       "left": true,
-      "right": false
+      "right": true
     },
     {
       "time": 2560,
       "pos": [
-        162,
-        50
+        212,
+        120
       ],
       "left": true,
-      "right": false
+      "right": true
     },
     {
       "time": 2580,
       "pos": [
-        166,
-        50
+        216,
+        120
       ],
       "left": true,
-      "right": false
+      "right": true
     },
     {
       "time": 2600,
       "pos": [
-        170,
-        50
+        220,
+        120
+      ],
+      "left": true,
+      "right": true
+    },
+    {
+      "time": 2620,
+      "pos": [
+        224,
+        120
+      ],
+      "left": true,
+      "right": true
+    },
+    {
+      "time": 2640,
+      "pos": [
+        228,
+        120
+      ],
+      "left": true,
+      "right": true
+    },
+    {
+      "time": 2660,
+      "pos": [
+        232,
+        120
+      ],
+      "left": true,
+      "right": true
+    },
+    {
+      "time": 2680,
+      "pos": [
+        236,
+        120
+      ],
+      "left": true,
+      "right": true
+    },
+    {
+      "time": 2700,
+      "pos": [
+        240,
+        120
+      ],
+      "left": true,
+      "right": true
+    },
+    {
+      "time": 2720,
+      "pos": [
+        244,
+        120
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 2610,
+      "time": 2740,
       "pos": [
-        370,
-        50
+        248,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2760,
+      "pos": [
+        252,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2780,
+      "pos": [
+        256,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2800,
+      "pos": [
+        260,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2820,
+      "pos": [
+        264,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2840,
+      "pos": [
+        268,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2860,
+      "pos": [
+        272,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2880,
+      "pos": [
+        276,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2900,
+      "pos": [
+        280,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2920,
+      "pos": [
+        284,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2940,
+      "pos": [
+        288,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2960,
+      "pos": [
+        292,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2980,
+      "pos": [
+        296,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3000,
+      "pos": [
+        300,
+        120
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3020,
+      "pos": [
+        304,
+        140
       ],
       "left": true,
       "right": false
@@ -316,215 +494,215 @@
     {
       "time": 3040,
       "pos": [
-        370,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3050,
-      "pos": [
-        260,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3070,
-      "pos": [
-        264,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3090,
-      "pos": [
-        268,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3110,
-      "pos": [
-        272,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3130,
-      "pos": [
-        276,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3150,
-      "pos": [
-        280,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3170,
-      "pos": [
-        284,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3190,
-      "pos": [
-        288,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3210,
-      "pos": [
-        292,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3230,
-      "pos": [
-        296,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3250,
-      "pos": [
-        300,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3270,
-      "pos": [
-        304,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3290,
-      "pos": [
         308,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3310,
+      "time": 3060,
       "pos": [
         312,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3330,
+      "time": 3080,
       "pos": [
         316,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3350,
+      "time": 3100,
       "pos": [
         320,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3370,
+      "time": 3120,
       "pos": [
         324,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3390,
+      "time": 3140,
       "pos": [
         328,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3410,
+      "time": 3160,
       "pos": [
         332,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3430,
+      "time": 3180,
       "pos": [
         336,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3450,
+      "time": 3200,
       "pos": [
         340,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3470,
+      "time": 3220,
       "pos": [
         344,
-        50
+        140
       ],
       "left": true,
       "right": false
     },
     {
-      "time": 3490,
+      "time": 3240,
       "pos": [
         348,
-        50
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3260,
+      "pos": [
+        352,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3280,
+      "pos": [
+        356,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3300,
+      "pos": [
+        360,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3320,
+      "pos": [
+        364,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3340,
+      "pos": [
+        368,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3360,
+      "pos": [
+        372,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3380,
+      "pos": [
+        376,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3400,
+      "pos": [
+        380,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3420,
+      "pos": [
+        384,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3440,
+      "pos": [
+        388,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3460,
+      "pos": [
+        392,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3480,
+      "pos": [
+        396,
+        140
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 3500,
+      "pos": [
+        400,
+        140
       ],
       "left": true,
       "right": false
@@ -532,332 +710,17 @@
     {
       "time": 3520,
       "pos": [
-        350,
-        50
-      ],
-      "left": true,
-      "right": false
-    },
-    {
-      "time": 3550,
-      "pos": [
-        350,
-        50
+        400,
+        140
       ],
       "left": false,
       "right": false
     },
     {
-      "time": 4900,
+      "time": 4000,
       "pos": [
-        50,
-        250
-      ],
-      "left": false,
-      "right": false
-    },
-    {
-      "time": 5000,
-      "pos": [
-        50,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5020,
-      "pos": [
-        54,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5040,
-      "pos": [
-        58,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5060,
-      "pos": [
-        62,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5080,
-      "pos": [
-        66,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5100,
-      "pos": [
-        70,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5120,
-      "pos": [
-        74,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5140,
-      "pos": [
-        78,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5160,
-      "pos": [
-        82,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5180,
-      "pos": [
-        86,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5200,
-      "pos": [
-        90,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5220,
-      "pos": [
-        94,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5240,
-      "pos": [
-        98,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5260,
-      "pos": [
-        102,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5280,
-      "pos": [
-        106,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5300,
-      "pos": [
-        110,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5320,
-      "pos": [
-        114,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5340,
-      "pos": [
-        118,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5360,
-      "pos": [
-        122,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5380,
-      "pos": [
-        126,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5400,
-      "pos": [
-        130,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5420,
-      "pos": [
-        134,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5440,
-      "pos": [
-        138,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5460,
-      "pos": [
-        142,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5480,
-      "pos": [
-        146,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5500,
-      "pos": [
-        150,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5520,
-      "pos": [
-        154,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5540,
-      "pos": [
-        158,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5560,
-      "pos": [
-        162,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5580,
-      "pos": [
-        166,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5600,
-      "pos": [
-        170,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5620,
-      "pos": [
-        450,
-        250
-      ],
-      "left": false,
-      "right": true
-    },
-    {
-      "time": 5900,
-      "pos": [
-        450,
-        250
-      ],
-      "left": false,
-      "right": false
-    },
-    {
-      "time": 6500,
-      "pos": [
-        450,
-        250
+        400,
+        140
       ],
       "left": false,
       "right": false
@@ -869,9 +732,18 @@
       "nested_index": 0,
       "kind": "SliderHeadCircle",
       "start_time": 2000,
-      "result": "LargeTickHit",
+      "result": "Great",
       "is_hit": true,
       "combo_after": 1
+    },
+    {
+      "object_index": 1,
+      "nested_index": 0,
+      "kind": "SliderHeadCircle",
+      "start_time": 2500,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 2
     },
     {
       "object_index": 0,
@@ -880,11 +752,20 @@
       "start_time": 2500,
       "result": "LargeTickHit",
       "is_hit": true,
-      "combo_after": 2
+      "combo_after": 3
     },
     {
       "object_index": 0,
       "nested_index": 2,
+      "kind": "SliderTailCircle",
+      "start_time": 3000,
+      "result": "SliderTailHit",
+      "is_hit": true,
+      "combo_after": 4
+    },
+    {
+      "object_index": 1,
+      "nested_index": 1,
       "kind": "SliderTick",
       "start_time": 3000,
       "result": "LargeTickMiss",
@@ -893,75 +774,50 @@
     },
     {
       "object_index": 0,
-      "nested_index": 3,
-      "kind": "SliderTailCircle",
-      "start_time": 3500,
-      "result": "SmallTickHit",
-      "is_hit": true,
-      "combo_after": 0
-    },
-    {
-      "object_index": 0,
       "nested_index": null,
       "kind": "Slider",
       "start_time": 2000,
-      "result": "Ok",
+      "result": "IgnoreHit",
       "is_hit": true,
-      "combo_after": 1
-    },
-    {
-      "object_index": 1,
-      "nested_index": 0,
-      "kind": "SliderHeadCircle",
-      "start_time": 5000,
-      "result": "LargeTickHit",
-      "is_hit": true,
-      "combo_after": 2
-    },
-    {
-      "object_index": 1,
-      "nested_index": 1,
-      "kind": "SliderTick",
-      "start_time": 5500,
-      "result": "LargeTickHit",
-      "is_hit": true,
-      "combo_after": 3
+      "combo_after": 0
     },
     {
       "object_index": 1,
       "nested_index": 2,
       "kind": "SliderTailCircle",
-      "start_time": 6000,
-      "result": "SmallTickMiss",
+      "start_time": 3500,
+      "result": "IgnoreMiss",
       "is_hit": false,
-      "combo_after": 3
+      "combo_after": 0
     },
     {
       "object_index": 1,
       "nested_index": null,
       "kind": "Slider",
-      "start_time": 5000,
-      "result": "Ok",
+      "start_time": 2500,
+      "result": "IgnoreHit",
       "is_hit": true,
-      "combo_after": 4
+      "combo_after": 0
     }
   ],
   "end_state": {
     "statistics": {
-      "ok": 2,
-      "large_tick_hit": 4,
-      "small_tick_hit": 1,
+      "great": 2,
+      "large_tick_hit": 1,
+      "slider_tail_hit": 1,
       "large_tick_miss": 1,
-      "small_tick_miss": 1
+      "ignore_hit": 2,
+      "ignore_miss": 1
     },
     "maximum_statistics": {
       "great": 2,
-      "large_tick_hit": 5,
-      "small_tick_hit": 2
+      "large_tick_hit": 2,
+      "slider_tail_hit": 2,
+      "ignore_hit": 2
     },
     "max_combo": 4,
-    "total_score": 141687,
-    "accuracy": 0.42857142857142855,
-    "rank": "D"
+    "total_score": 444173,
+    "accuracy": 0.8125,
+    "rank": "B"
   }
 }

@@ -1,0 +1,122 @@
+{
+  "scenario": "native-duplicate-frames",
+  "description": "NATIVE (no mods). two replay frames at one timestamp (2000) over the simultaneous map, with different positions and actions: the first over circle A with left, the second over circle B with right, then B\u0027s frame held to 2040. lazer\u0027s replay input handler (FramedReplayInputHandler.SetFrameFromTime stepping one frame per call) applies every frame at a duplicated time in order, so both presses land and both circles judge great, exactly on time -- the cadence the native walk must reproduce",
+  "beatmap_file": "scenario-native-simultaneous.osu",
+  "mods": [],
+  "clock_step_ms": 4,
+  "frames": [
+    {
+      "time": 0,
+      "pos": [
+        200,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1000,
+      "pos": [
+        200,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 1984,
+      "pos": [
+        200,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2000,
+      "pos": [
+        100,
+        100
+      ],
+      "left": true,
+      "right": false
+    },
+    {
+      "time": 2000,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 2020,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": true
+    },
+    {
+      "time": 2040,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 2600,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    },
+    {
+      "time": 3000,
+      "pos": [
+        300,
+        100
+      ],
+      "left": false,
+      "right": false
+    }
+  ],
+  "events": [
+    {
+      "object_index": 0,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 2000,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 1
+    },
+    {
+      "object_index": 1,
+      "nested_index": null,
+      "kind": "HitCircle",
+      "start_time": 2000,
+      "result": "Great",
+      "is_hit": true,
+      "combo_after": 2
+    }
+  ],
+  "end_state": {
+    "statistics": {
+      "great": 2
+    },
+    "maximum_statistics": {
+      "great": 2
+    },
+    "max_combo": 2,
+    "total_score": 1000000,
+    "accuracy": 1,
+    "rank": "X"
+  }
+}

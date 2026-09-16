@@ -1,10 +1,8 @@
 {
-  "scenario": "slider-tracking",
-  "description": "slider 1: follow circle left after tick 1 and re-entered before the tail (tick 2 missed); slider 2: tracked through its tick then abandoned (tail dropped without a combo break)",
+  "scenario": "slider-tracking-native",
+  "description": "NATIVE (no mods) dump of the slider-tracking scenario: tracking loss and recovery mid-body (tick 2 dropped, the tail recovered) on slider 1, and an abandoned body (the tail dropped) on slider 2, under lazer\u0027s own rules -- the tail is a SliderTailHit or an ignore miss, never a tick",
   "beatmap_file": "scenario-slider-tracking.osu",
-  "mods": [
-    "CL"
-  ],
+  "mods": [],
   "clock_step_ms": 4,
   "frames": [
     {
@@ -869,7 +867,7 @@
       "nested_index": 0,
       "kind": "SliderHeadCircle",
       "start_time": 2000,
-      "result": "LargeTickHit",
+      "result": "Great",
       "is_hit": true,
       "combo_after": 1
     },
@@ -896,16 +894,16 @@
       "nested_index": 3,
       "kind": "SliderTailCircle",
       "start_time": 3500,
-      "result": "SmallTickHit",
+      "result": "SliderTailHit",
       "is_hit": true,
-      "combo_after": 0
+      "combo_after": 1
     },
     {
       "object_index": 0,
       "nested_index": null,
       "kind": "Slider",
       "start_time": 2000,
-      "result": "Ok",
+      "result": "IgnoreHit",
       "is_hit": true,
       "combo_after": 1
     },
@@ -914,7 +912,7 @@
       "nested_index": 0,
       "kind": "SliderHeadCircle",
       "start_time": 5000,
-      "result": "LargeTickHit",
+      "result": "Great",
       "is_hit": true,
       "combo_after": 2
     },
@@ -932,7 +930,7 @@
       "nested_index": 2,
       "kind": "SliderTailCircle",
       "start_time": 6000,
-      "result": "SmallTickMiss",
+      "result": "IgnoreMiss",
       "is_hit": false,
       "combo_after": 3
     },
@@ -941,27 +939,29 @@
       "nested_index": null,
       "kind": "Slider",
       "start_time": 5000,
-      "result": "Ok",
+      "result": "IgnoreHit",
       "is_hit": true,
-      "combo_after": 4
+      "combo_after": 3
     }
   ],
   "end_state": {
     "statistics": {
-      "ok": 2,
-      "large_tick_hit": 4,
-      "small_tick_hit": 1,
+      "great": 2,
+      "large_tick_hit": 2,
+      "slider_tail_hit": 1,
       "large_tick_miss": 1,
-      "small_tick_miss": 1
+      "ignore_hit": 2,
+      "ignore_miss": 1
     },
     "maximum_statistics": {
       "great": 2,
-      "large_tick_hit": 5,
-      "small_tick_hit": 2
+      "large_tick_hit": 3,
+      "slider_tail_hit": 2,
+      "ignore_hit": 2
     },
-    "max_combo": 4,
-    "total_score": 141687,
-    "accuracy": 0.42857142857142855,
-    "rank": "D"
+    "max_combo": 3,
+    "total_score": 399208,
+    "accuracy": 0.8181818181818182,
+    "rank": "B"
   }
 }
