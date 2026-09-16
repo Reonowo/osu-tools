@@ -5,6 +5,7 @@
 use engine::math::Vec2;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 // tolerances mirror fixtures/meta.json. all three are ZERO: the 2026-08-12
@@ -189,7 +190,11 @@ pub fn assert_f64_close(actual: f64, expected: f64, tolerance: f64, ctx: &str) {
 /// family. events are lazer's own per-element judgement timeline in
 /// application order; kinds and results carry lazer's type/enum names
 /// verbatim. raw judgement times and spinner rotation are deliberately
-/// absent (update-loop sampling artifacts; see the meta.json note)
+/// absent (update-loop sampling artifacts; see the meta.json note). `mods`
+/// is the scenario's own list: `["CL"]` for the legacy rules path the stable
+/// profile ports, empty for lazer's default gameplay the native profile
+/// ports; `end_state` is what lazer's score processor derived from the
+/// events once the play completed
 #[derive(Deserialize)]
 pub struct JudgementDump {
     pub scenario: String,
@@ -199,6 +204,21 @@ pub struct JudgementDump {
     pub clock_step_ms: f64,
     pub frames: Vec<JudgementDumpFrame>,
     pub events: Vec<JudgementDumpEvent>,
+    pub end_state: JudgementDumpEndState,
+}
+
+/// the score processor's end state: statistics and maximum statistics keyed
+/// by HitResult's snake-case names (the score-info block's spelling), zero
+/// counts omitted; max combo as HighestCombo; the standardised total; the
+/// accuracy the rank was read from; and the rank as lazer's enum name
+#[derive(Deserialize)]
+pub struct JudgementDumpEndState {
+    pub statistics: BTreeMap<String, i64>,
+    pub maximum_statistics: BTreeMap<String, i64>,
+    pub max_combo: u32,
+    pub total_score: i64,
+    pub accuracy: f64,
+    pub rank: String,
 }
 
 #[derive(Deserialize)]
@@ -221,13 +241,53 @@ pub struct JudgementDumpEvent {
 }
 
 /// every scenario the family commits; tests iterate this list so a new
-/// scenario cannot land without its consumers noticing
-pub const JUDGEMENT_SCENARIOS: [&str; 4] = [
+/// scenario cannot land without its consumers noticing. it holds both the
+/// `CL` dumps the stable profile is pinned against and the no-mod dumps the
+/// native profile is, told apart by each dump's OWN `mods` list and never by
+/// position -- `native_scenarios()` filters on `mods.is_empty()` for exactly
+/// that reason, and `pinned-apart-classic` sits at index 5 with a `CL` list,
+/// so no prefix of this array is the classic set. three scenarios
+/// (`pinned-apart-*`, `notelock-stack*`, `slider-tracking*`) dump one set of
+/// frames both ways so the two profiles are pinned apart
+pub const JUDGEMENT_SCENARIOS: [&str; 19] = [
     "baseline",
     "spinner-accumulation",
     "slider-tracking",
     "notelock-stack",
+    "native-baseline",
+    "pinned-apart-classic",
+    "pinned-apart-native",
+    "notelock-stack-native",
+    "native-ordered-lock",
+    "native-simultaneous",
+    "native-duplicate-frames",
+    "native-sparse-frames",
+    "native-incomplete",
+    "native-graded-heads",
+    "native-late-head-recovery",
+    "slider-tracking-native",
+    "native-tail-ordering",
+    "native-overlapping-sliders",
+    "native-spinner-thresholds",
 ];
+
+/// "LargeTickHit" -> "large_tick_hit": the spelling the dump's end-state maps
+/// key by, derived from an event's result name the same way lazer's own
+/// ToSnakeCase derives a score-info key
+pub fn snake_case_result(result: &str) -> String {
+    let mut out = String::with_capacity(result.len() + 4);
+    for (i, c) in result.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
 pub fn load_judgement_dump(scenario: &str) -> JudgementDump {
     load_json(&format!("judgement/{scenario}.json"))

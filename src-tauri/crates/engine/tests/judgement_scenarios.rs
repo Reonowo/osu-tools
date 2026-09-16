@@ -3,8 +3,9 @@ mod fixture_util;
 use engine::beatmap::difficulty::HitGrade;
 use engine::beatmap::process_beatmap;
 use engine::formats::beatmap::decode_beatmap_path;
+use engine::score::ScoreRank;
 use engine::simulation::score::JudgementKind;
-use engine::simulation::simulate;
+use engine::simulation::simulate_stable;
 use fixture_util::{judgement_frames, load_judgement_dump, JudgementDump};
 
 // per-mechanism parity against the judgement-dump scenario fixtures: lazer
@@ -20,7 +21,9 @@ fn simulate_scenario(dump: &JudgementDump) -> engine::simulation::JudgementTimel
         .join(&dump.beatmap_file);
     let map = decode_beatmap_path(&map_path).expect("scenario map decodes");
     let processed = process_beatmap(&map).expect("scenario map processes");
-    simulate(&processed, &judgement_frames(dump)).expect("scenario simulates")
+    // the stable walk by name: these dumps were judged under the classic
+    // mod, the legacy rules path the stable profile ports
+    simulate_stable(&processed, &judgement_frames(dump)).expect("scenario simulates")
 }
 
 fn grade_name(grade: HitGrade) -> &'static str {
@@ -109,10 +112,10 @@ fn slider_tracking_matches_the_lazer_dump() {
             .iter()
             .filter(|e| e.object_index == object_index)
             .filter_map(|e| match e.kind {
-                JudgementKind::SliderHead { hit } => Some(("head", hit)),
-                JudgementKind::SliderTick { hit } => Some(("tick", hit)),
+                JudgementKind::SliderHead { grade } => Some(("head", grade != HitGrade::Miss)),
+                JudgementKind::SliderTick { hit, .. } => Some(("tick", hit)),
                 JudgementKind::SliderRepeat { hit, .. } => Some(("repeat", hit)),
-                JudgementKind::SliderTail { hit } => Some(("tail", hit)),
+                JudgementKind::SliderTail { hit, .. } => Some(("tail", hit)),
                 _ => None,
             })
             .collect();
@@ -237,4 +240,61 @@ fn baseline_scenario_matches_the_lazer_dump() {
         })
         .expect("slider aggregate present");
     assert_eq!(engine_aggregate, HitGrade::Great, "fully tracked slider aggregates great");
+}
+
+/// the totals' accuracy and rank, pinned to what the frontend computed for
+/// these same scenarios before the two moved into the engine (weighted hit
+/// share over the judged count; lazer's cutoffs with the osu! miss
+/// demotion). every scenario here is deliberately partial, so all four land
+/// on D; the synthetic full combo in `replay_corpus.rs` pins the X end
+#[test]
+fn totals_carry_the_accuracy_and_rank_the_frontend_used_to_compute() {
+    for (scenario, accuracy, rank) in [
+        ("baseline", 700.0 / 1200.0, ScoreRank::D),
+        ("spinner-accumulation", 350.0 / 600.0, ScoreRank::D),
+        ("slider-tracking", 200.0 / 600.0, ScoreRank::D),
+        ("notelock-stack", 300.0 / 1200.0, ScoreRank::D),
+    ] {
+        let timeline = simulate_scenario(&load_judgement_dump(scenario));
+        assert_eq!(timeline.totals.accuracy, accuracy, "{scenario}");
+        assert_eq!(timeline.totals.rank, rank, "{scenario}");
+    }
+}
+
+/// every nested judgement on the slider-tracking scenario names its lazer
+/// nested object: the two generators agree on this map's tick counts, so
+/// each tick, repeat and tail event carries the index of the element it
+/// judged, and the slider's lifecycle end follows its aggregate
+#[test]
+fn nested_judgements_carry_their_lazer_identity_and_the_slider_ends_once() {
+    let dump = load_judgement_dump("slider-tracking");
+    let map_path = fixture_util::fixtures_dir()
+        .join("judgement/maps")
+        .join(&dump.beatmap_file);
+    let processed = process_beatmap(&decode_beatmap_path(&map_path).unwrap()).unwrap();
+    let timeline = simulate_scenario(&dump);
+    for (object_index, object) in processed.objects.iter().enumerate() {
+        let engine::beatmap::ProcessedKind::Slider(slider) = &object.kind else { continue };
+        let mut ends = 0;
+        for event in timeline.events.iter().filter(|e| e.object_index == object_index) {
+            let (nested_index, expected_kind) = match event.kind {
+                JudgementKind::SliderTick { nested_index, .. } => (nested_index, engine::beatmap::NestedKind::Tick),
+                JudgementKind::SliderRepeat { nested_index, .. } => {
+                    (nested_index, engine::beatmap::NestedKind::Repeat)
+                }
+                JudgementKind::SliderTail { nested_index, .. } => (nested_index, engine::beatmap::NestedKind::Tail),
+                JudgementKind::SliderEnd { .. } => {
+                    ends += 1;
+                    continue;
+                }
+                _ => continue,
+            };
+            let nested_index = nested_index.expect("this map's stable points all have lazer counterparts");
+            assert_eq!(
+                slider.nested[nested_index as usize].kind, expected_kind,
+                "slider {object_index}: the index names an element of the judged kind"
+            );
+        }
+        assert_eq!(ends, 1, "slider {object_index}: exactly one lifecycle end");
+    }
 }
