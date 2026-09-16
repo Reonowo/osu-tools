@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use engine::beatmap::{process_beatmap, ProcessedBeatmap};
+use engine::configuration::{resolve_play_configuration, PlayConfiguration, RefusalReason, RulesProfile, SimulationSupport};
 use engine::formats::beatmap::{decode_beatmap_bytes, Beatmap};
 use engine::formats::osr::{decode_osr, OsrFile};
-use engine::mods::{pipeline_for, process_with_mods, LegacyMods};
 use engine::render_plan::build_render_plan;
 use engine::replay::document::ReplayDocument;
 use engine::score::ScoreContext;
@@ -21,7 +21,7 @@ use crate::media::{
     read_file_capped, resolve_media_path, resolve_sample_files, resolve_texture_files, SAMPLE_EXTENSIONS,
 };
 use crate::osz::{open_osz, MatchedOsu, OszArchive};
-use crate::scene::{assemble_scene, LoadedScene, NotSimulatedReason, SimulationDto};
+use crate::scene::{assemble_scene, LoadedScene, SimulationDto};
 use crate::stable::{detect_install, find_beatmap_by_md5, ListingCache};
 
 pub struct SessionState {
@@ -35,9 +35,10 @@ pub struct SessionState {
     /// bumped by every applied edit, so the frontend can detect a document
     /// that changed under it without diffing the whole document
     pub revision: u64,
-    /// whether the cached `simulation` is authoritative -- the editing gate:
-    /// edits that would invalidate the timeline are refused while this is false
-    pub simulatable: bool,
+    /// the play configuration the engine resolved at load: the profile, the
+    /// effective mods, and the capabilities every editor command reads its
+    /// gate from -- one decision, never a version check of its own
+    pub configuration: PlayConfiguration,
     pub undo_labels: Vec<String>,
     pub redo_labels: Vec<String>,
     /// the cached last simulation, kept alongside the document so an editor
@@ -46,23 +47,121 @@ pub struct SessionState {
     /// the stable-faithful score-derivation inputs, captured once at load
     /// from the decoded beatmap (raw hp/od/cs, object count, drain length)
     pub score_context: ScoreContext,
-    /// stable's map-load drain-rate search, cached for the session. it
+    /// the map-load drain-rate search, cached for the session under the
+    /// profile the timeline runs under: stable's search or lazer's. it
     /// depends on the MAP and the score context only -- never on the frames
     /// -- so an edit re-runs the health fold over it rather than searching
-    /// again. present exactly when `simulatable` is true; there is nothing
-    /// to fold for a scene with no authoritative timeline
-    pub drain_search: Option<engine::score::DrainRateSearch>,
+    /// again. present exactly when the configuration carries a timeline;
+    /// there is nothing to fold for a scene with none
+    pub drain: Option<DrainCache>,
     /// the map's peppy stars, cached beside the search for the same reason:
     /// the score curve's combo bonus reads them on every landed edit and they
-    /// depend on the score context alone. `None` on an unsimulatable scene,
-    /// and also where the derivation refused the map's difficulty values --
-    /// a curve withheld, never a load failed, on the same terms as the
-    /// integrity report
+    /// depend on the score context alone. `None` on a scene with no
+    /// timeline, and also where the derivation refused the map's difficulty
+    /// values -- a curve withheld, never a load failed, on the same terms as
+    /// the integrity report
     pub peppy_stars: Option<i32>,
     /// what a video export stages from, captured here because the load is
     /// the one moment every path below is already resolved -- for an `.osz`
     /// scene they point into the extraction lease this session holds alive
     pub export_source: crate::video::staging::ExportSourceRecord,
+}
+
+/// the session's cached drain-rate search, one per profile: the two folds
+/// share nothing but the wire shape of the curve they produce
+#[derive(Debug, Clone, PartialEq)]
+pub enum DrainCache {
+    Stable(engine::score::DrainRateSearch),
+    Native(engine::score::NativeDrain),
+}
+
+/// the two folds behind one landed timeline -- the HP curve in the wire
+/// shape and the score curve -- under the profile the timeline ran under,
+/// off the session's cached search. shared by the load and by every
+/// re-simulation an edit triggers, so the two can never fold differently
+pub struct Folds {
+    pub hp_curve: Vec<[f64; 2]>,
+    pub score: Option<Vec<engine::score::ScoreStep>>,
+    /// the stable fold's whole curve, which the integrity report's life
+    /// bar comparison reads; the native fold has no graph to compare
+    pub stable_health: Option<engine::score::HealthCurve>,
+    /// the native fold's fail point, which turns the rank to F, and the
+    /// event it fell on, which the block comparison truncates at
+    pub fail_time: Option<f64>,
+    pub fail_event_index: Option<usize>,
+}
+
+pub fn fold_timeline(
+    processed: &ProcessedBeatmap,
+    timeline: &mut engine::simulation::JudgementTimeline,
+    configuration: &PlayConfiguration,
+    score_context: &ScoreContext,
+    drain: &DrainCache,
+    peppy_stars: Option<i32>,
+) -> Folds {
+    match (configuration.simulated_profile(), drain) {
+        (Some(RulesProfile::Native), DrainCache::Native(drain)) => {
+            let health = engine::score::native_health(
+                processed,
+                timeline,
+                score_context.hp_drain_rate,
+                drain.clone(),
+            );
+            // lazer's rank for a failed play is F whatever the accuracy
+            // says, so the fail point folds into the totals here, where
+            // the health is known
+            if health.fail_time.is_some() {
+                timeline.totals.rank = engine::score::ScoreRank::F;
+            }
+            Folds {
+                hp_curve: crate::scene::native_hp_curve(&health),
+                score: timeline.native.as_ref().map(|native| native.score_curve.clone()),
+                stable_health: None,
+                fail_time: health.fail_time,
+                fail_event_index: health.fail_event_index,
+            }
+        }
+        (_, DrainCache::Stable(search)) => {
+            let health =
+                engine::score::derive_health_with_search(processed, timeline, score_context, search.clone());
+            Folds {
+                hp_curve: crate::scene::stable_hp_curve(&health),
+                score: score_curve_for(timeline, processed, peppy_stars),
+                stable_health: Some(health),
+                fail_time: None,
+                fail_event_index: None,
+            }
+        }
+        // a native drain cached for a timeline that then ran under stable
+        // (or the reverse) cannot happen: both are chosen off the same
+        // configuration. searched afresh rather than unwrapped, so the fold
+        // stays total
+        (_, DrainCache::Native(_)) => {
+            let search = engine::score::drain_rate_search(processed, score_context);
+            fold_timeline(
+                processed,
+                timeline,
+                configuration,
+                score_context,
+                &DrainCache::Stable(search),
+                peppy_stars,
+            )
+        }
+    }
+}
+
+/// the search the profile needs, run once per load
+pub fn search_drain(
+    processed: &ProcessedBeatmap,
+    configuration: &PlayConfiguration,
+    score_context: &ScoreContext,
+) -> DrainCache {
+    match configuration.simulated_profile() {
+        Some(RulesProfile::Native) => {
+            DrainCache::Native(engine::score::native_drain(processed, score_context.hp_drain_rate))
+        }
+        _ => DrainCache::Stable(engine::score::drain_rate_search(processed, score_context)),
+    }
 }
 
 // the tests format `Result<LoadOutcome, IpcError>` in panic messages;
@@ -77,7 +176,7 @@ impl std::fmt::Debug for SessionState {
             .field("has_lease", &self.lease.is_some())
             .field("epoch", &self.epoch)
             .field("revision", &self.revision)
-            .field("simulatable", &self.simulatable)
+            .field("configuration", &self.configuration)
             .finish()
     }
 }
@@ -187,7 +286,9 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         });
     }
 
-    let mods = LegacyMods { raw: header.mods };
+    // the one resolution of what this play is, handed to everything below
+    // and kept on the session for every later command
+    let configuration = resolve_play_configuration(document.file(), source.mismatch);
     let mut warnings = Vec::new();
     if source.mismatch {
         warnings.push(Warning::BeatmapMismatch {
@@ -195,8 +296,26 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
             actual_md5: source.md5.clone(),
         });
     }
-    if !mods.is_nomod() {
-        warnings.push(Warning::ModsNotSimulated { mods: mods.raw });
+    match &configuration.capabilities.simulate {
+        SimulationSupport::Refused {
+            reason: RefusalReason::UnsupportedMods { acronyms },
+        } => warnings.push(Warning::ModsNotSimulated {
+            mods: header.mods,
+            acronyms: acronyms.clone(),
+            profile: configuration.profile,
+        }),
+        SimulationSupport::Refused {
+            reason: RefusalReason::UnreadableScoreInfo { reason },
+        } => warnings.push(Warning::ScoreInfoUnreadable {
+            reason: reason.clone(),
+        }),
+        // the mismatch already has its warning above; a simulated play
+        // needs none
+        SimulationSupport::Refused {
+            reason: RefusalReason::BeatmapMismatch,
+        }
+        | SimulationSupport::Authoritative { .. }
+        | SimulationSupport::Approximate { .. } => {}
     }
 
     let score_context = ScoreContext::from_beatmap(&source.map);
@@ -205,62 +324,73 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     // whose judged count falls short of the map's object count ended early.
     // withheld on a consented mismatch (the object count describes the
     // wrong map); a header claiming MORE than the map has is not "ended
-    // early" and keeps the ordinary mismatch verdicts
-    let incompleteness = if source.mismatch {
+    // early" and keeps the ordinary mismatch verdicts. withheld under the
+    // native profile too: a lazer play that ended early is a play that
+    // failed, and its report already compares up to the engine's own fail
+    // point and says so -- the marker would turn every remaining difference
+    // into an expected one and hide a genuine parity break behind it
+    let incompleteness = if source.mismatch || configuration.profile == RulesProfile::Native {
         None
     } else {
         incompleteness_marker(&header, score_context.object_count)
     };
 
-    // mismatch wins as the reason: the geometry may be wrong, so even a
-    // nomod timeline would be fiction. unsupported mods still render with
-    // nomod geometry -- the spec's persistent-banner path
-    let (processed, simulation, integrity, drain_search, peppy_stars) = if source.mismatch {
-        (
-            process_beatmap(&source.map)?,
+    // the geometry is the map's own either way: the supported matrix is
+    // NoMod, so the mod pipeline (`engine::mods`) has nothing to adjust yet
+    // and plugs in here the day a mod enters the matrix. a refused
+    // configuration still renders -- the spec's persistent-banner path
+    let processed = process_beatmap(&source.map)?;
+    let (simulation, integrity, drain, peppy_stars) = match &configuration.capabilities.simulate {
+        support @ (SimulationSupport::Authoritative { .. } | SimulationSupport::Approximate { .. }) => {
+            let mut timeline = simulate(&processed, document.frames(), &configuration)?;
+            // the search is the session's, run here under the timeline's
+            // profile and handed back to every later edit; the fold itself
+            // is all that re-runs per edit
+            let drain = search_drain(&processed, &configuration, &score_context);
+            // and so are the stars, for the same reason: the score curve's combo
+            // bonus needs them on every edit and they read the map alone
+            let stars = engine::score::peppy_stars(&score_context).ok();
+            let folds = fold_timeline(&processed, &mut timeline, &configuration, &score_context, &drain, stars);
+            let simulation = SimulationDto::simulated(support, &timeline, folds.hp_curve, folds.score.as_deref());
+            // the header-vs-simulated report is an exact comparison, so it
+            // ships only where the simulation is exact: an authoritative
+            // timeline, against the header under the stable profile (whose
+            // oracle the header is, docs/adr/0001) and against the block
+            // lazer wrote under the native one. an approximate one would
+            // flag honest mismatches. the stable derivation itself can only
+            // fail on difficulty values no decode produces; a failure
+            // withholds the report, never the load
+            let integrity = if !configuration.is_authoritative() {
+                None
+            } else {
+                match (configuration.simulated_profile(), folds.stable_health) {
+                    (Some(RulesProfile::Native), _) => document.file().trailer.score_info().map(|block| {
+                        crate::scene::IntegrityDto::compare_native(
+                            &header,
+                            block,
+                            &processed,
+                            &timeline,
+                            folds.fail_event_index.zip(folds.fail_time),
+                        )
+                    }),
+                    (_, Some(health)) => {
+                        engine::score::derive_score_with_health(&processed, &timeline, &score_context, health)
+                            .ok()
+                            .map(|derived| crate::scene::IntegrityDto::compare(&header, &derived))
+                    }
+                    _ => None,
+                }
+            };
+            (simulation, integrity, Some(drain), stars)
+        }
+        SimulationSupport::Refused { reason } => (
             SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::BeatmapMismatch,
+                reason: reason.clone(),
             },
             None,
             None,
             None,
-        )
-    } else if let Some(pipeline) = pipeline_for(mods) {
-        let processed = process_with_mods(&source.map, &*pipeline)?;
-        let timeline = simulate(&processed, document.frames())?;
-        // the search is the session's, folded here and handed back to every
-        // later edit; the fold itself is all that re-runs per edit
-        let search = engine::score::drain_rate_search(&processed, &score_context);
-        // and so are the stars, for the same reason: the score curve's combo
-        // bonus needs them on every edit and they read the map alone
-        let stars = engine::score::peppy_stars(&score_context).ok();
-        let health =
-            engine::score::derive_health_with_search(&processed, &timeline, &score_context, search.clone());
-        let score = score_curve_for(&timeline, &processed, stars);
-        let simulation = SimulationDto::authoritative(&timeline, &health, score.as_deref());
-        // pre-lazer authoritative scenes only: a lazer-native play simulated
-        // under the legacy profile would flag honest mismatches (TODO.md's
-        // lazer-native item), so those ship no report rather than false
-        // alarms. the derivation itself can only fail on difficulty values
-        // no decode produces; a failure withholds the report, never the load
-        let integrity = if header.version < engine::formats::osr::FIRST_LAZER_VERSION {
-            engine::score::derive_score_with_health(&processed, &timeline, &score_context, health)
-                .ok()
-                .map(|derived| crate::scene::IntegrityDto::compare(&header, &derived))
-        } else {
-            None
-        };
-        (processed, simulation, integrity, Some(search), stars)
-    } else {
-        (
-            process_beatmap(&source.map)?,
-            SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::UnsupportedMods,
-            },
-            None,
-            None,
-            None,
-        )
+        ),
     };
 
     let render_plan = build_render_plan(&source.map, &processed);
@@ -282,11 +412,9 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
     // so the walk is filtered by element prefix instead
     let texture_files = resolve_texture_files(&source.dir)?;
 
-    // computed before assemble_scene consumes simulation, and cloned rather
-    // than derived from the scene afterwards -- the scene's copy is a dto,
-    // and the session keeps the same shape so a later editor command can
-    // hand it back without re-simulating
-    let simulatable = matches!(simulation, SimulationDto::Authoritative { .. });
+    // cloned rather than derived from the scene afterwards -- the scene's
+    // copy is a dto, and the session keeps the same shape so a later editor
+    // command can hand it back without re-simulating
     let cached_simulation = simulation.clone();
 
     // the export-source record, captured while every resolved path is in
@@ -306,6 +434,8 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
         &source.map,
         &source.md5,
         &header,
+        &document.file().trailer,
+        &configuration,
         document.frames(),
         render_plan,
         simulation,
@@ -325,12 +455,12 @@ pub(crate) fn build_outcome(osr: OsrFile, source: BeatmapSource) -> Result<LoadO
             lease: source.lease,
             epoch: 0,
             revision: 0,
-            simulatable,
+            configuration,
             undo_labels: Vec::new(),
             redo_labels: Vec::new(),
             simulation: cached_simulation,
             score_context,
-            drain_search,
+            drain,
             peppy_stars,
             export_source,
         },
@@ -757,8 +887,9 @@ pub fn load_replay_auto(
 mod tests {
     use super::*;
     use crate::error::{IpcError, Warning};
-    use crate::scene::{NotSimulatedReason, SimulationDto};
-    use crate::testutil::{fixtures_dir, osr_bytes};
+    use crate::scene::SimulationDto;
+    use crate::testutil::{fixtures_dir, lazer_trailer, osr_bytes, osr_bytes_with_trailer};
+    use engine::configuration::{ModProvenance, RefusalReason, RulesProfile};
 
     /// copies the committed fixture map next to a fresh .osr in `dir`, returns
     /// (osr_path, osu_path)
@@ -790,7 +921,7 @@ mod tests {
             outcome.session.epoch, 0,
             "the pure pipeline leaves stamping to install_scene"
         );
-        assert!(outcome.session.simulatable);
+        assert!(outcome.session.configuration.is_authoritative());
         assert!(matches!(
             outcome.session.simulation,
             crate::scene::SimulationDto::Authoritative { .. }
@@ -798,7 +929,7 @@ mod tests {
 
         let (osr_path, osu_path) = fixture_setup_in(dir.path(), 16); // hard rock
         let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
-        assert!(!outcome.session.simulatable);
+        assert!(!outcome.session.configuration.has_timeline());
     }
 
     #[test]
@@ -816,7 +947,7 @@ mod tests {
         );
         assert_eq!(
             report.life_bar_graph,
-            crate::scene::LifeBarGraphDto::Absent,
+            Some(crate::scene::LifeBarGraphDto::Absent),
             "the synthetic header carries no life graph"
         );
 
@@ -886,7 +1017,7 @@ mod tests {
         assert!(matches!(
             outcome.scene.simulation,
             SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::BeatmapMismatch,
+                reason: RefusalReason::BeatmapMismatch,
             }
         ));
         assert!(outcome.scene.incompleteness.is_none());
@@ -905,10 +1036,11 @@ mod tests {
     }
 
     #[test]
-    fn lazer_native_scenes_ship_no_integrity_report() {
-        // simulated under the legacy profile, a lazer-native play would flag
-        // honest mismatches -- an inapplicable rules profile must not raise
-        // false alarms
+    fn lazer_native_nomod_scenes_load_authoritative_under_native_with_a_block_report() {
+        // judged under lazer's own rules, a lazer-native play keeps every
+        // timeline surface lit, opens both gates, and ships the exact report
+        // against the block the file carries -- the configuration says so
+        // on the wire
         let dir = tempfile::tempdir().unwrap();
         let osu_bytes = std::fs::read(fixtures_dir().join("beatmaps").join("stacking-v14.osu")).unwrap();
         let md5 = format!("{:x}", md5::compute(&osu_bytes));
@@ -917,16 +1049,96 @@ mod tests {
         let osr_path = dir.path().join("replay.osr");
         std::fs::write(
             &osr_path,
-            crate::testutil::osr_bytes_versioned(&md5, 0, None, 30000001),
+            osr_bytes_with_trailer(&md5, 0, None, 30000016, lazer_trailer(&[])),
         )
         .unwrap();
 
         let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        let configuration = &outcome.session.configuration;
+        assert_eq!(configuration.profile, RulesProfile::Native);
+        assert_eq!(configuration.provenance, ModProvenance::Block);
+        assert!(configuration.has_timeline() && configuration.is_authoritative());
+        assert!(configuration.capabilities.edit_frames.is_allowed());
+        match &outcome.scene.simulation {
+            SimulationDto::Authoritative { totals, hp_curve, score_curve, .. } => {
+                let statistics = totals.statistics.as_ref().expect("the native totals carry the statistics map");
+                assert!(!statistics.is_empty());
+                assert!(!hp_curve.is_empty(), "lazer's own health rides the same curve");
+                assert!(score_curve.is_some());
+            }
+            other => panic!("expected an authoritative simulation, got {other:?}"),
+        }
+        let integrity = outcome
+            .scene
+            .integrity
+            .as_ref()
+            .expect("a native authoritative play reports against its block");
+        assert_eq!(integrity.profile, RulesProfile::Native);
+        assert!(integrity.cross_check.is_none() && integrity.life_bar_graph.is_none());
+        let block = integrity.block.as_ref().expect("the block comparison");
+        assert_eq!(block.rank_block, Some(engine::score::ScoreRank::X), "the synthetic block claims an X");
+        assert!(integrity.rows.iter().any(|r| r.field == "maxCombo"));
+        assert!(matches!(outcome.session.drain, Some(DrainCache::Native(_))), "the native search is cached");
+        // the temp map ships no audio; that warning is the map's, not the
+        // configuration's
         assert!(
-            outcome.session.simulatable,
-            "lazer-native still simulates; only the report is withheld"
+            outcome
+                .scene
+                .warnings
+                .iter()
+                .all(|w| matches!(w, Warning::AudioMissing)),
+            "approximate is stated, not warned about: {:?}",
+            outcome.scene.warnings
         );
-        assert!(outcome.scene.integrity.is_none());
+        assert!(matches!(outcome.scene.replay.score_info, crate::scene::ScoreInfoDto::Present { .. }));
+
+        // a lazer-only mod in the block refuses simulation by acronym, and
+        // the warning names it
+        std::fs::write(
+            &osr_path,
+            osr_bytes_with_trailer(&md5, 0, None, 30000016, lazer_trailer(&["BL"])),
+        )
+        .unwrap();
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert!(matches!(
+            &outcome.scene.simulation,
+            SimulationDto::NotSimulated {
+                reason: RefusalReason::UnsupportedMods { acronyms }
+            } if acronyms == &["BL".to_string()]
+        ));
+        assert_eq!(
+            outcome.scene.warnings[0],
+            Warning::ModsNotSimulated {
+                mods: 0,
+                acronyms: vec!["BL".into()],
+                profile: RulesProfile::Native
+            }
+        );
+
+        // a malformed block loads with its frames, withholds the simulation
+        // with the reader's reason, and says so in a warning
+        let malformed = engine::formats::osr::OsrTrailer {
+            block: engine::formats::osr::ScoreInfoBlock::Malformed {
+                raw: vec![0xde, 0xad],
+                reason: "score-info block is not lzma: boom".into(),
+            },
+            trailing: Vec::new(),
+        };
+        std::fs::write(&osr_path, osr_bytes_with_trailer(&md5, 0, None, 30000016, malformed)).unwrap();
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert_eq!(outcome.scene.frames.len(), 3);
+        assert!(matches!(
+            &outcome.scene.simulation,
+            SimulationDto::NotSimulated {
+                reason: RefusalReason::UnreadableScoreInfo { reason }
+            } if reason.contains("not lzma")
+        ));
+        assert!(matches!(
+            &outcome.scene.warnings[0],
+            Warning::ScoreInfoUnreadable { reason } if reason.contains("not lzma")
+        ));
+        assert!(matches!(outcome.scene.replay.score_info, crate::scene::ScoreInfoDto::Malformed { .. }));
+        assert_eq!(outcome.session.configuration.provenance, ModProvenance::Unresolvable);
     }
 
     #[test]
@@ -1001,7 +1213,7 @@ mod tests {
         assert!(matches!(
             &outcome.scene.simulation,
             SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::BeatmapMismatch
+                reason: RefusalReason::BeatmapMismatch
             }
         ));
         assert_eq!(
@@ -1022,10 +1234,17 @@ mod tests {
         assert!(matches!(
             &outcome.scene.simulation,
             SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::UnsupportedMods
-            }
+                reason: RefusalReason::UnsupportedMods { acronyms }
+            } if acronyms == &["HD".to_string()]
         ));
-        assert_eq!(outcome.scene.warnings[0], Warning::ModsNotSimulated { mods: 8 });
+        assert_eq!(
+            outcome.scene.warnings[0],
+            Warning::ModsNotSimulated {
+                mods: 8,
+                acronyms: vec!["HD".into()],
+                profile: RulesProfile::Stable
+            }
+        );
         assert_eq!(outcome.scene.replay.mods, 8);
         assert!(
             !outcome.scene.render_plan.objects.is_empty(),
@@ -1139,7 +1358,7 @@ mod tests {
         assert!(matches!(
             &outcome.scene.simulation,
             SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::BeatmapMismatch
+                reason: RefusalReason::BeatmapMismatch
             }
         ));
         assert!(matches!(
@@ -1732,7 +1951,7 @@ mod tests {
         assert!(matches!(
             &outcome.scene.simulation,
             SimulationDto::NotSimulated {
-                reason: NotSimulatedReason::BeatmapMismatch
+                reason: RefusalReason::BeatmapMismatch
             }
         ));
         assert_eq!(

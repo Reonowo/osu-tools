@@ -80,6 +80,50 @@ pub fn osr_bytes_versioned(
     osr_bytes_inner(beatmap_md5, mods, actions, version, |_| {})
 }
 
+/// osr_bytes at an explicit version with an explicit trailer, written
+/// verbatim -- the lazer-native tests need a present, empty, absent or
+/// malformed score-info block under the same header the other helpers write
+pub fn osr_bytes_with_trailer(
+    beatmap_md5: &str,
+    mods: u32,
+    actions: Option<Vec<engine::formats::osr::ReplayAction>>,
+    version: u32,
+    trailer: engine::formats::osr::OsrTrailer,
+) -> Vec<u8> {
+    osr_bytes_full(beatmap_md5, mods, actions, version, trailer, |_| {})
+}
+
+/// a readable score-info block carrying `mods` and a one-entry statistics
+/// map, framed as the trailer of a lazer-versioned file
+pub fn lazer_trailer(mods: &[&str]) -> engine::formats::osr::OsrTrailer {
+    use engine::formats::score_info::{encode_score_info, ScoreInfo, ScoreInfoMod, StatisticEntry};
+    let info = ScoreInfo {
+        online_id: -1,
+        mods: mods
+            .iter()
+            .map(|acronym| ScoreInfoMod {
+                acronym: acronym.to_string(),
+                settings: Vec::new(),
+            })
+            .collect(),
+        statistics: vec![StatisticEntry {
+            result: "great".into(),
+            count: 1,
+        }],
+        maximum_statistics: vec![StatisticEntry {
+            result: "great".into(),
+            count: 1,
+        }],
+        client_version: "test-lazer".into(),
+        rank: Some(engine::score::ScoreRank::X),
+        user_id: 7,
+        total_score_without_mods: Some(300),
+        pauses: Vec::new(),
+        unknown: Vec::new(),
+    };
+    engine::formats::osr::OsrTrailer::present(encode_score_info(&info).unwrap(), info)
+}
+
 fn osr_bytes_inner(
     beatmap_md5: &str,
     mods: u32,
@@ -87,7 +131,27 @@ fn osr_bytes_inner(
     version: u32,
     mutate: impl FnOnce(&mut engine::formats::osr::OsrHeader),
 ) -> Vec<u8> {
-    use engine::formats::osr::{encode_osr, EncodeOptions, OsrFile, PayloadSource, ReplayAction};
+    // a lazer-versioned file gets the framed empty array the version needs
+    // and a stable one nothing, exactly as the stripping encoder writes
+    let trailer = if version >= engine::formats::osr::FIRST_LAZER_SCORE_INFO_VERSION {
+        engine::formats::osr::OsrTrailer::empty_block()
+    } else if version >= engine::formats::osr::FIRST_LAZER_VERSION {
+        engine::formats::osr::OsrTrailer::absent()
+    } else {
+        engine::formats::osr::OsrTrailer::none()
+    };
+    osr_bytes_full(beatmap_md5, mods, actions, version, trailer, mutate)
+}
+
+fn osr_bytes_full(
+    beatmap_md5: &str,
+    mods: u32,
+    actions: Option<Vec<engine::formats::osr::ReplayAction>>,
+    version: u32,
+    trailer: engine::formats::osr::OsrTrailer,
+    mutate: impl FnOnce(&mut engine::formats::osr::OsrHeader),
+) -> Vec<u8> {
+    use engine::formats::osr::{encode_osr, EncodeOptions, OsrFile, PayloadSource, ReplayAction, TrailerSource};
     let actions = actions.unwrap_or_else(|| {
         vec![
             ReplayAction {
@@ -118,13 +182,13 @@ fn osr_bytes_inner(
         actions,
         compressed_payload: Vec::new(),
         decompressed_payload: Vec::new(),
-        trailer: Vec::new(),
+        trailer,
     };
     encode_osr(
         &file,
         &EncodeOptions {
             payload: PayloadSource::Reserialize,
-            include_trailer: false,
+            trailer: TrailerSource::Verbatim,
         },
     )
     .unwrap()
