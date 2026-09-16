@@ -1,11 +1,16 @@
-//! `.osr` replay decoding: byte framing per `LegacyScoreDecoder.cs`, lazer
-//! score-info trailer capture, and capped lzma-alone decompression.
+//! `.osr` replay decoding: byte framing per `LegacyScoreDecoder.cs`, the
+//! lazer score-info block's framing (its content is `formats::score_info`'s),
+//! and capped lzma-alone decompression.
 
 use crate::error::{resource_limit, EngineError, Result};
 use crate::formats::binary::Reader;
+use crate::formats::lzma::decompress_lzma_alone;
+use crate::formats::score_info::{decode_score_info, ScoreInfo, ScoreInfoDecode};
 use crate::formats::GameMode;
 use crate::limits;
 use crate::math::dotnet_double_to_i32_unchecked;
+
+pub use crate::formats::score_info::{FIRST_LAZER_SCORE_INFO_VERSION, LATEST_LAZER_VERSION};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OsrFile {
@@ -13,7 +18,99 @@ pub struct OsrFile {
     pub actions: Vec<ReplayAction>,
     pub compressed_payload: Vec<u8>,
     pub decompressed_payload: Vec<u8>,
-    pub trailer: Vec<u8>,
+    /// everything after the online score id: the lazer score-info block in
+    /// whichever of its states the file is in, and any bytes past it
+    pub trailer: OsrTrailer,
+}
+
+/// what follows the online score id. five states, and the difference
+/// between them is load-bearing for the play configuration: a stable file
+/// carries opaque bytes this crate never reads (target practice's accuracy
+/// double, or nothing); lazer's first replay version has no array at all;
+/// every later version frames one, which is empty (what this app's own
+/// stripped exports used to write), readable, or framed-but-unreadable.
+/// `trailing` is whatever sits past the array on a lazer-versioned file --
+/// unknown bytes retained for passthrough, carried by a carried export and
+/// dropped by a regenerating one -- and the whole opaque tail on a stable
+/// one
+#[derive(Debug, Clone, PartialEq)]
+pub struct OsrTrailer {
+    pub block: ScoreInfoBlock,
+    pub trailing: Vec<u8>,
+}
+
+impl OsrTrailer {
+    /// a stable-versioned file with nothing after the online score id
+    pub fn none() -> OsrTrailer {
+        OsrTrailer {
+            block: ScoreInfoBlock::Opaque,
+            trailing: Vec::new(),
+        }
+    }
+
+    /// a stable-versioned file whose tail this crate keeps verbatim
+    pub fn opaque(bytes: Vec<u8>) -> OsrTrailer {
+        OsrTrailer {
+            block: ScoreInfoBlock::Opaque,
+            trailing: bytes,
+        }
+    }
+
+    /// lazer's first replay version, which frames no array at all
+    pub fn absent() -> OsrTrailer {
+        OsrTrailer {
+            block: ScoreInfoBlock::Absent,
+            trailing: Vec::new(),
+        }
+    }
+
+    /// a lazer-versioned file carrying the framed empty array and nothing past it
+    pub fn empty_block() -> OsrTrailer {
+        OsrTrailer {
+            block: ScoreInfoBlock::Empty,
+            trailing: Vec::new(),
+        }
+    }
+
+    /// a lazer-versioned file carrying a readable block and nothing past it.
+    /// `raw` is the array's payload exactly as framed, retained so a
+    /// passthrough or carried export never re-encodes it
+    pub fn present(raw: Vec<u8>, value: ScoreInfo) -> OsrTrailer {
+        OsrTrailer {
+            block: ScoreInfoBlock::Present { raw, value },
+            trailing: Vec::new(),
+        }
+    }
+
+    /// the parsed block, when the file carries a readable one
+    pub fn score_info(&self) -> Option<&ScoreInfo> {
+        match &self.block {
+            ScoreInfoBlock::Present { value, .. } => Some(value),
+            _ => None,
+        }
+    }
+}
+
+/// the score-info array's state. see [`OsrTrailer`] for why all five are
+/// kept apart
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScoreInfoBlock {
+    /// the file's version predates the block (stable, or a pre-lazer
+    /// version): whatever follows the id is stable's own and never parsed
+    Opaque,
+    /// lazer's first replay version ([`FIRST_LAZER_VERSION`]): the format
+    /// has no array yet
+    Absent,
+    /// a zero-length (or null) array: the framing is there, the block is not
+    Empty,
+    /// a framed block this crate read. `raw` is the compressed payload as
+    /// framed, retained so an export that keeps the block writes exactly
+    /// the bytes it read
+    Present { raw: Vec<u8>, value: ScoreInfo },
+    /// a framed block this crate could not read, with the reader's reason.
+    /// not a decode failure for the file: the header and frames are fine,
+    /// and it is the play configuration that reports this
+    Malformed { raw: Vec<u8>, reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,16 +207,12 @@ pub struct ReplayAction {
 pub const SEED_FRAME_DELTA: i64 = -12345;
 
 /// legacyscoreencoder.cs:74 -- the first stable-compatible version number
-/// lazer stamps on its own replays. distinct from the score-info trailer
-/// threshold one above it: 30000000 marks the play as lazer-native,
-/// 30000001+ additionally appends the score-info blob
+/// lazer stamps on its own replays. distinct from the score-info threshold
+/// one above it ([`FIRST_LAZER_SCORE_INFO_VERSION`]): 30000000 marks the
+/// play as lazer-native, 30000001+ additionally frames the score-info block.
+/// the two thresholds are written here and in `formats::score_info` and
+/// nowhere else in the crate
 pub const FIRST_LAZER_VERSION: u32 = 30_000_000;
-
-/// legacyscoredecoder.cs:117 — the first replay version whose framing carries a
-/// length-prefixed lazer score-info array after the online score id. at or above
-/// it that array is read unconditionally, so it must be present even when its
-/// payload is discarded
-const FIRST_LAZER_SCORE_INFO_VERSION: u32 = 30000001;
 
 /// what [`scan_osr_header`] answers: either the header and how far the walk
 /// got, or "the buffer ends inside the header, hand me more bytes".
@@ -295,7 +388,7 @@ pub fn decode_osr(bytes: &[u8]) -> Result<OsrFile> {
     } else {
         0
     };
-    let trailer = r.remaining().to_vec();
+    let trailer = decode_trailer(&mut r, version)?;
 
     Ok(OsrFile {
         header: OsrHeader {
@@ -325,73 +418,49 @@ pub fn decode_osr(bytes: &[u8]) -> Result<OsrFile> {
     })
 }
 
-struct CappedWriter {
-    buf: Vec<u8>,
-    cap: usize,
-}
-
-impl std::io::Write for CappedWriter {
-    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        if self.buf.len() + data.len() > self.cap {
-            return Err(std::io::Error::other("lzma output cap exceeded"));
+/// legacyscoredecoder.cs:115-118 -- the score-info array is read
+/// unconditionally from [`FIRST_LAZER_SCORE_INFO_VERSION`] on, so a file at
+/// that version that ends after the online score id is as truncated as one
+/// that ends inside the header: lazer's own `ReadByteArray` would throw at
+/// EOF there, and this reader refuses it the same way rather than inventing
+/// an empty array it never saw. below that version nothing is framed and the
+/// remaining bytes are kept as they are
+fn decode_trailer(r: &mut Reader, version: u32) -> Result<OsrTrailer> {
+    let block = if version >= FIRST_LAZER_SCORE_INFO_VERSION {
+        let len = r.i32("score_info_length")?;
+        // serializationreader.cs:37-43 -- negative is the null sentinel and
+        // zero an empty array; legacyscoredecoder.cs:123 skips the
+        // deserialize for both, so both are the empty state here
+        if len > 0 {
+            let raw = r
+                .take(usize::try_from(len).expect("a positive i32 always fits usize"), "score info")?
+                .to_vec();
+            match decode_score_info(&raw)? {
+                ScoreInfoDecode::Parsed(value) => ScoreInfoBlock::Present { raw, value },
+                ScoreInfoDecode::Malformed(reason) => ScoreInfoBlock::Malformed { raw, reason },
+            }
+        } else {
+            ScoreInfoBlock::Empty
         }
-        self.buf.extend_from_slice(data);
-        Ok(data.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+    } else if version >= FIRST_LAZER_VERSION {
+        ScoreInfoBlock::Absent
+    } else {
+        ScoreInfoBlock::Opaque
+    };
+    Ok(OsrTrailer {
+        block,
+        trailing: r.remaining().to_vec(),
+    })
 }
 
+/// the frame payload's decompression, under its own cap; the block's runs
+/// through the same decompressor under [`limits::MAX_SCORE_INFO_BYTES`]
 fn decompress_lzma_capped(compressed: &[u8]) -> Result<Vec<u8>> {
-    // lzma-alone header: u8 props, u32 dict size, u64 declared uncompressed
-    // size (all-ones = "unknown, use end-of-payload marker instead"). lazer's own
-    // encoder (LegacyScoreEncoder.compress) never writes that marker -- it always
-    // writes the real content length -- but lazer's decode path tolerates it:
-    // SharpCompress.Compressors.LZMA.LzmaStream treats a negative outputSize as
-    // "unbounded, detect the end via the range decoder's marker instead" rather
-    // than rejecting it. third-party encoders (including lzma-rs's own default
-    // lzma_compress) can legitimately produce this shape, so skip the declared-size
-    // precheck for it rather than rejecting outright -- the memlimit passed to
-    // lzma_decompress_with_options below is what actually bounds this path, since
-    // it is checked on every byte lzma-rs's internal buffer grows by, independent
-    // of dict_size or when that buffer flushes to `writer`
-    if compressed.len() >= 13 {
-        let declared = u64::from_le_bytes(compressed[5..13].try_into().unwrap());
-        if declared != u64::MAX && declared > limits::MAX_LZMA_DECOMPRESSED_BYTES {
-            return Err(resource_limit(
-                "MAX_LZMA_DECOMPRESSED_BYTES",
-                limits::MAX_LZMA_DECOMPRESSED_BYTES,
-                declared,
-            ));
-        }
-    }
-    let mut writer = CappedWriter {
-        buf: Vec::new(),
-        cap: limits::MAX_LZMA_DECOMPRESSED_BYTES as usize,
-    };
-    let mut reader = compressed;
-    // this is what actually bounds the sentinel/oversized-dict_size path noted
-    // above; the declared-size precheck and CappedWriter remain as defence in depth
-    let options = lzma_rs::decompress::Options {
-        memlimit: Some(limits::MAX_LZMA_DECOMPRESSED_BYTES as usize),
-        ..Default::default()
-    };
-    lzma_rs::lzma_decompress_with_options(&mut reader, &mut writer, &options).map_err(|e| match e {
-        lzma_rs::error::Error::IoError(io) if io.to_string().contains("cap exceeded") => resource_limit(
-            "MAX_LZMA_DECOMPRESSED_BYTES",
-            limits::MAX_LZMA_DECOMPRESSED_BYTES,
-            limits::MAX_LZMA_DECOMPRESSED_BYTES + 1,
-        ),
-        lzma_rs::error::Error::LzmaError(msg) if msg.contains("exceeded memory limit") => resource_limit(
-            "MAX_LZMA_DECOMPRESSED_BYTES",
-            limits::MAX_LZMA_DECOMPRESSED_BYTES,
-            limits::MAX_LZMA_DECOMPRESSED_BYTES + 1,
-        ),
-        other => EngineError::ReplayParse(format!("lzma decompress failed: {other:?}")),
-    })?;
-    Ok(writer.buf)
+    decompress_lzma_alone(
+        compressed,
+        limits::MAX_LZMA_DECOMPRESSED_BYTES,
+        "MAX_LZMA_DECOMPRESSED_BYTES",
+    )
 }
 
 /// legacyscoredecoder.cs:302-306 — a frame's delta token is parsed as an
@@ -505,7 +574,7 @@ fn parse_actions(payload: &[u8]) -> Result<Vec<ReplayAction>> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PayloadSource {
     /// pass [`OsrFile::compressed_payload`] through byte for byte, exactly as it
-    /// was read. paired with [`EncodeOptions::include_trailer`] this is the
+    /// was read. paired with [`TrailerSource::Verbatim`] this is the
     /// "pristine" export: re-encoding a freshly decoded file reproduces the
     /// original file's bytes exactly for any canonically-written file; the two
     /// deliberate divergences documented below are the ones specific to this
@@ -551,19 +620,32 @@ pub enum PayloadSource {
     Reserialize,
 }
 
+/// what an export writes after the online score id
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrailerSource {
+    /// the decoded trailer exactly as it was read: the block's own bytes
+    /// and whatever followed them. the passthrough and carried exports
+    Verbatim,
+    /// drop the trailer: a stable-versioned file writes nothing past the id,
+    /// and a lazer-versioned one writes the framed EMPTY array, because
+    /// lazer reads the array unconditionally at those versions
+    /// (legacyscoredecoder.cs:115-118) and a file that simply stopped would
+    /// fail to load there. the regenerating export under the stable profile
+    Strip,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EncodeOptions {
     pub payload: PayloadSource,
-    pub include_trailer: bool,
+    pub trailer: TrailerSource,
 }
 
 /// writes an `.osr` back out, using the same framing [`decode_osr`] reads.
 ///
-/// with [`PayloadSource::VerbatimCompressed`] and
-/// [`EncodeOptions::include_trailer`] set, encoding a file that came straight
-/// out of [`decode_osr`] reproduces the original bytes exactly **for any file
-/// written in canonical form** -- which is every file osu!(stable) or lazer has
-/// ever produced.
+/// with [`PayloadSource::VerbatimCompressed`] and [`TrailerSource::Verbatim`],
+/// encoding a file that came straight out of [`decode_osr`] reproduces the
+/// original bytes exactly **for any file written in canonical form** -- which
+/// is every file osu!(stable) or lazer has ever produced.
 ///
 /// the guarantee is shaped that way because [`decode_osr`] is deliberately more
 /// permissive than either encoder: where the format admits two spellings of the
@@ -580,6 +662,8 @@ pub struct EncodeOptions {
 ///   so a file storing e.g. `2` there re-encodes as `1`
 /// - a non-minimal uleb128 string length, e.g. `81 00` for 1, decodes to the
 ///   value it denotes and re-encodes minimally as `01`
+/// - a *negative* score-info array length -- the same null sentinel -- reads
+///   as the empty block and re-encodes as `0`
 ///
 /// none of these is reachable from an encoder-produced file; all are reachable
 /// from a hand-crafted or corrupted one. they are limitations of the round-trip,
@@ -641,21 +725,43 @@ pub fn encode_osr(file: &OsrFile, opts: &EncodeOptions) -> Result<Vec<u8>> {
         })?;
         out.extend(id.to_le_bytes());
     }
-    if opts.include_trailer {
-        out.extend(&file.trailer);
-    } else if file.header.version >= FIRST_LAZER_SCORE_INFO_VERSION {
-        // legacyscoredecoder.cs:115-118 reads the score-info array
-        // *unconditionally* for these versions -- the version gate decides
-        // whether to read it, not whether it has to be there. so a dirty export
-        // that simply stops after the online score id leaves lazer's
-        // `ReadByteArray` calling `ReadInt32` at EOF, and the replay fails to
-        // load. discarding the payload therefore means writing an EMPTY framed
-        // array rather than nothing at all: `ReadByteArray` sees length 0 and
-        // returns `Array.Empty`, the `compressedScoreInfo?.Length > 0` guard at
-        // line 123 skips the deserialize, and the file opens
-        out.extend(0i32.to_le_bytes());
-    }
+    write_trailer(&mut out, file, opts.trailer)?;
     Ok(out)
+}
+
+/// the one invariant every path keeps: a file this encoder writes at a
+/// score-info version always carries the framed array, because lazer reads
+/// it unconditionally there and would otherwise call `ReadInt32` at EOF. so
+/// a hand-built [`OsrFile`] whose block state disagrees with its version --
+/// an opaque or absent block under a lazer version -- still gets the empty
+/// framing on the verbatim path, and a decoded file (whose state always
+/// agrees with its version) writes exactly what it read
+fn write_trailer(out: &mut Vec<u8>, file: &OsrFile, source: TrailerSource) -> Result<()> {
+    let frames_block = file.header.version >= FIRST_LAZER_SCORE_INFO_VERSION;
+    match source {
+        TrailerSource::Strip => {
+            if frames_block {
+                out.extend(0i32.to_le_bytes());
+            }
+        }
+        TrailerSource::Verbatim => {
+            if frames_block {
+                match &file.trailer.block {
+                    ScoreInfoBlock::Opaque | ScoreInfoBlock::Absent | ScoreInfoBlock::Empty => {
+                        out.extend(0i32.to_le_bytes());
+                    }
+                    ScoreInfoBlock::Present { raw, .. } | ScoreInfoBlock::Malformed { raw, .. } => {
+                        let len = i32::try_from(raw.len())
+                            .map_err(|_| EngineError::ReplayEncode("score-info block exceeds i32 length".into()))?;
+                        out.extend(len.to_le_bytes());
+                        out.extend(raw);
+                    }
+                }
+            }
+            out.extend(&file.trailer.trailing);
+        }
+    }
+    Ok(())
 }
 
 fn write_osu_string(out: &mut Vec<u8>, s: Option<&str>) {
@@ -1034,7 +1140,7 @@ mod tests {
         assert_eq!(file.header.life_graph, None);
         assert_eq!(file.header.timestamp_ticks, 638_712_000_000_000_000);
         assert_eq!(file.decompressed_payload, PAYLOAD.as_bytes());
-        assert!(file.trailer.is_empty());
+        assert_eq!(file.trailer, OsrTrailer::none());
 
         assert_eq!(file.actions.len(), 4);
         assert_eq!(
@@ -1061,11 +1167,139 @@ mod tests {
         assert_eq!(file.actions[3].z, SEED);
     }
 
+    /// the framed array for a block payload, as lazer's `WriteByteArray`
+    /// frames it
+    fn framed(block: &[u8]) -> Vec<u8> {
+        let mut out = (block.len() as i32).to_le_bytes().to_vec();
+        out.extend(block);
+        out
+    }
+
+    /// a readable block, compressed as lazer compresses one
+    fn present_block() -> Vec<u8> {
+        crate::formats::lzma::compress_lzma_alone(
+            b"{\"rank\": \"S\", \"statistics\": {\"great\": 3, \"large_tick_hit\": 2, \"slider_tail_hit\": 1}, \"maximum_statistics\": {\"great\": 3}, \"mods\": [{\"acronym\": \"HD\"}], \"client_version\": \"2026.401.0-lazer\"}",
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn captures_lazer_trailer_verbatim() {
-        let trailer = [0x07u8, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03];
-        let file = decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &trailer)).unwrap();
-        assert_eq!(file.trailer, trailer);
+    fn a_framed_block_this_crate_cannot_read_is_malformed_with_header_and_frames_intact() {
+        // seven bytes of not-lzma under a correct length prefix: the file
+        // decodes, the frames decode, and the block reports why it did not
+        let payload = [0xdeu8, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03];
+        let file = decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &framed(&payload))).unwrap();
+        assert_eq!(file.actions.len(), 4);
+        assert_eq!(file.header.count_300, 285);
+        match &file.trailer.block {
+            ScoreInfoBlock::Malformed { raw, reason } => {
+                assert_eq!(raw, &payload);
+                assert!(reason.contains("not lzma"), "{reason}");
+            }
+            other => panic!("expected a malformed block, got {other:?}"),
+        }
+        assert!(file.trailer.trailing.is_empty());
+    }
+
+    #[test]
+    fn the_five_trailer_states_are_told_apart_by_version_and_framing() {
+        // the last pre-lazer version keeps its bytes opaque, stable's own
+        let stable = decode_osr(&build_osr(20250101, PAYLOAD.as_bytes(), &[0xde, 0xad])).unwrap();
+        assert_eq!(stable.trailer, OsrTrailer::opaque(vec![0xde, 0xad]));
+
+        // lazer's first version frames nothing: absent, and any bytes past the
+        // id are unknown trailing bytes
+        let first = decode_osr(&build_osr(FIRST_LAZER_VERSION, PAYLOAD.as_bytes(), &[])).unwrap();
+        assert_eq!(first.trailer.block, ScoreInfoBlock::Absent);
+        assert!(first.trailer.trailing.is_empty());
+        let first_trailing = decode_osr(&build_osr(FIRST_LAZER_VERSION, PAYLOAD.as_bytes(), &[7, 7])).unwrap();
+        assert_eq!(first_trailing.trailer.block, ScoreInfoBlock::Absent);
+        assert_eq!(first_trailing.trailer.trailing, vec![7, 7]);
+
+        // the first block version with a zero-length array: empty
+        let empty = decode_osr(&build_osr(FIRST_LAZER_SCORE_INFO_VERSION, PAYLOAD.as_bytes(), &framed(&[]))).unwrap();
+        assert_eq!(empty.trailer, OsrTrailer::empty_block());
+
+        // a readable block: present, with lazer's native result names read
+        let block = present_block();
+        let present = decode_osr(&build_osr(30000016, PAYLOAD.as_bytes(), &framed(&block))).unwrap();
+        let info = present.trailer.score_info().expect("a present block");
+        assert_eq!(info.mods[0].acronym, "HD");
+        assert_eq!(
+            info.statistics
+                .iter()
+                .find(|e| e.result == "slider_tail_hit")
+                .map(|e| e.count),
+            Some(1)
+        );
+        assert_eq!(info.maximum_statistics[0].count, 3);
+        assert_eq!(info.rank, Some(crate::formats::score_info::ScoreRank::S));
+        match &present.trailer.block {
+            ScoreInfoBlock::Present { raw, .. } => assert_eq!(raw, &block),
+            other => panic!("expected present, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_bytes_past_the_array_survive_passthrough() {
+        let mut tail = framed(&present_block());
+        tail.extend([0xca, 0xfe, 0xba, 0xbe]);
+        let original = build_osr(30000016, PAYLOAD.as_bytes(), &tail);
+        let file = decode_osr(&original).unwrap();
+        assert!(matches!(file.trailer.block, ScoreInfoBlock::Present { .. }));
+        assert_eq!(file.trailer.trailing, vec![0xca, 0xfe, 0xba, 0xbe]);
+        assert_eq!(encode_osr(&file, &full_opts()).unwrap(), original);
+    }
+
+    #[test]
+    fn a_null_score_info_array_reads_as_empty_and_re_encodes_as_zero() {
+        // serializationreader.cs:37-43's null sentinel, tolerated on read
+        // like the payload's; the documented divergence is the re-encode
+        let original = build_osr(30000001, PAYLOAD.as_bytes(), &(-1i32).to_le_bytes());
+        let file = decode_osr(&original).unwrap();
+        assert_eq!(file.trailer, OsrTrailer::empty_block());
+        let encoded = encode_osr(&file, &full_opts()).unwrap();
+        assert_ne!(encoded, original);
+        assert_eq!(decode_osr(&encoded).unwrap().trailer, OsrTrailer::empty_block());
+    }
+
+    #[test]
+    fn a_lazer_file_that_stops_after_the_online_id_is_truncated() {
+        // legacyscoredecoder.cs:117 reads the array unconditionally here, so
+        // lazer's own ReadInt32 would throw at EOF: this reader refuses it
+        // the same way rather than inventing an array it never saw
+        match decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &[])) {
+            Err(EngineError::ReplayParse(msg)) => assert!(msg.contains("score_info_length"), "{msg}"),
+            other => panic!("expected ReplayParse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_block_over_a_cap_is_a_typed_error_for_the_whole_decode() {
+        // the collection caps are the block's own (formats::score_info); this
+        // pins that the framing reader propagates one rather than folding it
+        // into a malformed answer
+        let bomb = crate::formats::lzma::compress_lzma_alone(
+            format!("{{\"pauses\": [{}]}}", vec!["1"; limits::MAX_SCORE_INFO_PAUSES + 1].join(",")).as_bytes(),
+        )
+        .unwrap();
+        match decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &framed(&bomb))) {
+            Err(EngineError::ResourceLimit {
+                cap: "MAX_SCORE_INFO_PAUSES",
+                ..
+            }) => {}
+            other => panic!("expected ResourceLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_hand_built_lazer_file_with_no_block_state_still_gets_the_framing() {
+        // the encoder's one invariant: a score-info version always writes the
+        // array, whatever a hand-built file's block state says
+        let mut file = decode_osr(&build_osr(20240101, PAYLOAD.as_bytes(), &[])).unwrap();
+        file.header.version = 30000001;
+        let bytes = encode_osr(&file, &full_opts()).unwrap();
+        assert_eq!(decode_osr(&bytes).unwrap().trailer, OsrTrailer::empty_block());
     }
 
     #[test]
@@ -1282,20 +1516,33 @@ mod tests {
     fn full_opts() -> EncodeOptions {
         EncodeOptions {
             payload: PayloadSource::VerbatimCompressed,
-            include_trailer: true,
+            trailer: TrailerSource::Verbatim,
         }
     }
 
     #[test]
     fn pristine_roundtrip_is_byte_identical() {
         // whole-file byte equality holds for a pristine decode -> encode with
-        // verbatim payload + trailer; this subsumes the trailer-survival test
-        let trailer = [0x11u8, 0x22, 0x33, 0x44, 0x55];
-        for version in [20240101u32, 30000001] {
+        // verbatim payload + trailer, in every trailer state: stable's opaque
+        // bytes, lazer's first version with nothing framed, an empty array, a
+        // malformed block with bytes past it, and a readable block
+        let cases: Vec<(u32, Vec<u8>)> = vec![
+            (20240101, vec![0x11, 0x22, 0x33, 0x44, 0x55]),
+            (FIRST_LAZER_VERSION, Vec::new()),
+            (FIRST_LAZER_VERSION, vec![0x11, 0x22]),
+            (30000001, framed(&[])),
+            (30000001, {
+                let mut t = framed(&[0x11, 0x22]);
+                t.extend([0x33, 0x44, 0x55]);
+                t
+            }),
+            (30000016, framed(&present_block())),
+        ];
+        for (version, trailer) in cases {
             let original = build_osr(version, PAYLOAD.as_bytes(), &trailer);
             let decoded = decode_osr(&original).unwrap();
             let encoded = encode_osr(&decoded, &full_opts()).unwrap();
-            assert_eq!(encoded, original, "version {version}");
+            assert_eq!(encoded, original, "version {version} trailer {trailer:?}");
         }
     }
 
@@ -1516,11 +1763,11 @@ mod tests {
             actions: Vec::new(),
             compressed_payload: Vec::new(),
             decompressed_payload: Vec::new(),
-            trailer: Vec::new(),
+            trailer: OsrTrailer::none(),
         };
         let opts = EncodeOptions {
             payload: PayloadSource::Reserialize,
-            include_trailer: false,
+            trailer: TrailerSource::Strip,
         };
         match encode_osr(&file, &opts) {
             Err(EngineError::ReplayEncode(msg)) => assert!(msg.contains("32-bit")),
@@ -1573,7 +1820,7 @@ mod tests {
         let file = decode_osr(&build_osr(20240101, PAYLOAD.as_bytes(), &[])).unwrap();
         let opts = EncodeOptions {
             payload: PayloadSource::Reserialize,
-            include_trailer: false,
+            trailer: TrailerSource::Strip,
         };
         let redecoded = decode_osr(&encode_osr(&file, &opts).unwrap()).unwrap();
         assert_eq!(redecoded.header, file.header);
@@ -1587,17 +1834,20 @@ mod tests {
         // unconditionally at this version, so the array has to still BE there --
         // as an empty one. ending the file after the online score id instead
         // would leave lazer's ReadInt32 at EOF and the replay would not load
-        let trailer = [0x02u8, 0x00, 0x00, 0x00, 0xde, 0xad];
+        let mut trailer = framed(&present_block());
+        trailer.extend([0xde, 0xad]);
         let file = decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &trailer)).unwrap();
         let opts = EncodeOptions {
             payload: PayloadSource::Reserialize,
-            include_trailer: false,
+            trailer: TrailerSource::Strip,
         };
         let bytes = encode_osr(&file, &opts).unwrap();
 
         let redecoded = decode_osr(&bytes).unwrap();
-        // the payload is gone, but the length prefix that frames it remains
-        assert_eq!(redecoded.trailer, 0i32.to_le_bytes());
+        // the payload is gone -- the unknown bytes past it too -- but the
+        // length prefix that frames it remains
+        assert_eq!(redecoded.trailer, OsrTrailer::empty_block());
+        assert!(bytes.ends_with(&0i32.to_le_bytes()));
     }
 
     #[test]
@@ -1607,16 +1857,16 @@ mod tests {
         let file = decode_osr(&build_osr(20240101, PAYLOAD.as_bytes(), &[0xde, 0xad])).unwrap();
         let opts = EncodeOptions {
             payload: PayloadSource::Reserialize,
-            include_trailer: false,
+            trailer: TrailerSource::Strip,
         };
         let bytes = encode_osr(&file, &opts).unwrap();
-        assert!(decode_osr(&bytes).unwrap().trailer.is_empty());
+        assert_eq!(decode_osr(&bytes).unwrap().trailer, OsrTrailer::none());
     }
 
     #[test]
     fn a_pristine_export_still_reproduces_the_original_score_info_payload() {
-        // the empty-framing substitution must apply ONLY to the dirty path
-        let trailer = [0x02u8, 0x00, 0x00, 0x00, 0xde, 0xad];
+        // the empty-framing substitution must apply ONLY to the strip path
+        let trailer = framed(&[0xde, 0xad]);
         let original = build_osr(30000001, PAYLOAD.as_bytes(), &trailer);
         let file = decode_osr(&original).unwrap();
         assert_eq!(encode_osr(&file, &full_opts()).unwrap(), original);
@@ -1747,7 +1997,7 @@ mod tests {
         };
         let opts = EncodeOptions {
             payload: PayloadSource::Reserialize,
-            include_trailer: false,
+            trailer: TrailerSource::Strip,
         };
 
         let file_at_limit = OsrFile {
@@ -1755,7 +2005,7 @@ mod tests {
             actions: vec![action.clone(); frames_at_limit],
             compressed_payload: Vec::new(),
             decompressed_payload: Vec::new(),
-            trailer: Vec::new(),
+            trailer: OsrTrailer::none(),
         };
         assert_eq!(
             serialize_actions(&file_at_limit.actions).len() as u64,
