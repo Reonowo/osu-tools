@@ -65,6 +65,12 @@ pub struct ProcessedObject {
     /// enforcement (spinners exempt, first-after-spinner forced) for
     /// rendering parity
     pub stable_new_combo: bool,
+    /// the file's own new-combo flag, untouched: lazer's health processor
+    /// resets its combo-end tally on this flag as written
+    /// (osuhealthprocessor.cs:31), not on the combo start the index
+    /// enforcement derives -- an object after a spinner starts a combo
+    /// without resetting that tally unless the mapper flagged it
+    pub new_combo: bool,
     pub kind: ProcessedKind,
 }
 
@@ -249,6 +255,7 @@ pub fn process_beatmap(map: &Beatmap) -> Result<ProcessedBeatmap> {
             index_in_current_combo: 0,
             last_in_combo: false,
             stable_new_combo: false,
+            new_combo: obj.new_combo,
             kind,
         });
     }
