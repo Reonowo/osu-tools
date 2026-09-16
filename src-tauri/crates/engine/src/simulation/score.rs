@@ -15,14 +15,27 @@
 
 use crate::beatmap::difficulty::HitGrade;
 
+/// one judgement on the timeline. the slider kinds carry the IDENTITY of
+/// the element they judged -- the head its timing grade, every nested
+/// element its index in the slider's lazer nested list -- so a consumer
+/// joins by identity and never by the nearest time, which the two
+/// generators (stable's score points, lazer's nested objects) can disagree
+/// on by more than a tick spacing. `nested_index` is `None` only for a
+/// stable score point with no lazer counterpart (the recorded tick-count
+/// divergence); the native profile always has one
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JudgementKind {
     Circle(HitGrade),
+    /// the head's timing grade. the stable profile emits great or miss --
+    /// stable scores the head as a hit or not, and the timing grade it
+    /// computed is folded into the aggregate -- while the native profile
+    /// emits the grade lazer gave, like a circle
     SliderHead {
-        hit: bool,
+        grade: HitGrade,
     },
     SliderTick {
         hit: bool,
+        nested_index: Option<u32>,
     },
     /// `repeat_index` is 0-based and identifies WHICH repeat this is, which
     /// is what picks the node samples the repeat sounds with (lazer's
@@ -33,10 +46,24 @@ pub enum JudgementKind {
     SliderRepeat {
         hit: bool,
         repeat_index: u32,
+        nested_index: Option<u32>,
     },
     SliderTail {
         hit: bool,
+        nested_index: Option<u32>,
     },
+    /// the slider's own lifecycle end, in both profiles: `complete` when any
+    /// nested element was hit (drawableslider.cs:317-320 arms the slider
+    /// `Hit` on that condition, and it is what gates the end sound). no
+    /// grade, no count, no combo: the anchor the renderer and the hitsound
+    /// plan hang on without depending on the stable-only aggregate. under
+    /// the stable profile it follows the aggregate at the aggregate's time,
+    /// complete exactly when the aggregate is not a miss
+    SliderEnd {
+        complete: bool,
+    },
+    /// stable's whole-slider result, folded from the scored rate; the stable
+    /// profile only, since lazer computes no such aggregate
     SliderAggregate(HitGrade),
     SpinnerSpin,
     SpinnerBonus,
@@ -74,21 +101,27 @@ impl ScoreState {
                     self.combo = 0;
                 }
             }
-            JudgementKind::SliderHead { hit }
-            | JudgementKind::SliderTick { hit }
-            | JudgementKind::SliderRepeat { hit, .. } => {
+            JudgementKind::SliderHead { grade } => {
+                if *grade != HitGrade::Miss {
+                    self.increment_combo();
+                } else {
+                    self.combo = 0;
+                }
+            }
+            JudgementKind::SliderTick { hit, .. } | JudgementKind::SliderRepeat { hit, .. } => {
                 if *hit {
                     self.increment_combo();
                 } else {
                     self.combo = 0;
                 }
             }
-            JudgementKind::SliderTail { hit } => {
+            JudgementKind::SliderTail { hit, .. } => {
                 if *hit {
                     self.increment_combo();
                 }
             }
-            JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => {}
+            // a lifecycle marker: counts nothing and moves nothing
+            JudgementKind::SliderEnd { .. } | JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => {}
         }
     }
 
@@ -149,21 +182,43 @@ mod tests {
         // hitresult.cs:183-203). tail: +1 on hit -- the deliberate stable
         // deviation (osulegacyscoresimulator.cs:92-96) -- and no break on miss
         let s = state_after(&[
-            JudgementKind::SliderHead { hit: true },
-            JudgementKind::SliderTick { hit: true },
-            JudgementKind::SliderRepeat { hit: true, repeat_index: 0 },
-            JudgementKind::SliderTail { hit: true },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            },
+            JudgementKind::SliderTick {
+                hit: true,
+                nested_index: Some(1),
+            },
+            JudgementKind::SliderRepeat {
+                hit: true,
+                repeat_index: 0,
+                nested_index: Some(2),
+            },
+            JudgementKind::SliderTail {
+                hit: true,
+                nested_index: Some(3),
+            },
             JudgementKind::SliderAggregate(HitGrade::Great),
+            JudgementKind::SliderEnd { complete: true },
         ]);
         assert_eq!(s.combo, 4);
         assert_eq!(s.count_300, 1); // only the aggregate counts
         assert_eq!(s.count_miss, 0);
 
         let s = state_after(&[
-            JudgementKind::SliderHead { hit: true },
-            JudgementKind::SliderTick { hit: false }, // breaks
-            JudgementKind::SliderTail { hit: false }, // does not break
+            JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            },
+            JudgementKind::SliderTick {
+                hit: false,
+                nested_index: None,
+            }, // breaks
+            JudgementKind::SliderTail {
+                hit: false,
+                nested_index: None,
+            }, // does not break
             JudgementKind::SliderAggregate(HitGrade::Meh),
+            JudgementKind::SliderEnd { complete: true },
         ]);
         assert_eq!(s.combo, 0);
         assert_eq!(s.max_combo, 1);
@@ -175,14 +230,18 @@ mod tests {
         // danser slider.go:458-465 -- the aggregate holds combo on any hit
         // grade and resets on a whole-slider miss
         let s = state_after(&[
-            JudgementKind::SliderHead { hit: true },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            },
             JudgementKind::SliderAggregate(HitGrade::Ok),
         ]);
         assert_eq!(s.combo, 1);
         assert_eq!(s.count_100, 1);
 
         let s = state_after(&[
-            JudgementKind::SliderHead { hit: true },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            },
             JudgementKind::SliderAggregate(HitGrade::Miss),
         ]);
         assert_eq!(s.combo, 0);
@@ -219,7 +278,10 @@ mod tests {
         assert_eq!(s.accuracy(), 1.0);
         s.apply(&JudgementKind::Circle(HitGrade::Ok));
         assert_eq!(s.accuracy(), 400.0 / 600.0);
-        s.apply(&JudgementKind::SliderTick { hit: true }); // ticks are not basic
+        s.apply(&JudgementKind::SliderTick {
+            hit: true,
+            nested_index: None,
+        }); // ticks are not basic
         assert_eq!(s.accuracy(), 400.0 / 600.0);
         s.apply(&JudgementKind::Circle(HitGrade::Miss));
         assert_eq!(s.accuracy(), 400.0 / 900.0);
@@ -236,7 +298,10 @@ mod tests {
             count_50: u32::MAX,
             count_miss: u32::MAX,
         };
-        s.apply(&JudgementKind::SliderTick { hit: true });
+        s.apply(&JudgementKind::SliderTick {
+            hit: true,
+            nested_index: None,
+        });
         assert_eq!(s.combo, u32::MAX);
         assert_eq!(s.max_combo, u32::MAX);
         s.apply(&JudgementKind::Circle(HitGrade::Great));

@@ -16,7 +16,7 @@
 
 use crate::beatmap::difficulty::HitGrade;
 use crate::beatmap::stable_points::StablePointKind;
-use crate::beatmap::{ProcessedKind, ProcessedObject, ProcessedSlider};
+use crate::beatmap::{NestedKind, ProcessedKind, ProcessedObject, ProcessedSlider};
 use crate::math::Vec2;
 use crate::simulation::buttons::ActionMask;
 use crate::simulation::presses::{can_be_hit_stable, ClickAction};
@@ -53,6 +53,39 @@ fn dst_sq_87(a: Vec2, b: Vec2) -> f32 {
 pub(crate) struct TickPoint {
     pub time: f64,
     pub kind: StablePointKind,
+    /// the lazer nested object this point judges, by index into the
+    /// slider's nested list, so the judgement carries the element's
+    /// identity. `None` for a stable tick with no lazer counterpart -- the
+    /// two generators can disagree on tick existence (issue 13) -- which is
+    /// the one case a consumer has no identity to join on
+    pub nested_index: Option<u32>,
+}
+
+/// the lazer nested object a stable score point stands for: the same span
+/// and, for a tick, the same ordinal within it; the repeat that ends the
+/// same span; the one tail. resolved once per slider at construction
+fn nested_index_for(slider: &ProcessedSlider, kind: StablePointKind, span_index: u32, ordinal: u32) -> Option<u32> {
+    let mut seen_in_span = 0u32;
+    for (index, nested) in slider.nested.iter().enumerate() {
+        let matches = match (kind, nested.kind) {
+            (StablePointKind::Tick, NestedKind::Tick) => {
+                if nested.span_index == span_index as i32 {
+                    let hit = seen_in_span == ordinal;
+                    seen_in_span += 1;
+                    hit
+                } else {
+                    false
+                }
+            }
+            (StablePointKind::Repeat { repeat_index }, NestedKind::Repeat) => nested.span_index == repeat_index as i32,
+            (StablePointKind::Tail, NestedKind::Tail) => true,
+            _ => false,
+        };
+        if matches {
+            return u32::try_from(index).ok();
+        }
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -96,11 +129,13 @@ impl SliderState {
                     repeat @ StablePointKind::Repeat { .. } => repeat,
                     _ => StablePointKind::Tick,
                 },
+                nested_index: nested_index_for(slider, p.kind, p.span_index, p.ordinal),
             })
             .collect();
         // slider.go:108-111 -- the final (time-sorted) point becomes the
         // slider end: repositioned to 36ms before stable's end (never
-        // before the midpoint) in truncated integer milliseconds
+        // before the midpoint) in truncated integer milliseconds. its
+        // identity follows the re-kind: it stands for the lazer tail
         if let Some(last) = points.last_mut() {
             let start = obj_start_time as i64;
             let end = slider.stable_end_time as i64;
@@ -111,6 +146,7 @@ impl SliderState {
             let duration = end.wrapping_sub(start);
             last.time = start.wrapping_add(duration / 2).max(end.wrapping_sub(36)) as f64;
             last.kind = StablePointKind::Tail;
+            last.nested_index = nested_index_for(slider, StablePointKind::Tail, 0, 0);
         }
         SliderState {
             points,
@@ -201,7 +237,17 @@ pub(crate) fn try_click_head(ctx: &mut Ctx<'_>, index: usize, time: f64, cursor_
                 state.down_button = down_button;
                 state.start_result_hit = hit;
                 state.is_start_hit = true;
-                ctx.emit(time, index, JudgementKind::SliderHead { hit });
+                // stable folds the head's timing grade into the aggregate and
+                // scores the head as hit or not, so the event carries that
+                // binary as great or miss rather than the grade the window
+                // named (the native profile is where a head is a 100)
+                ctx.emit(
+                    time,
+                    index,
+                    JudgementKind::SliderHead {
+                        grade: if hit { HitGrade::Great } else { HitGrade::Miss },
+                    },
+                );
             }
             ClickAction::Shake | ClickAction::Ignored => ctx.buttons.consume_both_edges(),
         }
@@ -316,12 +362,17 @@ fn process_ticks_stable(ctx: &mut Ctx<'_>, index: usize, time: f64, allowable: b
         } else {
             state.missed += 1;
         }
+        let nested_index = point.nested_index;
         let kind = match point.kind {
-            StablePointKind::Tick => JudgementKind::SliderTick { hit },
-            StablePointKind::Repeat { repeat_index } => JudgementKind::SliderRepeat { hit, repeat_index },
+            StablePointKind::Tick => JudgementKind::SliderTick { hit, nested_index },
+            StablePointKind::Repeat { repeat_index } => JudgementKind::SliderRepeat {
+                hit,
+                repeat_index,
+                nested_index,
+            },
             // the tail's combo semantics (+1 on hit, no break on miss --
             // danser's end-point Hold) live in ScoreState::apply
-            StablePointKind::Tail => JudgementKind::SliderTail { hit },
+            StablePointKind::Tail => JudgementKind::SliderTail { hit, nested_index },
         };
         trace::note_point(
             index,
@@ -367,6 +418,15 @@ pub(crate) fn update_post_for(ctx: &mut Ctx<'_>, index: usize, time: f64, hit50:
         };
         state.is_hit = true;
         ctx.emit(time, index, JudgementKind::SliderAggregate(grade));
+        // the lifecycle end beside the aggregate: complete exactly when the
+        // aggregate is not a miss, i.e. when something was scored
+        ctx.emit(
+            time,
+            index,
+            JudgementKind::SliderEnd {
+                complete: grade != HitGrade::Miss,
+            },
+        );
     }
 }
 
@@ -384,7 +444,13 @@ fn process_head_miss(ctx: &mut Ctx<'_>, index: usize, time: f64, hit50: f64) {
         state.down_button = latch;
         state.is_start_hit = true;
         state.start_result_hit = false;
-        ctx.emit(time, index, JudgementKind::SliderHead { hit: false });
+        ctx.emit(
+            time,
+            index,
+            JudgementKind::SliderHead {
+                grade: HitGrade::Miss,
+            },
+        );
     }
 }
 
@@ -395,7 +461,7 @@ mod tests {
     use crate::math::Vec2;
     use crate::replay::frames::Buttons;
     use crate::simulation::score::JudgementKind;
-    use crate::simulation::simulate;
+    use crate::simulation::simulate_stable;
     use crate::simulation::test_support::{
         base_map, beatmap_tick_time, frame, linear_slider, slider_map, wrap,
     };
@@ -447,12 +513,12 @@ mod tests {
             frame(1000.0, 100.0, 100.0, Buttons::LEFT_1),
             frame(1050.0, 100.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         assert!(
             timeline
                 .events
                 .iter()
-                .any(|e| e.kind == JudgementKind::SliderTail { hit: true }),
+                .any(|e| matches!(e.kind, JudgementKind::SliderTail { hit: true, .. })),
             "the tail scores off the pinned ball"
         );
     }
@@ -469,24 +535,34 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
             vec![
-                JudgementKind::SliderHead { hit: true },
-                JudgementKind::SliderTick { hit: true },
-                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderHead {
+                    grade: HitGrade::Great
+                },
+                JudgementKind::SliderTick {
+                    hit: true,
+                    nested_index: Some(1)
+                },
+                JudgementKind::SliderTail {
+                    hit: true,
+                    nested_index: Some(2)
+                },
                 JudgementKind::SliderAggregate(HitGrade::Great),
+                JudgementKind::SliderEnd { complete: true },
             ]
         );
         // stable combo: head, tick and tail each +1; aggregate holds
         assert_eq!(timeline.totals.max_combo, 3);
         assert_eq!(timeline.totals.count_300, 1);
         // the tail point (1321) resolves on the end-time frame, and the
-        // aggregate on that same update
+        // aggregate on that same update, with the lifecycle end beside it
         assert_eq!(timeline.events[2].time, end_t);
         assert_eq!(timeline.events[3].time, end_t);
+        assert_eq!(timeline.events[4].time, end_t);
     }
 
     #[test]
@@ -508,15 +584,24 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
             vec![
-                JudgementKind::SliderHead { hit: true },
-                JudgementKind::SliderTick { hit: false }, // judged at 1300, slide_start 1300 > 1250
-                JudgementKind::SliderTail { hit: true },  // slide_start 1300 <= 1321
+                JudgementKind::SliderHead {
+                    grade: HitGrade::Great
+                },
+                JudgementKind::SliderTick {
+                    hit: false,
+                    nested_index: Some(1)
+                }, // judged at 1300, slide_start 1300 > 1250
+                JudgementKind::SliderTail {
+                    hit: true,
+                    nested_index: Some(2)
+                }, // slide_start 1300 <= 1321
                 JudgementKind::SliderAggregate(HitGrade::Ok), // head + tail = 2/3
+                JudgementKind::SliderEnd { complete: true },
             ]
         );
         assert_eq!(timeline.events[1].time, head_t + 300.0);
@@ -540,15 +625,24 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::RIGHT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
             vec![
-                JudgementKind::SliderHead { hit: false },
-                JudgementKind::SliderTick { hit: true },
-                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderHead {
+                    grade: HitGrade::Miss
+                },
+                JudgementKind::SliderTick {
+                    hit: true,
+                    nested_index: Some(1)
+                },
+                JudgementKind::SliderTail {
+                    hit: true,
+                    nested_index: Some(2)
+                },
                 JudgementKind::SliderAggregate(HitGrade::Ok), // tick + tail = 2/3
+                JudgementKind::SliderEnd { complete: true },
             ]
         );
         assert_eq!(timeline.events[0].time, 1200.0); // first update past 1150
@@ -573,12 +667,18 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
-        assert_eq!(kinds[0], JudgementKind::SliderHead { hit: true });
-        assert_eq!(kinds[1], JudgementKind::SliderTick { hit: false });
-        assert_eq!(kinds[2], JudgementKind::SliderTail { hit: false });
+        assert_eq!(
+            kinds[0],
+            JudgementKind::SliderHead {
+                grade: HitGrade::Great
+            }
+        );
+        assert!(matches!(kinds[1], JudgementKind::SliderTick { hit: false, .. }));
+        assert!(matches!(kinds[2], JudgementKind::SliderTail { hit: false, .. }));
         assert_eq!(kinds[3], JudgementKind::SliderAggregate(HitGrade::Meh)); // head only, 1/3
+        assert_eq!(kinds[4], JudgementKind::SliderEnd { complete: true });
     }
 
     #[test]
@@ -599,15 +699,24 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::RIGHT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
             vec![
-                JudgementKind::SliderHead { hit: true },
-                JudgementKind::SliderTick { hit: true },
-                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderHead {
+                    grade: HitGrade::Great
+                },
+                JudgementKind::SliderTick {
+                    hit: true,
+                    nested_index: Some(1)
+                },
+                JudgementKind::SliderTail {
+                    hit: true,
+                    nested_index: Some(2)
+                },
                 JudgementKind::SliderAggregate(HitGrade::Great),
+                JudgementKind::SliderEnd { complete: true },
             ]
         );
     }
@@ -632,15 +741,24 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
             vec![
-                JudgementKind::SliderHead { hit: true },
-                JudgementKind::SliderTick { hit: true },
-                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderHead {
+                    grade: HitGrade::Great
+                },
+                JudgementKind::SliderTick {
+                    hit: true,
+                    nested_index: Some(1)
+                },
+                JudgementKind::SliderTail {
+                    hit: true,
+                    nested_index: Some(2)
+                },
                 JudgementKind::SliderAggregate(HitGrade::Great),
+                JudgementKind::SliderEnd { complete: true },
             ]
         );
         assert_eq!(timeline.totals.count_300, 1);
@@ -659,19 +777,28 @@ mod tests {
         // aggregate at the truncated end (1357). rate 0 -> miss
         let beatmap = slider_map(2.0, 0);
         let frames = vec![frame(-1000.0, 400.0, 400.0, 0), frame(500.0, 400.0, 400.0, 0)];
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let kinds: Vec<_> = timeline.events.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
             vec![
-                JudgementKind::SliderHead { hit: false },
-                JudgementKind::SliderTick { hit: false },
-                JudgementKind::SliderTail { hit: false },
+                JudgementKind::SliderHead {
+                    grade: HitGrade::Miss
+                },
+                JudgementKind::SliderTick {
+                    hit: false,
+                    nested_index: Some(1)
+                },
+                JudgementKind::SliderTail {
+                    hit: false,
+                    nested_index: Some(2)
+                },
                 JudgementKind::SliderAggregate(HitGrade::Miss),
+                JudgementKind::SliderEnd { complete: false },
             ]
         );
         let times: Vec<_> = timeline.events.iter().map(|e| e.time).collect();
-        assert_eq!(times, vec![1151.0, 1250.0, 1321.0, 1357.0]);
+        assert_eq!(times, vec![1151.0, 1250.0, 1321.0, 1357.0, 1357.0]);
         assert_eq!(timeline.totals.count_miss, 1);
         assert_eq!(timeline.totals.max_combo, 0);
     }

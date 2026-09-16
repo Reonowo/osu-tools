@@ -852,17 +852,20 @@ fn event_gain(
         | JudgementKind::SpinnerFinal(grade) => {
             Some((object_result_gain(grade, addition, hp, normal, combo_end), true))
         }
-        JudgementKind::SliderHead { hit }
-        | JudgementKind::SliderRepeat { hit, .. }
-        | JudgementKind::SliderTail { hit } => {
+        JudgementKind::SliderHead { grade } => {
+            let hit = grade != HitGrade::Miss;
             Some((if hit { normal * 4.0 } else { slider_part_miss(hp) }, false))
         }
-        JudgementKind::SliderTick { hit } => {
+        JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit, .. } => {
+            Some((if hit { normal * 4.0 } else { slider_part_miss(hp) }, false))
+        }
+        JudgementKind::SliderTick { hit, .. } => {
             Some((if hit { normal * 3.0 } else { slider_part_miss(hp) }, false))
         }
         // lazer's cursor-rotation presentation: stable's own disc pays
-        // instead, one gain per counted half turn
-        JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => None,
+        // instead, one gain per counted half turn. the slider's lifecycle
+        // end is a marker with no hp of its own
+        JudgementKind::SliderEnd { .. } | JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => None,
     }
 }
 
@@ -1654,6 +1657,7 @@ mod tests {
             events,
             totals: crate::simulation::HitTotals::default(),
             spinner_scoring: Vec::new(),
+            native: None,
         }
     }
 
@@ -1701,24 +1705,42 @@ mod tests {
 
         // slider parts
         let gain = |kind| event_gain(&kind, None, 5.0, n, c).unwrap();
-        assert_eq!(gain(JudgementKind::SliderTick { hit: true }).0, n * 3.0);
-        assert_eq!(gain(JudgementKind::SliderHead { hit: true }).0, n * 4.0);
-        assert_eq!(gain(JudgementKind::SliderTail { hit: true }).0, n * 4.0);
+        assert_eq!(gain(JudgementKind::SliderTick {
+                hit: true,
+                nested_index: None,
+            }).0, n * 3.0);
+        assert_eq!(gain(JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }).0, n * 4.0);
+        assert_eq!(gain(JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            }).0, n * 4.0);
         assert_eq!(
             gain(JudgementKind::SliderRepeat {
                 hit: true,
-                repeat_index: 0
+                repeat_index: 0,
+                nested_index: None
             })
             .0,
             n * 4.0
         );
         for missed in [
-            JudgementKind::SliderTick { hit: false },
-            JudgementKind::SliderHead { hit: false },
-            JudgementKind::SliderTail { hit: false },
+            JudgementKind::SliderTick {
+                hit: false,
+                nested_index: None,
+            },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Miss,
+            },
+            JudgementKind::SliderTail {
+                hit: false,
+                nested_index: None,
+            },
             JudgementKind::SliderRepeat {
                 hit: false,
                 repeat_index: 1,
+                nested_index: None,
             },
         ] {
             assert_eq!(gain(missed).0, slider_part_miss(5.0));
@@ -1736,12 +1758,21 @@ mod tests {
             assert_eq!(samples(object_level), Some(true));
         }
         for part in [
-            JudgementKind::SliderHead { hit: true },
-            JudgementKind::SliderTick { hit: false },
-            JudgementKind::SliderTail { hit: true },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            },
+            JudgementKind::SliderTick {
+                hit: false,
+                nested_index: None,
+            },
+            JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            },
             JudgementKind::SliderRepeat {
                 hit: true,
                 repeat_index: 0,
+                nested_index: None,
             },
         ] {
             assert_eq!(samples(part), Some(false), "slider parts gain without sampling");

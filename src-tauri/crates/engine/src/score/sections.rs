@@ -387,6 +387,7 @@ mod tests {
                 .collect(),
             totals: HitTotals::default(),
             spinner_scoring: Vec::new(),
+            native: None,
         }
     }
 
@@ -475,8 +476,13 @@ mod tests {
             &processed,
             &timeline_of(&[
                 (0, JudgementKind::Circle(HitGrade::Great)),
-                (1, JudgementKind::SliderHead { hit: true }),
-                (1, JudgementKind::SliderTail { hit: false }),
+                (1, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }),
+                (1, JudgementKind::SliderTail {
+                hit: false,
+                nested_index: None,
+            }),
                 (1, JudgementKind::SliderAggregate(HitGrade::Ok)),
             ]),
         );
@@ -592,6 +598,7 @@ mod tests {
                 .collect(),
             totals: HitTotals::default(),
             spinner_scoring: Vec::new(),
+            native: None,
         }
     }
 
@@ -605,10 +612,15 @@ mod tests {
         let tally = section_tally(
             &processed,
             &timeline_at(&[
-                (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+                (0, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }, 1000.0),
                 // the section-ending circle resolves early, mid-slider
                 (1, JudgementKind::Circle(HitGrade::Great), 1900.0),
-                (0, JudgementKind::SliderTail { hit: true }, 2100.0),
+                (0, JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            }, 2100.0),
                 (0, JudgementKind::SliderAggregate(HitGrade::Great), 2100.0),
                 (2, JudgementKind::Circle(HitGrade::Great), 3000.0),
             ]),
@@ -633,9 +645,14 @@ mod tests {
         // the tally is unchanged, but the HP fold pays 6C for it
         let processed = map_of(vec![slider(1000.0, true), circle(2000.0, false), circle(3000.0, true)]);
         let timeline = timeline_at(&[
-            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            (0, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }, 1000.0),
             (1, JudgementKind::Circle(HitGrade::Great), 1900.0),
-            (0, JudgementKind::SliderTail { hit: true }, 2100.0),
+            (0, JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            }, 2100.0),
             (0, JudgementKind::SliderAggregate(HitGrade::Great), 2100.0),
             (2, JudgementKind::Circle(HitGrade::Great), 3000.0),
         ]);
@@ -676,11 +693,16 @@ mod tests {
         let processed = map_of(vec![slider(1000.0, true), spinner(2000.0), circle(4000.0, false)]);
         assert!(processed.objects[2].stable_new_combo, "post-spinner force");
         let timeline = timeline_at(&[
-            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            (0, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }, 1000.0),
             // the spinner resolves while the section's slider is still in
             // flight -- the backward walk would have found it unhit
             (1, JudgementKind::SpinnerFinal(HitGrade::Great), 2400.0),
-            (0, JudgementKind::SliderTail { hit: true }, 2600.0),
+            (0, JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            }, 2600.0),
             (0, JudgementKind::SliderAggregate(HitGrade::Great), 2600.0),
             (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
         ]);
@@ -695,8 +717,13 @@ mod tests {
         // the counters still bind: an earlier 100 in the same section demotes
         // the spinner's award to Katu
         let with_a_hundred = timeline_at(&[
-            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
-            (0, JudgementKind::SliderTail { hit: true }, 1600.0),
+            (0, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }, 1000.0),
+            (0, JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            }, 1600.0),
             (0, JudgementKind::SliderAggregate(HitGrade::Ok), 1600.0),
             (1, JudgementKind::SpinnerFinal(HitGrade::Great), 2400.0),
             (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
@@ -708,8 +735,13 @@ mod tests {
 
         // and a missed spinner still awards nothing
         let missed = timeline_at(&[
-            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
-            (0, JudgementKind::SliderTail { hit: true }, 1600.0),
+            (0, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }, 1000.0),
+            (0, JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            }, 1600.0),
             (0, JudgementKind::SliderAggregate(HitGrade::Great), 1600.0),
             (1, JudgementKind::SpinnerFinal(HitGrade::Miss), 2400.0),
             (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
@@ -723,9 +755,14 @@ mod tests {
         // so the backward walk runs and finds the in-flight slider
         let processed = map_of(vec![slider(1000.0, true), circle(2400.0, false), circle(4000.0, true)]);
         let timeline = timeline_at(&[
-            (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+            (0, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }, 1000.0),
             (1, JudgementKind::Circle(HitGrade::Great), 2400.0),
-            (0, JudgementKind::SliderTail { hit: true }, 2600.0),
+            (0, JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            }, 2600.0),
             (0, JudgementKind::SliderAggregate(HitGrade::Great), 2600.0),
             (2, JudgementKind::Circle(HitGrade::Great), 4000.0),
         ]);
@@ -747,9 +784,14 @@ mod tests {
         let tally = section_tally(
             &processed,
             &timeline_at(&[
-                (0, JudgementKind::SliderHead { hit: true }, 1000.0),
+                (0, JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            }, 1000.0),
                 (1, JudgementKind::Circle(HitGrade::Great), 1900.0),
-                (0, JudgementKind::SliderTail { hit: false }, 2100.0),
+                (0, JudgementKind::SliderTail {
+                hit: false,
+                nested_index: None,
+            }, 2100.0),
                 (0, JudgementKind::SliderAggregate(HitGrade::Ok), 2100.0),
                 (2, JudgementKind::Circle(HitGrade::Great), 3000.0),
             ]),

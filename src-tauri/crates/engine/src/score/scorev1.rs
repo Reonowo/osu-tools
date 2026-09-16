@@ -223,20 +223,20 @@ fn event_value(
     mod_multiplier: f64,
 ) -> u64 {
     match event.kind {
-        JudgementKind::SliderHead { hit } => {
-            if hit {
+        JudgementKind::SliderHead { grade } => {
+            if grade != HitGrade::Miss {
                 30
             } else {
                 0
             }
         }
-        JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit } => {
+        JudgementKind::SliderRepeat { hit, .. } | JudgementKind::SliderTail { hit, .. } => {
             points.value(event.object_index, 30, hit)
         }
-        JudgementKind::SliderTick { hit } => points.value(event.object_index, 10, hit),
+        JudgementKind::SliderTick { hit, .. } => points.value(event.object_index, 10, hit),
         // lazer's gameplay ticks; scored via the stable half-spin model
-        // instead (module doc)
-        JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => 0,
+        // instead (module doc). the lifecycle end scores nothing
+        JudgementKind::SliderEnd { .. } | JudgementKind::SpinnerSpin | JudgementKind::SpinnerBonus => 0,
         JudgementKind::Circle(grade)
         | JudgementKind::SpinnerFinal(grade)
         | JudgementKind::SliderAggregate(grade) => {
@@ -425,6 +425,7 @@ mod tests {
                 .collect(),
             totals: HitTotals::default(),
             spinner_scoring: Vec::new(),
+            native: None,
         }
     }
 
@@ -539,10 +540,22 @@ mod tests {
     #[test]
     fn slider_parts_score_flat_and_feed_the_aggregate_combo() {
         let timeline = timeline_of(&[
-            JudgementKind::SliderHead { hit: true },
-            JudgementKind::SliderTick { hit: true },
-            JudgementKind::SliderRepeat { hit: true, repeat_index: 0 },
-            JudgementKind::SliderTail { hit: true },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            },
+            JudgementKind::SliderTick {
+                hit: true,
+                nested_index: None,
+            },
+            JudgementKind::SliderRepeat {
+                hit: true,
+                repeat_index: 0,
+                nested_index: None,
+            },
+            JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            },
             JudgementKind::SliderAggregate(HitGrade::Great),
         ]);
         // 30 + 10 + 30 + 30 flat, then the aggregate's 300 with the combo
@@ -560,8 +573,13 @@ mod tests {
         // back: reset at the head, tail +30 through combo 1, aggregate Ok
         // with zero bonus
         let mut timeline = timeline_of(&[
-            JudgementKind::SliderHead { hit: false },
-            JudgementKind::SliderTail { hit: true },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Miss,
+            },
+            JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            },
             JudgementKind::SliderAggregate(HitGrade::Ok),
         ]);
         for event in &mut timeline.events {
@@ -573,9 +591,17 @@ mod tests {
     #[test]
     fn missed_slider_parts_score_nothing() {
         let timeline = timeline_of(&[
-            JudgementKind::SliderHead { hit: false },
-            JudgementKind::SliderTick { hit: false },
-            JudgementKind::SliderTail { hit: false },
+            JudgementKind::SliderHead {
+                grade: HitGrade::Miss,
+            },
+            JudgementKind::SliderTick {
+                hit: false,
+                nested_index: None,
+            },
+            JudgementKind::SliderTail {
+                hit: false,
+                nested_index: None,
+            },
             JudgementKind::SliderAggregate(HitGrade::Miss),
         ]);
         assert_eq!(total_score(&timeline, &circles_map(4), 4, 1.0), 0);
@@ -754,7 +780,7 @@ mod tests {
     #[test]
     fn a_reordered_tail_slider_banks_stables_extra_twenty() {
         use crate::replay::frames::Buttons;
-        use crate::simulation::simulate;
+        use crate::simulation::simulate_stable;
         use crate::simulation::test_support::{frame, slider_map, wrap};
 
         // the same shape end to end: a tracked play through the tick-rate
@@ -770,7 +796,7 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         assert_eq!(
             (timeline.totals.count_300, timeline.totals.max_combo),
             (1, 3),
@@ -861,13 +887,22 @@ mod tests {
 
         curve_matching_total(
             &timeline_of(&[
-                JudgementKind::SliderHead { hit: true },
-                JudgementKind::SliderTick { hit: true },
+                JudgementKind::SliderHead {
+                grade: HitGrade::Great,
+            },
+                JudgementKind::SliderTick {
+                hit: true,
+                nested_index: None,
+            },
                 JudgementKind::SliderRepeat {
                     hit: true,
                     repeat_index: 0,
+                    nested_index: None,
                 },
-                JudgementKind::SliderTail { hit: true },
+                JudgementKind::SliderTail {
+                hit: true,
+                nested_index: None,
+            },
                 JudgementKind::SliderAggregate(HitGrade::Great),
             ]),
             &circles_map(5),
@@ -877,9 +912,17 @@ mod tests {
 
         curve_matching_total(
             &timeline_of(&[
-                JudgementKind::SliderHead { hit: false },
-                JudgementKind::SliderTick { hit: false },
-                JudgementKind::SliderTail { hit: false },
+                JudgementKind::SliderHead {
+                grade: HitGrade::Miss,
+            },
+                JudgementKind::SliderTick {
+                hit: false,
+                nested_index: None,
+            },
+                JudgementKind::SliderTail {
+                hit: false,
+                nested_index: None,
+            },
                 JudgementKind::SliderAggregate(HitGrade::Miss),
             ]),
             &circles_map(4),
@@ -966,7 +1009,7 @@ mod tests {
     #[test]
     fn a_tail_adjacent_tick_lands_as_one_step_of_thirty() {
         use crate::replay::frames::Buttons;
-        use crate::simulation::simulate;
+        use crate::simulation::simulate_stable;
         use crate::simulation::test_support::{frame, slider_map, wrap};
 
         // the parity-issue-15 shape end to end: head 30, the promoted tick 30,
@@ -981,7 +1024,7 @@ mod tests {
             frame(end_t, 200.0, 100.0, Buttons::LEFT_1),
             frame(end_t + 50.0, 200.0, 100.0, 0),
         ]);
-        let timeline = simulate(&beatmap, &frames).unwrap();
+        let timeline = simulate_stable(&beatmap, &frames).unwrap();
         let curve = curve_matching_total(&timeline, &beatmap, 4, 1.0);
         assert_eq!(deltas(&curve), vec![30, 30, 30, 396]);
     }

@@ -57,11 +57,18 @@ pub enum StablePointKind {
 }
 
 /// one stable score point. `time` is whole milliseconds by construction
-/// (stable floors every score time)
+/// (stable floors every score time). `span_index` and `ordinal` are the
+/// point's identity in the terms lazer's nested list also speaks (the span
+/// it sits in, and for a tick which tick of that span it is), which is what
+/// lets the simulation name the lazer nested object a judgement belongs to
 #[derive(Debug, Clone, Copy)]
 pub struct StableScorePoint {
     pub time: f64,
     pub kind: StablePointKind,
+    /// the span this point sits in; a repeat's is the span it ends
+    pub span_index: u32,
+    /// for a tick, its 0-based position among the span's ticks; 0 otherwise
+    pub ordinal: u32,
 }
 
 /// one segment of stable's score path (danser slider.go:492 PathLine):
@@ -323,6 +330,7 @@ pub(crate) fn stable_score_points(
         // NaN-SV greens keep normal velocity but spawn no ticks
         // (slider.go:466); the engine's generate_ticks models that flag
         let mut skip_tick = !generate_ticks;
+        let mut ticks_in_span = 0u32;
 
         // odd spans traverse the track backwards; segment lengths are
         // direction-free but the accumulation order is not
@@ -355,7 +363,10 @@ pub(crate) fn stable_score_points(
                 points.push(StableScorePoint {
                     time: score_time,
                     kind: StablePointKind::Tick,
+                    span_index: span as u32,
+                    ordinal: ticks_in_span,
                 });
+                ticks_in_span += 1;
                 if points.len() > limits::MAX_SLIDER_NESTED_OBJECTS {
                     return Err(resource_limit(
                         "MAX_SLIDER_NESTED_OBJECTS",
@@ -385,6 +396,8 @@ pub(crate) fn stable_score_points(
                     repeat_index: span as u32,
                 }
             },
+            span_index: span as u32,
+            ordinal: 0,
         });
         if points.len() > limits::MAX_SLIDER_NESTED_OBJECTS {
             return Err(resource_limit(

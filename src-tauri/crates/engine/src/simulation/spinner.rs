@@ -146,8 +146,9 @@ impl SpinnerState {
 }
 
 /// spinnerrotationtracker.cs:69 -- x leads in the atan2, and the result is
-/// negated after converting to degrees
-fn angle_at(pos: crate::math::Vec2, centre: crate::math::Vec2) -> f32 {
+/// negated after converting to degrees. shared with the native walk's
+/// spinner, which samples the same angle at its own cadence
+pub(crate) fn angle_at(pos: crate::math::Vec2, centre: crate::math::Vec2) -> f32 {
     -f32::atan2(pos.x - centre.x, pos.y - centre.y).to_degrees()
 }
 
@@ -492,7 +493,7 @@ mod tests {
     use crate::math::Vec2;
     use crate::replay::frames::Buttons;
     use crate::simulation::score::JudgementKind;
-    use crate::simulation::simulate;
+    use crate::simulation::simulate_stable;
     use crate::simulation::test_support::{base_map, frame, spinner_map, wrap};
 
     // spinner_map(duration, od) builds a map whose only object is a spinner
@@ -554,7 +555,7 @@ mod tests {
         // od 5, duration 2000 -> spins_required 5, bonus gap 2, max bonus 5
         let beatmap = spinner_map(2000.0, 5.0);
         // 8 revolutions in 45-degree steps while holding left
-        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 8.0, 8, Buttons::LEFT_1))).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(spin_frames(1000.0, 8.0, 8, Buttons::LEFT_1))).unwrap();
         let spins = timeline
             .events
             .iter()
@@ -624,7 +625,7 @@ mod tests {
         let (x, y) = pos_at_degrees(1810.0);
         frames.push(frame(3010.0, x, y, Buttons::LEFT_1));
 
-        let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(frames)).unwrap();
         let spins = timeline
             .events
             .iter()
@@ -668,7 +669,7 @@ mod tests {
     #[test]
     fn every_scoring_half_spin_is_recorded_with_its_time_and_emission_position() {
         let beatmap = spinner_map(2000.0, 5.0);
-        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 20.0, 8, Buttons::LEFT_1))).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(spin_frames(1000.0, 20.0, 8, Buttons::LEFT_1))).unwrap();
         let scoring = &timeline.spinner_scoring[0];
         assert!(
             scoring.scoring_half_spins > 1,
@@ -717,7 +718,7 @@ mod tests {
         // which is what a map overlapping discs would buy them with
         let beatmap = spinner_map(2000.0, 5.0);
         let frames = wrap(spin_frames(1000.0, 20.0, 8, Buttons::LEFT_1));
-        let recorded = simulate(&beatmap, &frames).unwrap().spinner_scoring[0]
+        let recorded = simulate_stable(&beatmap, &frames).unwrap().spinner_scoring[0]
             .increments
             .len() as u64;
         assert!(recorded > 1, "the scenario must turn the disc");
@@ -740,7 +741,7 @@ mod tests {
         // the disc reads only the frames, so a spinner-only pass supplies
         // the increment times both scenarios below build their circle around
         let frames = spin_frames(1000.0, 20.0, 8, Buttons::LEFT_1);
-        let probe = simulate(&spinner_map(2000.0, 5.0), &wrap(frames.clone())).unwrap();
+        let probe = simulate_stable(&spinner_map(2000.0, 5.0), &wrap(frames.clone())).unwrap();
         let increments = probe.spinner_scoring[0].increments.clone();
         assert!(increments.len() >= 6, "need increments to pick a middle one from");
         let target = increments[increments.len() / 2].time;
@@ -759,7 +760,7 @@ mod tests {
                 f.buttons = Buttons::new(Buttons::LEFT_1 | Buttons::RIGHT_1);
             }
         }
-        let timeline = simulate(&clicked, &wrap(with_press)).unwrap();
+        let timeline = simulate_stable(&clicked, &wrap(with_press)).unwrap();
         let circle_index = timeline
             .events
             .iter()
@@ -783,7 +784,7 @@ mod tests {
         // od 5's 50-window is 149.5 -> the timeout fires strictly past
         // start + 150, which for start = target - 155 is first true at target
         let timing_out = spinner_with_circles(2000.0, &[(target - 155.0, 20.0, 20.0)]);
-        let timeline = simulate(&timing_out, &wrap(frames.clone())).unwrap();
+        let timeline = simulate_stable(&timing_out, &wrap(frames.clone())).unwrap();
         let miss_index = timeline
             .events
             .iter()
@@ -806,7 +807,7 @@ mod tests {
     #[test]
     fn unpressed_motion_accumulates_nothing() {
         let beatmap = spinner_map(2000.0, 5.0);
-        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 8.0, 8, 0))).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(spin_frames(1000.0, 8.0, 8, 0))).unwrap();
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(
             timeline.events[0].kind,
@@ -835,7 +836,7 @@ mod tests {
                 Buttons::LEFT_1,
             ));
         }
-        let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(frames)).unwrap();
         assert!(timeline
             .events
             .iter()
@@ -854,13 +855,13 @@ mod tests {
         // requirement. Danser grades BOTH Hit50 from the slower disc;
         // the first was incorrectly Ok under the old completion fractions.
         let beatmap = spinner_map(2000.0, 5.0);
-        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 4.7, 16, Buttons::LEFT_1))).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(spin_frames(1000.0, 4.7, 16, Buttons::LEFT_1))).unwrap();
         assert_eq!(
             timeline.events.last().unwrap().kind,
             JudgementKind::SpinnerFinal(HitGrade::Meh)
         );
 
-        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 4.1, 16, Buttons::LEFT_1))).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(spin_frames(1000.0, 4.1, 16, Buttons::LEFT_1))).unwrap();
         assert_eq!(
             timeline.events.last().unwrap().kind,
             JudgementKind::SpinnerFinal(HitGrade::Meh)
@@ -872,7 +873,7 @@ mod tests {
         // drawablespinner.cs:236-239: some spinners are too short to require
         // a full spin; they complete on their own
         let beatmap = spinner_map(100.0, 0.0); // od 0 -> min rps 1.5 -> 0 spins
-        let timeline = simulate(&beatmap, &wrap(vec![frame(1000.0, 256.0, 192.0, 0)])).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(vec![frame(1000.0, 256.0, 192.0, 0)])).unwrap();
         assert_eq!(
             timeline.events.last().unwrap().kind,
             JudgementKind::SpinnerFinal(HitGrade::Great)
@@ -889,7 +890,7 @@ mod tests {
         for f in &mut frames {
             f.time = 1000.0 + (f.time - 1000.0) * 2.0;
         }
-        let timeline = simulate(&beatmap, &wrap(frames)).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(frames)).unwrap();
         assert_eq!(
             timeline.events.last().unwrap().kind,
             JudgementKind::SpinnerFinal(HitGrade::Great)
@@ -903,7 +904,7 @@ mod tests {
         // gap 2 -> first 5 spins are SpinnerSpin, later ones SpinnerBonus up
         // to max_bonus_spins, then nothing
         let beatmap = spinner_map(1000.0, 10.0);
-        let timeline = simulate(&beatmap, &wrap(spin_frames(1000.0, 9.5, 8, Buttons::LEFT_1))).unwrap();
+        let timeline = simulate_stable(&beatmap, &wrap(spin_frames(1000.0, 9.5, 8, Buttons::LEFT_1))).unwrap();
         let mut seen_bonus = false;
         for e in &timeline.events {
             match e.kind {
