@@ -2,11 +2,11 @@
 //! playback frames, applies mutations through an invertible-op undo/redo
 //! stack, and keys export on its own dirty split: pristine -> verbatim
 //! payload + trailer passthrough; metadata-only dirty -> the frame payload
-//! carried verbatim under the edited header; frames dirty -> reserialize
-//! with caller-supplied derived fields overlaid. every dirty export --
-//! carried included -- recomputes the replay hash and strips the unparsed
-//! lazer trailer; the life bar graph is ruled per path (carried verbatim on
-//! the metadata-only path, rewritten on the regenerating one), see
+//! AND the trailer carried verbatim under the edited header; frames dirty
+//! -> reserialize with caller-supplied derived fields overlaid and the
+//! trailer stripped. every dirty export -- carried included -- recomputes
+//! the replay hash; the life bar graph is ruled per path (carried verbatim
+//! on the metadata-only path, rewritten on the regenerating one), see
 //! [`ReplayDocument::export_with_derived`].
 //!
 //! derived header fields (hit counts, max combo, total score) are not
@@ -17,13 +17,14 @@
 use crate::error::{resource_limit, EngineError, Result};
 use crate::formats::beatmap::EARLY_VERSION_TIMING_OFFSET;
 use crate::formats::osr::{
-    encode_osr, EncodeOptions, OsrFile, OsrHeader, PayloadSource, ReplayAction, MAX_COORDINATE_VALUE,
-    SEED_FRAME_DELTA,
+    encode_osr, EncodeOptions, OsrFile, OsrHeader, OsrTrailer, PayloadSource, ReplayAction, TrailerSource,
+    LATEST_LAZER_VERSION, MAX_COORDINATE_VALUE, SEED_FRAME_DELTA,
 };
+use crate::formats::score_info::encode_score_info;
 use crate::limits;
 use crate::math::Vec2;
 use crate::replay::frames::{convert_frames, Buttons, ReplayFrame};
-use crate::score::{replay_hash, DerivedFields};
+use crate::score::{replay_hash, DerivedFields, NativeExportFields};
 
 /// a finite position can still be un-exportable: `formats::osr`'s decoder
 /// (mirroring lazer's `Parsing.ParseFloat`) rejects coordinates outside
@@ -90,7 +91,11 @@ enum Op {
     Batch(Vec<Op>),
 }
 
-/// which dirtiness kinds an op on the undo stack contributes to
+/// which dirtiness kinds an op on the undo stack contributes to. a restore
+/// answers both: what it says about the content depends on where it sits
+/// (see [`ReplayDocument::dirty_kinds`]), and this is the conservative
+/// answer for the one place position is lost -- eviction, where the latch
+/// must assume the worst
 fn op_kinds(op: &Op) -> (bool, bool) {
     match op {
         Op::MoveFrame { .. } | Op::SetButtons { .. } | Op::InsertFrame { .. } | Op::DeleteFrame { .. } => {
@@ -236,8 +241,9 @@ pub struct ReplayDocument {
     baseline_header: OsrHeader,
     undo_stack: Vec<Op>,
     redo_stack: Vec<Op>,
-    undo_frame_ops: usize,
-    undo_meta_ops: usize,
+    /// an op of that kind was evicted past recovery: the content may have
+    /// diverged in a way no entry on the stack can prove, so the kind reads
+    /// dirty until a restore back onto the baseline sits above the eviction
     evicted_frames: bool,
     evicted_meta: bool,
     /// members currently retained across `undo_stack`'s entries -- what the
@@ -274,8 +280,6 @@ impl ReplayDocument {
             baseline_header,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            undo_frame_ops: 0,
-            undo_meta_ops: 0,
             evicted_frames: false,
             evicted_meta: false,
             retained_members: 0,
@@ -292,21 +296,51 @@ impl ReplayDocument {
         &self.file.header
     }
 
+    /// the decoded file as loaded: the header as it stands (metadata edits
+    /// mutate it in place), the original actions and the trailer. what the
+    /// play configuration is resolved from
+    pub fn file(&self) -> &OsrFile {
+        &self.file
+    }
+
     /// whether the frame stream differs from the pristine baseline, as far
-    /// as the op history can prove: any frame-touching op on the undo stack,
-    /// or one that was evicted past recovery. two mutually-cancelling edits
-    /// read dirty -- the same false positive the single bit always had
+    /// as the op history can prove: any frame-touching op on the undo stack
+    /// above the last restore onto the baseline, or one that was evicted
+    /// past recovery with no such restore above it. two mutually-cancelling
+    /// edits read dirty -- the same false positive the single bit always had
     pub fn frames_dirty(&self) -> bool {
-        self.undo_frame_ops > 0 || self.evicted_frames
+        self.dirty_kinds().0
     }
 
     pub fn metadata_dirty(&self) -> bool {
-        self.undo_meta_ops > 0 || self.evicted_meta
+        self.dirty_kinds().1
     }
 
-    /// keys export's pristine-passthrough vs. reserialize choice: verbatim
-    /// payload + trailer passthrough while pristine, frame reserialize with
-    /// the trailer stripped once dirty (spec's round-trip rules)
+    /// the markers, read off the stack top-down. `revert_all` is the only
+    /// producer of a restore op and always restores the baseline exactly,
+    /// so a restore entry on the undo stack is a point at which the content
+    /// was the baseline by construction: nothing below it -- earlier ops,
+    /// or an eviction latch -- can dirty what came after, and only the ops
+    /// above it count. undoing the restore pops it, and the walk falls
+    /// through to the earlier ops again; redoing pushes it back
+    fn dirty_kinds(&self) -> (bool, bool) {
+        let mut frames = false;
+        let mut meta = false;
+        for op in self.undo_stack.iter().rev() {
+            if matches!(op, Op::Restore { .. }) {
+                return (frames, meta);
+            }
+            let (f, m) = op_kinds(op);
+            frames |= f;
+            meta |= m;
+        }
+        (frames || self.evicted_frames, meta || self.evicted_meta)
+    }
+
+    /// keys export's pristine-passthrough vs. carried vs. reserialize
+    /// choice: verbatim payload + trailer passthrough while pristine, the
+    /// same payload and trailer under a rewritten header once only metadata
+    /// is dirty, frame reserialize with the trailer stripped once frames are
     pub fn dirty(&self) -> bool {
         self.frames_dirty() || self.metadata_dirty()
     }
@@ -390,15 +424,25 @@ impl ReplayDocument {
     /// restores the pristine baseline directly from the retained original --
     /// frames recomputed from the untouched action list, header fields from
     /// the construction-time clone -- as one undoable step. None when the
-    /// document already sits at the baseline
+    /// document reads CLEAN; a document whose content already equals the
+    /// baseline but whose markers still read dirty (two edits that cancel
+    /// out) is reverted, which is the whole point -- that is the state the
+    /// restore exists to clear. the step leaves both markers
+    /// clean: the restored content equals the baseline by construction, so
+    /// the document exports as passthrough until the next edit (or an undo
+    /// of the revert, which brings the edited state and its markers back)
     pub fn revert_all(&mut self) -> Option<BatchApplied> {
-        let baseline_frames = convert_frames(&self.file.actions, self.beatmap_format_version);
-        let at_baseline = self.frames == baseline_frames
-            && self.file.header.player_name == self.baseline_header.player_name
-            && self.file.header.timestamp_ticks == self.baseline_header.timestamp_ticks;
-        if at_baseline {
+        // the no-op test is the MARKERS', never the content's. a document whose
+        // content already equals the baseline can still read dirty -- two edits
+        // that cancel out leave both ops on the undo stack -- and that is
+        // precisely the state a restore exists to clear: it applies as an
+        // identity, `dirty_kinds` stops at it, and the document exports as the
+        // original file again. testing the content here would decline exactly
+        // when the marker is lying
+        if !self.dirty() {
             return None;
         }
+        let baseline_frames = convert_frames(&self.file.actions, self.beatmap_format_version);
         let mut rec = ChangeRecorder::default();
         let op = Op::Restore {
             frames: baseline_frames,
@@ -438,9 +482,6 @@ impl ReplayDocument {
             self.apply(op, &mut discard);
             if let Some(checkpoint) = checkpoint {
                 for op in &checkpoint.evicted {
-                    let (ef, em) = op_kinds(op);
-                    self.undo_frame_ops += ef as usize;
-                    self.undo_meta_ops += em as usize;
                     self.retained_members += op_members(op);
                 }
                 self.undo_stack.splice(0..0, checkpoint.evicted);
@@ -465,19 +506,21 @@ impl ReplayDocument {
     ///   included; `derived` is ignored entirely.
     /// - **metadata-only dirty** -> the compressed frame payload carried
     ///   verbatim under the edited header, so "frames are untouched" is
-    ///   literally true of the bytes; `derived` is ignored (the original
-    ///   simulation-derived fields still describe the play).
+    ///   literally true of the bytes, and the whole trailer carried with it
+    ///   -- the lazer score-info block and any bytes past it, or stable's
+    ///   own target practice double -- because the play it describes is
+    ///   still the play the frames contain (docs/adr/0007); `derived` is
+    ///   ignored (the original simulation-derived fields still describe the
+    ///   play).
     /// - **frames dirty** -> the action list reserialized from the edited
-    ///   frames with `derived` overlaid onto the header; refusing (typed)
-    ///   when `derived` is absent, since a frame-dirty header without
-    ///   regenerated fields would describe a different play.
+    ///   frames with `derived` overlaid onto the header and the trailer
+    ///   stripped, since a block describing the source's play would lie
+    ///   about the edited one; refusing (typed) when `derived` is absent,
+    ///   since a frame-dirty header without regenerated fields would
+    ///   describe a different play.
     ///
     /// every dirty export -- carried included -- recomputes the replay hash
-    /// from the (possibly edited) player name and timestamp and strips the
-    /// unparsed lazer trailer per the final-state passthrough rule. a
-    /// revert-all'd document is content-equal to baseline but marker-dirty,
-    /// and deliberately takes this conservative dirty path rather than
-    /// passthrough.
+    /// from the (possibly edited) player name and timestamp.
     ///
     /// the life bar graph is the one header field the two dirty paths rule
     /// differently. the carried path leaves it exactly as decoded --
@@ -499,7 +542,7 @@ impl ReplayDocument {
                 &self.file,
                 &EncodeOptions {
                     payload: PayloadSource::VerbatimCompressed,
-                    include_trailer: true,
+                    trailer: TrailerSource::Verbatim,
                 },
             );
         }
@@ -516,19 +559,20 @@ impl ReplayDocument {
 
         if !self.frames_dirty() {
             // carried: the retained compressed payload rides along verbatim,
-            // and the source's own life bar graph rides with it untouched
+            // and the source's own life bar graph and trailer ride with it
+            // untouched
             let carried = OsrFile {
                 header,
                 actions: Vec::new(),
                 compressed_payload: self.file.compressed_payload.clone(),
                 decompressed_payload: Vec::new(),
-                trailer: Vec::new(),
+                trailer: self.file.trailer.clone(),
             };
             return encode_osr(
                 &carried,
                 &EncodeOptions {
                     payload: PayloadSource::VerbatimCompressed,
-                    include_trailer: false,
+                    trailer: TrailerSource::Verbatim,
                 },
             );
         }
@@ -541,7 +585,49 @@ impl ReplayDocument {
         // the overlay writes the regenerated life bar graph along with
         // every other derived field, so nothing here touches it
         derived.overlay_onto(&mut header);
+        self.rebuild_with(header, OsrTrailer::none(), TrailerSource::Strip)
+    }
 
+    /// the regenerating export under the native profile: the same rebuilt
+    /// action list under lazer's header projection, stamped with the pinned
+    /// encoder's latest version -- the score it carries was computed by the
+    /// port of that version's algorithm, so a source at the first lazer
+    /// version gains a block on regeneration -- and a freshly encoded block
+    /// carried verbatim behind it. a carried export never touches the
+    /// version, and the stable regenerating path never writes a block
+    pub fn export_regenerated_native(&self, fields: &NativeExportFields) -> Result<Vec<u8>> {
+        if !self.frames_dirty() {
+            return Err(EngineError::InvalidArgument(
+                "a native regeneration requires a frame-dirty document".into(),
+            ));
+        }
+        let mut header = self.file.header.clone();
+        header.replay_md5 = Some(replay_hash(
+            header.player_name.as_deref().unwrap_or(""),
+            header.timestamp_ticks,
+        )?);
+        header.version = LATEST_LAZER_VERSION;
+        // the bitfield is PROJECTED from the effective mods, never
+        // carried: a cloned header would otherwise let the export claim a
+        // mod the block and the simulation both say was not played
+        header.mods = fields.legacy_mods;
+        // and the online score id is CLEARED for the same reason the block's
+        // is: an edited play is not the play the server recorded. zero is
+        // lazer's own spelling of none here -- legacyscoredecoder.cs:112-113
+        // reads a zero back as `LegacyOnlineID = -1`
+        header.online_score_id = 0;
+        fields.header.overlay_onto(&mut header);
+        let raw = encode_score_info(&fields.block)?;
+        self.rebuild_with(
+            header,
+            OsrTrailer::present(raw, fields.block.clone()),
+            TrailerSource::Verbatim,
+        )
+    }
+
+    /// the frame-dirty rebuild both regenerating paths share: the action
+    /// list from the edited frames under an already-overlaid header
+    fn rebuild_with(&self, header: OsrHeader, trailer: OsrTrailer, trailer_source: TrailerSource) -> Result<Vec<u8>> {
         // rebuild the action list from the edited frames. deltas are
         // exact because frame times are integral by construction (conversion
         // sums integer deltas; insert_frame enforces integral times). frames
@@ -588,13 +674,13 @@ impl ReplayDocument {
             actions,
             compressed_payload: Vec::new(),
             decompressed_payload: Vec::new(),
-            trailer: Vec::new(),
+            trailer,
         };
         encode_osr(
             &rebuilt,
             &EncodeOptions {
                 payload: PayloadSource::Reserialize,
-                include_trailer: false,
+                trailer: trailer_source,
             },
         )
     }
@@ -608,18 +694,16 @@ impl ReplayDocument {
         })
     }
 
-    /// the sole entry point onto `undo_stack`: keeps the per-kind counters
-    /// and the retained-member total in step with what's actually held, and
-    /// evicts oldest entries past `MAX_UNDO_DEPTH` or the retention budget,
-    /// latching the evicted kind(s) permanently dirty since their ops are no
-    /// longer reachable to undo back to pristine. the entry just pushed is
-    /// never evicted, so one over-budget step still lands. returns what it
-    /// evicted (oldest first) with the flags as they stood before latching,
-    /// for callers keeping a rollback checkpoint
+    /// the sole entry point onto `undo_stack`: keeps the retained-member
+    /// total in step with what's actually held, and evicts oldest entries
+    /// past `MAX_UNDO_DEPTH` or the retention budget, latching the evicted
+    /// kind(s) dirty since their ops are no longer reachable to undo back to
+    /// pristine (a later restore onto the baseline clears what the latch
+    /// says, see `dirty_kinds`). the entry just pushed is never evicted, so
+    /// one over-budget step still lands. returns what it evicted (oldest
+    /// first) with the flags as they stood before latching, for callers
+    /// keeping a rollback checkpoint
     fn push_undo(&mut self, op: Op) -> (Vec<Op>, bool, bool) {
-        let (f, m) = op_kinds(&op);
-        self.undo_frame_ops += f as usize;
-        self.undo_meta_ops += m as usize;
         self.retained_members += op_members(&op);
         self.undo_stack.push(op);
         let (frames_before, meta_before) = (self.evicted_frames, self.evicted_meta);
@@ -630,8 +714,6 @@ impl ReplayDocument {
         {
             let oldest = self.undo_stack.remove(0);
             let (ef, em) = op_kinds(&oldest);
-            self.undo_frame_ops -= ef as usize;
-            self.undo_meta_ops -= em as usize;
             self.retained_members -= op_members(&oldest);
             self.evicted_frames |= ef;
             self.evicted_meta |= em;
@@ -640,13 +722,10 @@ impl ReplayDocument {
         (evicted, frames_before, meta_before)
     }
 
-    /// the sole entry point off `undo_stack`, keeping the counters in step
+    /// the sole entry point off `undo_stack`, keeping the retained total in step
     fn pop_undo(&mut self) -> Option<Op> {
         let op = self.undo_stack.pop()?;
         self.rollback_checkpoint = None;
-        let (f, m) = op_kinds(&op);
-        self.undo_frame_ops -= f as usize;
-        self.undo_meta_ops -= m as usize;
         self.retained_members -= op_members(&op);
         Some(op)
     }
@@ -919,11 +998,37 @@ impl ReplayDocument {
 mod tests {
     use super::*;
     use crate::formats::osr::{
-        decode_osr, encode_osr, EncodeOptions, OsrFile, OsrHeader, PayloadSource, ReplayAction,
+        decode_osr, encode_osr, EncodeOptions, OsrFile, OsrHeader, OsrTrailer, PayloadSource, ReplayAction,
+        ScoreInfoBlock, TrailerSource,
     };
     use crate::formats::GameMode;
     use crate::math::Vec2;
     use crate::replay::frames::Buttons;
+
+    /// a trailer for the synthetic file at `version`: stable's opaque bytes
+    /// below the block versions, a framed malformed block (the same bytes,
+    /// which are not lzma) at or above them. either way the passthrough is
+    /// observable, since a stripped export drops the bytes
+    fn trailer_for(version: u32, bytes: Vec<u8>) -> OsrTrailer {
+        if bytes.is_empty() {
+            return if version >= crate::formats::osr::FIRST_LAZER_SCORE_INFO_VERSION {
+                OsrTrailer::empty_block()
+            } else {
+                OsrTrailer::none()
+            };
+        }
+        if version >= crate::formats::osr::FIRST_LAZER_SCORE_INFO_VERSION {
+            OsrTrailer {
+                block: ScoreInfoBlock::Malformed {
+                    raw: bytes,
+                    reason: "synthetic".into(),
+                },
+                trailing: Vec::new(),
+            }
+        } else {
+            OsrTrailer::opaque(bytes)
+        }
+    }
 
     fn synthetic_file(version: u32, trailer: Vec<u8>) -> OsrFile {
         OsrFile {
@@ -975,7 +1080,7 @@ mod tests {
             ],
             compressed_payload: Vec::new(),
             decompressed_payload: Vec::new(),
-            trailer,
+            trailer: trailer_for(version, trailer),
         }
     }
 
@@ -1000,7 +1105,7 @@ mod tests {
             &built,
             &EncodeOptions {
                 payload: PayloadSource::Reserialize,
-                include_trailer: true,
+                trailer: TrailerSource::Verbatim,
             },
         )
         .unwrap();
@@ -1059,7 +1164,7 @@ mod tests {
             actions,
             compressed_payload: Vec::new(),
             decompressed_payload: Vec::new(),
-            trailer: Vec::new(),
+            trailer: OsrTrailer::none(),
         }
     }
 
@@ -1243,21 +1348,143 @@ mod tests {
     }
 
     #[test]
-    fn dirty_export_strips_the_lazer_trailer() {
-        // spec parity rule 3: passthrough eligibility is final-state. a lazer
-        // version file needs the framed empty score-info array in place of the
-        // stripped blob (formats::osr::encode_osr handles that framing)
-        let trailer = vec![0x04, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef];
-        let (bytes, decoded) = canonical_roundtrip(30000001, trailer.clone());
+    fn a_regenerating_export_strips_the_lazer_trailer() {
+        // a block describing the source's play would lie about the edited
+        // one, so the frame-dirty path drops it -- to the framed empty array
+        // a lazer version needs (formats::osr::encode_osr handles that
+        // framing)
+        let block = vec![0xde, 0xad, 0xbe, 0xef];
+        let (bytes, decoded) = canonical_roundtrip(30000001, block.clone());
         let mut doc = ReplayDocument::new(decoded, 14);
 
-        assert!(doc.export_with_derived(None).unwrap().ends_with(&trailer));
+        assert!(doc.export_with_derived(None).unwrap().ends_with(&block));
         assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
 
         doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
         let exported = doc.export_with_derived(Some(&derived())).unwrap();
         let re = decode_osr(&exported).unwrap();
-        assert_eq!(re.trailer, 0i32.to_le_bytes());
+        assert_eq!(re.trailer, OsrTrailer::empty_block());
+    }
+
+    /// the regenerating export writes the bitfield the EFFECTIVE mods
+    /// project, never the one the source header happened to carry -- and
+    /// clears the source's online score id on the same reasoning, since an
+    /// edited play is not the play the server recorded
+    #[test]
+    fn a_native_regeneration_projects_the_legacy_bitfield_and_clears_the_online_score_id() {
+        use crate::formats::score_info::ScoreInfo;
+
+        // a source whose legacy bitfield disagrees with the play its block
+        // describes. lazer keeps the two in step, so this is the shape a
+        // hand-made or future-matrix file has -- and the one a cloned header
+        // would silently propagate into an export that claims a mod the
+        // simulation says was never played
+        let (_, mut decoded) = canonical_roundtrip(30000000, Vec::new());
+        decoded.header.mods = 64;
+        // a value that only fits the 64-bit field, so a carried id would be
+        // unmistakable in the export
+        decoded.header.online_score_id = 4_294_967_297;
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+
+        let fields = NativeExportFields {
+            header: derived(),
+            block: ScoreInfo {
+                online_id: -1,
+                mods: Vec::new(),
+                statistics: Vec::new(),
+                maximum_statistics: Vec::new(),
+                client_version: String::new(),
+                rank: None,
+                user_id: -1,
+                total_score_without_mods: None,
+                pauses: Vec::new(),
+                unknown: Vec::new(),
+            },
+            legacy_mods: 0,
+        };
+        let re = decode_osr(&doc.export_regenerated_native(&fields).unwrap()).unwrap();
+        assert_eq!(re.header.mods, 0, "the bitfield is the projection, not the source's 64");
+        assert_eq!(
+            re.header.online_score_id, 0,
+            "an edited play never claims the score id the server recorded for the original"
+        );
+    }
+
+    /// the native regenerating export: lazer's header projection, the
+    /// pinned encoder's latest version, and a fresh block behind the
+    /// rebuilt frames -- on a source that never had a block
+    #[test]
+    fn a_native_regeneration_stamps_the_latest_version_and_writes_a_fresh_block() {
+        use crate::formats::osr::LATEST_LAZER_VERSION;
+        use crate::formats::score_info::{ScoreInfo, StatisticEntry};
+        use crate::score::ScoreRank;
+
+        let (bytes, decoded) = canonical_roundtrip(30000000, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+
+        // a rename carries: the first lazer version and no array, as decoded
+        doc.set_player_name(Some("renamed".into()));
+        let carried = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
+        assert_eq!(carried.header.version, 30000000);
+        assert_eq!(carried.trailer, OsrTrailer::absent());
+        assert!(matches!(
+            doc.export_regenerated_native(&NativeExportFields {
+                header: derived(),
+                block: block(),
+                legacy_mods: 0,
+            }),
+            Err(EngineError::InvalidArgument(_))
+        ), "a clean-framed document has nothing to regenerate");
+
+        // a frame edit regenerates: the block appears, the version is the
+        // encoder's latest, the header carries the projection and the hash
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+        let fields = NativeExportFields {
+            header: derived(),
+            block: block(),
+            legacy_mods: 0,
+        };
+        let exported = doc.export_regenerated_native(&fields).unwrap();
+        let re = decode_osr(&exported).unwrap();
+        assert_eq!(re.header.version, LATEST_LAZER_VERSION);
+        assert_eq!(re.trailer.score_info(), Some(&fields.block));
+        assert_eq!(re.header.player_name.as_deref(), Some("renamed"));
+        assert_eq!(re.header.count_300, derived().count_300);
+        assert_eq!(re.header.total_score, derived().total_score);
+        assert_eq!(re.header.life_graph.as_deref(), Some(derived().life_bar.as_str()));
+        assert_eq!(
+            re.header.replay_md5.as_deref(),
+            Some(replay_hash("renamed", re.header.timestamp_ticks).unwrap().as_str())
+        );
+        assert_eq!(re.actions.len(), doc.frames().len() + 1, "the rebuilt actions plus the seed frame");
+
+        // the stable regenerating path over the same edit still strips
+        let stripped = decode_osr(&doc.export_with_derived(Some(&derived())).unwrap()).unwrap();
+        assert_eq!(stripped.header.version, 30000000);
+        assert_eq!(stripped.trailer, OsrTrailer::absent());
+
+        fn block() -> ScoreInfo {
+            ScoreInfo {
+                online_id: -1,
+                mods: Vec::new(),
+                statistics: vec![StatisticEntry {
+                    result: "great".into(),
+                    count: 3,
+                }],
+                maximum_statistics: vec![StatisticEntry {
+                    result: "great".into(),
+                    count: 3,
+                }],
+                client_version: "osu-replay-editor test".into(),
+                rank: Some(ScoreRank::X),
+                user_id: 7,
+                total_score_without_mods: Some(1_000_000),
+                pauses: Vec::new(),
+                unknown: Vec::new(),
+            }
+        }
     }
 
     #[test]
@@ -1325,7 +1552,7 @@ mod tests {
             &extreme,
             &EncodeOptions {
                 payload: PayloadSource::Reserialize,
-                include_trailer: true,
+                trailer: TrailerSource::Verbatim,
             },
         )
         .unwrap();
@@ -1684,15 +1911,87 @@ mod tests {
         assert!(report.full_replace);
         assert_eq!(doc.frames(), &baseline_frames[..]);
         assert_eq!(doc.header().player_name.as_deref(), Some("someone"));
-        // content equals baseline, but the marker stays conservative: the
-        // restore op itself sits on the undo stack
-        assert!(doc.dirty());
+        // content equals the baseline by construction, and the markers say
+        // so: the restore sits on the undo stack and reads clean
+        assert!(!doc.dirty());
+        assert_eq!(doc.undo_depth(), 4);
 
-        // the revert is one undoable step back to the pre-revert state
+        // the revert is one undoable step back to the pre-revert state, and
+        // the markers come back with it
         let undone = doc.undo().unwrap();
         assert!(undone.full_replace);
         assert_eq!(doc.frames().len(), baseline_frames.len() - 1);
         assert_eq!(doc.header().player_name.as_deref(), Some("renamed"));
+        assert!(doc.frames_dirty() && doc.metadata_dirty());
+
+        // and redo re-cleans them
+        assert!(doc.redo().unwrap().full_replace);
+        assert!(!doc.dirty());
+    }
+
+    #[test]
+    fn revert_all_leaves_every_kind_of_edit_exporting_as_passthrough() {
+        // a rename, a frame move, and a mixed batch: each reverted document
+        // is byte-identical to the source, trailer included, on every path
+        let block = vec![0xde, 0xad, 0xbe, 0xef];
+        let (bytes, decoded) = canonical_roundtrip(30000001, block);
+        let mut doc = ReplayDocument::new(decoded, 14);
+
+        doc.set_player_name(Some("renamed".into()));
+        doc.revert_all().unwrap();
+        assert!(!doc.metadata_dirty() && !doc.frames_dirty());
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+
+        doc.move_frame(0, Vec2::new(5.0, 5.0)).unwrap();
+        doc.revert_all().unwrap();
+        assert!(!doc.dirty());
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+
+        doc.apply_edit_batch(vec![
+            EditMember::MoveFrame {
+                index: 1,
+                to: Vec2::new(9.0, 9.0),
+            },
+            EditMember::DeleteFrame { index: 2 },
+            EditMember::SetTimestamp { ticks: 1 },
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(doc.frames_dirty() && doc.metadata_dirty());
+        doc.revert_all().unwrap();
+        assert!(!doc.dirty());
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+    }
+
+    #[test]
+    fn edits_after_a_revert_read_dirty_and_a_second_revert_cleans_again() {
+        let (bytes, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.move_frame(0, Vec2::new(5.0, 5.0)).unwrap();
+        doc.revert_all().unwrap();
+        doc.set_player_name(Some("again".into()));
+        assert!(doc.metadata_dirty() && !doc.frames_dirty());
+        doc.revert_all().unwrap();
+        assert!(!doc.dirty());
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_restore_above_an_eviction_clears_the_latch() {
+        // the latch says "an evicted op may have diverged the content"; a
+        // restore onto the baseline above it proves the content anyway
+        let (bytes, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        for i in 0..=limits::MAX_UNDO_DEPTH {
+            doc.move_frame(0, Vec2::new(i as f32 + 1.0, 0.0)).unwrap();
+        }
+        assert!(doc.frames_dirty());
+        doc.revert_all().unwrap();
+        assert!(!doc.dirty());
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+        // undoing the revert falls back through to the latched history
+        doc.undo().unwrap();
+        assert!(doc.frames_dirty());
     }
 
     #[test]
@@ -1707,6 +2006,24 @@ mod tests {
         doc.move_frame(0, Vec2::new(5.0, 5.0)).unwrap();
         doc.undo();
         assert!(doc.revert_all().is_none());
+    }
+
+    #[test]
+    fn revert_all_clears_markers_left_by_edits_that_cancel_out() {
+        let (bytes, decoded) = canonical_roundtrip(20240101, Vec::new());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        let original = doc.frames()[0].pos;
+
+        // two edits that cancel: the content is the baseline's again, but both
+        // ops are still on the stack, so the markers read dirty and the export
+        // would regenerate a file identical in content to the one it came from
+        doc.move_frame(0, Vec2::new(5.0, 5.0)).unwrap();
+        doc.move_frame(0, original).unwrap();
+        assert!(doc.frames_dirty());
+
+        assert!(doc.revert_all().is_some());
+        assert!(!doc.dirty());
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
     }
 
     #[test]
@@ -1967,14 +2284,41 @@ mod tests {
     }
 
     #[test]
-    fn a_carried_export_strips_the_lazer_trailer() {
-        let trailer = vec![0x04, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef];
-        let (_, decoded) = canonical_roundtrip(30000001, trailer);
+    fn a_carried_export_keeps_the_lazer_trailer_verbatim() {
+        // the block still describes the play the untouched frames contain,
+        // so a rename carries it byte for byte (docs/adr/0007)
+        let block = vec![0xde, 0xad, 0xbe, 0xef];
+        let (bytes, decoded) = canonical_roundtrip(30000001, block.clone());
         let mut doc = ReplayDocument::new(decoded, 14);
         doc.set_timestamp_ticks(638_000_000_000_000_000);
-        let re = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
-        // the framed empty score-info array replaces the stripped blob
-        assert_eq!(re.trailer, 0i32.to_le_bytes());
+        let exported = doc.export_with_derived(None).unwrap();
+        assert_ne!(exported, bytes, "the header changed");
+        assert!(exported.ends_with(&block));
+        let re = decode_osr(&exported).unwrap();
+        assert!(
+            matches!(&re.trailer.block, ScoreInfoBlock::Malformed { raw, .. } if raw == &block),
+            "{:?}",
+            re.trailer
+        );
+    }
+
+    #[test]
+    fn a_carried_export_keeps_stables_opaque_trailer_and_a_regenerating_one_drops_it() {
+        // target practice's accuracy double is the one thing stable writes
+        // past the online id: eight bytes a rename must not lose and a frame
+        // edit cannot honestly keep
+        let double = 0.9876f64.to_le_bytes().to_vec();
+        let (bytes, decoded) = canonical_roundtrip(20240101, double.clone());
+        let mut doc = ReplayDocument::new(decoded, 14);
+        doc.set_player_name(Some("renamed".into()));
+        let carried = doc.export_with_derived(None).unwrap();
+        assert_ne!(carried, bytes);
+        assert!(carried.ends_with(&double));
+        assert_eq!(decode_osr(&carried).unwrap().trailer, OsrTrailer::opaque(double));
+
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+        let regenerated = doc.export_with_derived(Some(&derived())).unwrap();
+        assert_eq!(decode_osr(&regenerated).unwrap().trailer, OsrTrailer::none());
     }
 
     #[test]
@@ -2008,29 +2352,19 @@ mod tests {
     }
 
     #[test]
-    fn a_reverted_document_exports_through_the_regenerating_path() {
-        // TODO.md's revert-all corner: content-equal to baseline but
-        // marker-dirty on both kinds, so export deliberately reserializes
-        // (hash recomputed, life bar emptied, trailer stripped) instead of
-        // passing the original bytes through
-        let (bytes, decoded) = canonical_roundtrip(20240101, Vec::new());
+    fn a_reverted_document_exports_as_passthrough() {
+        // content-equal to the baseline and the markers say so: the export
+        // is the original bytes, derived fields or not (the 2026-08-12
+        // ruling that a reverted document regenerates is reversed -- the
+        // marker can no longer lie, so there is nothing to be conservative
+        // about)
+        let (bytes, decoded) = canonical_roundtrip_with_life_graph(20240101, Vec::new(), Some("0|1,"));
         let mut doc = ReplayDocument::new(decoded, 14);
         doc.set_player_name(Some("renamed".into()));
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
         doc.revert_all().unwrap();
-        assert!(doc.frames_dirty() && doc.metadata_dirty());
-        // a marker-dirty document is a regenerating export like any other:
-        // it writes the regenerated graph, never the source's
-
-        // the marker-dirty document refuses a derived-free export like any
-        // frame-dirty one
-        assert!(doc.export_with_derived(None).is_err());
-
-        let exported = doc.export_with_derived(Some(&derived())).unwrap();
-        assert_ne!(exported, bytes, "revert-all must not silently passthrough");
-        let re = decode_osr(&exported).unwrap();
-        // baseline content under a conservative dirty header
-        assert_eq!(re.header.player_name.as_deref(), Some("someone"));
-        assert_eq!(re.header.life_graph.as_deref(), Some(REGENERATED_GRAPH));
-        assert_eq!(re.actions.len(), 4);
+        assert!(!doc.frames_dirty() && !doc.metadata_dirty());
+        assert_eq!(doc.export_with_derived(None).unwrap(), bytes);
+        assert_eq!(doc.export_with_derived(Some(&derived())).unwrap(), bytes);
     }
 }
