@@ -150,3 +150,205 @@ Local reproduction records: `.scratch/engine-parity-pass/finalpass_triage.json`,
 `finalpass-engine/`, `danser-oracle/finalpass-dumps/`,
 `sweep_finalpass_baseline.json`, `sweep_finalpass_spinner_grade.json`, and
 `spinner-synthetic/` (reference inputs and results, not golden fixtures).
+
+## Native parity: the re-run pass of 2026-09-17
+
+Everything above concerns the **stable** profile, whose oracle is stable's
+own `.osr` header. This section concerns the **native** profile, whose oracle
+is the score-info block a lazer-written `.osr` carries. It is a separate
+measurement with a separate corpus and a failure mode the stable side does
+not have: the block is written by whatever lazer build the player ran, so a
+divergence has two possible causes -- this engine, or lazer's own gameplay
+having changed since that build -- and comparing the two alone cannot say
+which.
+
+The pass opened with 65 native pairs, 36 exact and 29 diverging in three
+named classes, and no way to attribute any of them. It closes with the
+divergences attributed, one port defect found and fixed, and the corpus
+green.
+
+### The third party
+
+`tools/fixture-gen` gained a replay re-run mode (`ReplayRerun.cs`;
+`--rerun-map`, `--rerun-replay`, `--rerun-out`, `--rerun-clock-step`). It
+decodes a real `(.osr, .osu)` pair through lazer's own `LegacyScoreDecoder`
+and plays it through a real `ReplayPlayer` on the pinned checkout, dumping
+lazer's per-element judgement timeline -- result, hit offset and application
+time per object -- beside the file's own block. The engine's side of that
+comparison is `cargo run -p engine --release --example dump_native_timeline`,
+the native counterpart `diagnose_replay` lacks (that instrument's views --
+the section tally, peppy stars, the eight stable comparisons -- are stable's
+own and describe nothing on a lazer-written play). Both are instruments,
+never fixture generators: they write nowhere near `fixtures/` and take no
+part in `--family`.
+
+**Its `File` side is not wholly the file's.** `LegacyScoreDecoder.Parse` ends
+by calling `StandardisedScoreMigrationTools.UpdateToLatestScoring`
+(`legacyscoredecoder.cs:155`), which recomputes accuracy with the _pinned_
+build's score processor and re-multiplies the total (and, for a stable score,
+converts accuracy, rank and both totals). So `TotalScore` and `Accuracy` are a
+third reading rather than the file's record, and the dump names them apart
+under `FileAfterDecoderMigration` beside the resulting `TotalScoreVersion`.
+That version cannot say whether the multiplier step ran: it is gated on the
+version being behind `30000017`, but `UpdateToLatestScoring` then stamps
+`LATEST_VERSION` over the field unconditionally
+(`standardisedscoremigrationtools.cs:47`), so what the dump carries is the
+outcome and not a record of the decision. **Rank is the exception and has to be
+stated rather than assumed**: the decoder restores the trailer's own rank
+_after_ the migration ran (`legacyscoredecoder.cs:157-158`), so it is the
+file's whenever the file recorded one. The counts and the max combo are read
+straight through; the maximum map is the file's unless the file carried none,
+in which case `PopulateMaximumStatistics` derives it from the beatmap; and
+`TotalScoreWithoutMods` is the file's only when the block carried it. The
+original _native_ header total is not recovered in this dump at all — the
+decoder overwrites it in place and preserves a pre-migration total only for a
+stable score — which costs nothing, because the engine side of the diff reads
+the header and the block through this crate's own codec, which migrates
+nothing.
+
+**Know its limit before you use it.** The re-run reproduces grading exactly
+and repeatably: two invocations agree on every grade and every hit offset,
+bit for bit. It does _not_ reproduce slider tracking stably -- two identical
+invocations of one play differed in 8 slider tails and in nothing else, and
+sweeping the display rate from 1ms to 20ms moved the count again. So its
+per-element **times and offsets** are evidence and its **tail counts are
+not**. Reading the counts as an oracle during this pass produced a confident
+and wrong conclusion, which the fix below then falsified.
+
+### Grade divergences are lazer's, and dated
+
+Lazer PR #33882, "Apply flooring and half-millisecond-adjustments to hit
+windows" (`0f078ee550`, authored 2025-04-18, **merged 2025-07-02**), changed
+`OsuHitWindows.SetDifficulty` from `DifficultyRange(od, ...)` to
+`Math.Floor(DifficultyRange(od, ...)) - 0.5`. Every window narrows, which is
+why the engine reads one grade harsher than older files and never more
+lenient. The engine already ports the pinned rule
+(`beatmap/difficulty.rs:85-87`).
+
+The change lands on a floor boundary, so with integer replay frame times the
+only hit errors it can move are those at exactly `|offset| == floor(window)`.
+Re-running two affected plays and counting that band reproduced their grade
+deltas exactly -- 1 object for a delta of 1, 3 objects for a delta of 3 --
+and in both the pinned client's grades equalled the engine's on every object.
+Across the corpus, all 21 plays with a grade divergence come from clients
+predating the merge and none of the 34 from clients after it does.
+
+### The slider-tail class was a port defect: a gate lazer never opens
+
+`FramedReplayInputHandler` refuses every update time strictly inside the 20ms
+before a successor frame while a button is held -- its _important section_
+(`framedreplayinputhandler.cs:105-160`). The native walk modelled that rule.
+It should not have: the gate reads `FrameAccuratePlayback`, a public field
+the game assigns **nowhere**. The only assignment in the entire checkout is
+in `FramedReplayInputHandlerTest`, and there has been no other since the
+field was introduced in 2017. In a real client `inImportantSection` is always
+false and `SetFrameFromTime` never returns null for that reason.
+
+Honouring a gate lazer leaves shut cost slider tails specifically, because a
+tail's leniency point (`end - 36`, `SliderEventGenerator.TAIL_LENIENCY`)
+falls inside a frame span far more often than on a frame, and a held button
+during a slider is the normal case. Deferring that instant to the next frame
+samples tracking up to a frame late, by which time the follow circle has
+moved on; the tail then waits, and lands as an `IgnoreMiss` at the first
+instant past the slider's end.
+
+The instrument found it by time, not by count. On one diverging slider the
+pinned client judged the tail 1.2ms after the leniency point opened, while
+the engine judged it 17ms past the slider's end -- so the engine had not
+visited the window at all.
+
+Removing the gate (`simulation::native`, and with it `IMPORTANT_TIME_SPAN`)
+recovered the class whole:
+
+| Measure (65 native pairs)             | Before | After |
+| ------------------------------------- | -----: | ----: |
+| Exact against the full block          |     36 |    40 |
+| Slider tails missing corpus-wide      |     92 |    −2 |
+| Plays with a cadence-field divergence |     22 |     8 |
+| Stable-profile corpus regressions     |      — |     0 |
+| Judgement fixtures needing a re-pin   |      — |     0 |
+
+`N043`, the largest single divergence in the corpus at 14 tails and the one
+pair whose client was contemporary with the pin, is now exact. No judgement
+fixture moved, because none of the nineteen scenarios places an element
+inside a held-button frame span -- which is precisely why the family never
+caught this.
+
+### What genuinely is not determined by a `.osr`
+
+What remains is small and falls both ways. `ReplayRecorder.RecordFrameRate =
+60` throttles positional replay frames to 60 Hz however fast the client is
+running, while tracking and spinner rotation are sampled once per **display**
+frame. The display cadence is therefore absent from the file, this walk takes
+the limit of an arbitrarily fast display, and the two land on opposite sides
+of an element occasionally.
+
+Measured over the corpus after the fix: eight plays, every one of them a
+single element pair, largest magnitude **2**, and in both directions (the
+engine is one over on `N012` and one under on `N056`). That is a noise floor,
+not a bias, and it is the irreducible part.
+
+### Measurement
+
+| Client era                          | Pairs | Exact, full block | Exact, determined fields |
+| ----------------------------------- | ----: | ----------------: | -----------------------: |
+| Predates the 2025-07-02 merge       |    31 |           8 (26%) |        n/a (grade drift) |
+| At or after it -- the pin's own era |    34 |          32 (94%) |       **34 / 34 (100%)** |
+| Whole corpus                        |    65 |          40 (62%) |       **65 / 65 (100%)** |
+
+`verify_native_pair` now splits the block into the half a `.osr` determines
+and the two halves it does not, and the corpus test passes. Nothing is
+hidden: each excused play prints its exact delta and the cause
+(`cargo test -p engine --release --test replay_corpus -- --nocapture`), and
+each class is bounded so a regression still fails --
+
+- **grade fields** are excused only for a play whose ledger `client_date`
+  predates `HIT_WINDOW_MERGE`, and only in the shape that change can make.
+  Narrowing a window moves objects DOWN the `great -> ok -> meh -> miss`
+  ladder and never up, so walking that ladder best-first the running balance
+  must never go positive and must close at zero. That admits an `ok`-to-`meh`
+  move, whose `great` never budges, and rejects a shape like
+  `{great: -1, ok: 3, meh: -2}`, which needs two objects to have got _better_.
+  Any other shape, or any shape at all on a later client, fails.
+- **cadence fields** (`slider_tail_hit`, `ignore_miss`, `large_tick_*`,
+  `*_bonus`) are excused only if they net to zero **within their own
+  conservation group**, and only up to `CADENCE_NOISE_FLOOR`, set to the
+  largest divergence the corpus has ever shown rather than to a round number
+  with room in it. The pre-fix `N043` would have failed this at 14. There are
+  two groups, because an element trades only within the set its own kind can
+  produce: a slider tick or repeat is a `LargeTickHit` or a `LargeTickMiss`,
+  while a slider tail and a spinner's bonus tick both fall back to
+  `IgnoreMiss`, which is what joins them into one group with
+  `SliderTailHit` and the two bonuses. Summing the groups together would
+  admit a `large_tick_hit: -1` cancelling a `slider_tail_hit: +1` -- a
+  misclassification wearing the noise floor's clothes, since no display rate
+  turns a tick into a tail.
+- `max_combo`, `total_score` and the rank are folded FROM the statistics, so
+  an excused difference in the counts excuses them too -- but only as far as
+  the differing result class can reach, never as one blanket. `SmallBonus`,
+  `LargeBonus` and the `IgnoreMiss` they trade against are worth points and
+  nothing else, so a play excused only those is still held to its combo and
+  its rank exactly; an era downgrade moves accuracy and the total but can
+  never move combo, so such a play is still held to its combo. Whatever a
+  difference cannot reach stays pinned.
+
+The claim this supports: **against clients contemporary with the pin, the
+engine reproduces every field of the score-info block that a `.osr`
+determines, on 34 of 34 plays**; the eight excused cadence rows corpus-wide
+are single elements, and the 21 excused grade rows are lazer's own change.
+This is not comparable to the stable side's 96.5%: that corpus has no
+client-era axis, and stable's header records fields its own engine
+determines.
+
+### Stopping rule
+
+The one defect this pass found is fixed. What is left is the
+sub-display-frame residual, which no implementation reading a `.osr` can
+remove, and lazer's own historical hit windows, which the engine must not
+reproduce. A native divergence found in future goes through the re-run
+instrument before anything is changed -- reading its per-element times, not
+its tail counts -- and a divergence that trips either bound above comes back
+for review rather than widening it.
+
+Local reproduction records: `.scratch/native-corpus/rerun-findings.md` and
+the dumps in `.scratch/native-corpus/rerun/` (gitignored with the corpus).
