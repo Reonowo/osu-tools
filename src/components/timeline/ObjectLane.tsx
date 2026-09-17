@@ -22,8 +22,10 @@ const GRADE_HEX: Record<Grade, string> = {
 };
 const UNGRADED_HEX = "#8a8a93";
 
-/** the hover readout: type, grade, the exact hit error, and on a below-great
- * slider the cause segment naming its dropped elements. a miss states the
+/** the hover readout: type, grade, the exact hit error, and on a slider with
+ * recorded drops the cause segment naming them -- the grade is not the gate,
+ * a native great head sitting over a dropped tick being exactly the case the
+ * lane draws a mark for. a miss states the
  * absent hit error without claiming the object was never pressed -- the
  * event stream cannot reliably tell a press-caused miss from a timeout */
 function objectTitle(object: RenderObject, entry: ObjectLaneEntry): string {
@@ -36,7 +38,10 @@ function objectTitle(object: RenderObject, entry: ObjectLaneEntry): string {
 		const value = Number.isInteger(error) ? `${error}` : error.toFixed(1);
 		return `${type} · ${entry.grade} · ${error >= 0 ? "+" : ""}${value} ms${cause}`;
 	}
-	if (entry.grade === "miss") return `${type} · miss · no hit error`;
+	// the cause rides along here too: under the native profile a missed head
+	// grades the whole slider, and the elements it dropped are marks the lane
+	// draws and this readout would otherwise refuse to name
+	if (entry.grade === "miss") return `${type} · miss · no hit error${cause}`;
 	return `${type} · ${entry.grade}${cause}`;
 }
 
@@ -48,9 +53,9 @@ export interface SlicedObject {
 
 /** the per-element chrome inside a slider's span: the head/repeat/tail marks
  * in the aggregate's colour -- miss-red where the element dropped -- plus a
- * mark of the same geometry for each dropped tick, at the time the simulation
- * judged the drop (derive.ts's tickDrops). hit ticks stay undrawn: the lane
- * marks the loss, not the inventory */
+ * mark of the same geometry for each dropped tick, at that tick's own time
+ * (derive.ts's tickDrops). hit ticks stay undrawn: the lane marks the loss,
+ * not the inventory */
 function NestedMarks({ object, entry, colour }: { object: RenderObject; entry: ObjectLaneEntry; colour: string }) {
 	const objectSpan = object.endTime - object.startTime;
 	const leftOf = (time: number) => {

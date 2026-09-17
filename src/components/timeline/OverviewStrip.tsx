@@ -202,11 +202,27 @@ export function OverviewStrip() {
 			{/* 4: severity ticks, static per scene. the drop variant is an extra
 			element on the tick, never a second mark class: a square cap centred
 			on the tick's top end, inheriting the tick's own background so colour
-			stays grade identity. only ok/meh ticks can carry it (derive.ts), so
-			the cap never needs a miss position */}
+			stays grade identity. the cap is centred on the tick it caps, so it
+			carries that width's own offset. an ok or meh tick starts mid-strip,
+			so its cap sits ABOVE the tick and the overhang is what reads; a miss
+			tick starts at the strip's top edge, where a cap hung above it would
+			be cut away by the track's overflow, so that one sits inside the edge
+			and reads by WIDTH instead -- which is why it is the wider of the
+			two, a 3px cap on a 2px column being half a pixel of red either side
+			of red. the native profile grades a drop miss (derive.ts: a dropped
+			tick or repeat broke combo), which is the only way this grade
+			carries a cap at all */}
 			{severityTicks.map((tick, i) => (
 				<div key={i} className={TICK_CLASS[tick.grade]} style={{ left: `${tick.left}%` }}>
-					{tick.drop && <div className="absolute -left-[0.75px] -top-[1.5px] h-[3px] w-[3px] bg-inherit" />}
+					{tick.drop && (
+						<div
+							className={`absolute h-[3px] bg-inherit ${
+								tick.grade === "miss"
+									? "top-0 -left-[1.5px] w-[5px]"
+									: "-top-[1.5px] -left-[0.75px] w-[3px]"
+							}`}
+						/>
+					)}
 				</div>
 			))}
 			{/* 5: progress rail, fill is rAF-driven. drawn BEFORE the fail point
