@@ -6,9 +6,9 @@ import { Fragment, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatMods } from "@/lib/format";
 import { formatLatticeStep } from "@/lib/lattice";
-import { simulationReasonText } from "@/lib/simulation";
+import { modChipLabels } from "@/lib/metadata-panel";
+import { profileText, simulationReasonText } from "@/lib/simulation";
 import { audioExtendedBounds } from "@/lib/timeline";
 import { clampSpan, zoomFactor } from "@/lib/timeline-view";
 import { selectWarnings, warningList } from "@/lib/warnings";
@@ -37,12 +37,16 @@ export function StatusBar() {
 
 	const simulation = scene?.simulation;
 	const authoritative = simulation?.status === "authoritative";
+	// three states, each named: exact, approximate under a named profile (a
+	// lazer-native play the app can only judge under the stable rules), off
 	const simulationLabel =
 		simulation === undefined
 			? "simulation unknown"
-			: authoritative
+			: simulation.status === "authoritative"
 				? "simulation authoritative"
-				: `simulation off (${simulationReasonText(simulation.reason)})`;
+				: simulation.status === "approximate"
+					? `simulation approximate (${profileText(simulation.profile)})`
+					: `simulation off (${simulationReasonText(simulation.reason)})`;
 
 	// the same audio-extended window DetailLanes and OverviewStrip zoom
 	// against (lib/timeline.ts's audioExtendedBounds) -- a replay's frames can
@@ -58,12 +62,20 @@ export function StatusBar() {
 
 	const latticeLabel = lattice ? `lattice ${formatLatticeStep(lattice)}` : "lattice unknown";
 
+	// the EFFECTIVE mods, never the legacy bitfield: a lazer-only mod has no
+	// legacy bit, so the bitfield reads "none" for a play the metadata panel
+	// lists mods for and the warning chip beside this names. one answer for
+	// both profiles, shared with that panel -- including its "?" for a file
+	// whose own list could not be read, which is not the same as no mods
+	const modChips = scene === null ? [] : modChipLabels(scene);
+	const modsLabel = modChips.length === 0 || modChips[0] === "NM" ? "none" : modChips.join(" ");
+
 	const leftRun: ReactNode[] = [
 		<span className="inline-flex items-center gap-1.5">
 			<span className={`size-[5px] rounded-full ${authoritative ? "bg-[#88b300]" : "bg-[#ffcc22]"}`} />
 			{simulationLabel}
 		</span>,
-		<span>{formatMods(scene?.replay.mods ?? 0).toLowerCase()}</span>,
+		<span>{modsLabel.toLowerCase()}</span>,
 		<span>{scene?.frames.length ?? 0} frames</span>,
 		<span>{scene?.renderPlan.objects.length ?? 0} objects</span>,
 		// the one segment nothing else in the app explains: a bare "1/512" says

@@ -8,7 +8,8 @@ import { Check, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PanelHeader } from "@/components/shell/SidePanel";
-import { formatMods, ticksToUnixMs, unixMsToTicks } from "@/lib/format";
+import { ticksToUnixMs, unixMsToTicks } from "@/lib/format";
+import { effectiveModRows, modProvenanceNote } from "@/lib/metadata-panel";
 import { useViewerStore } from "@/state/store";
 import { SectionLabel } from "./SectionLabel";
 
@@ -88,10 +89,12 @@ export function MetadataPanel() {
 		});
 	}
 
-	// formatMods joins active mod names with a space (or "none"); splitting
-	// back into chips is still real data, just re-shaped for the badge row
-	const modsText = formatMods(replay.mods);
-	const modChips = modsText === "none" ? ["none"] : modsText.split(" ");
+	// the effective mods off the play configuration: a stable file's legacy
+	// chips exactly as before, a lazer file's block entries with their changed
+	// settings, and a provenance line when the list was inferred rather than
+	// read
+	const modRows = effectiveModRows(scene);
+	const provenance = modProvenanceNote(scene);
 
 	return (
 		<>
@@ -131,12 +134,21 @@ export function MetadataPanel() {
 				<div>
 					<SectionLabel>mods</SectionLabel>
 					<div className="mt-[7px] flex flex-wrap gap-1.5">
-						{modChips.map((mod) => (
-							<Badge key={mod} variant="secondary">
-								{mod}
+						{modRows.length === 0 && scene.configuration.provenance !== "unresolvable" && (
+							<Badge variant="secondary">none</Badge>
+						)}
+						{modRows.map((mod) => (
+							<Badge key={mod.acronym} variant="secondary" title={mod.settings.join(", ") || undefined}>
+								{mod.acronym}
+								{mod.settings.length > 0 && (
+									<span className="ml-1 text-[#ffcc22]">· {mod.settings.join(", ")}</span>
+								)}
 							</Badge>
 						))}
 					</div>
+					{provenance !== null && (
+						<p className="mt-[7px] text-[10.5px] leading-[1.55] text-[#8a8a93]">{provenance}</p>
+					)}
 				</div>
 
 				<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">

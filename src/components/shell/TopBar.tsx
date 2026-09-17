@@ -10,7 +10,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatMods, formatTime } from "@/lib/format";
+import { formatTime } from "@/lib/format";
+import { modChipLabels } from "@/lib/metadata-panel";
 import { exportMenuEntries } from "@/lib/video-export-flow";
 import { keybindSuffix } from "@/playback/keybinds";
 import { useViewerStore, type ViewerMode } from "@/state/store";
@@ -130,8 +131,10 @@ export function TopBar({
 	const artist = scene?.beatmap.artist ?? "";
 	const playerName = scene?.replay.playerName ?? "unknown";
 	const duration = formatTime(derived?.bounds.maxTime ?? 0).split(".")[0];
-	const mods = formatMods(scene?.replay.mods ?? 0);
-	const modChips = mods === "none" ? ["NM"] : mods.split(" ");
+	// the EFFECTIVE mods, never the legacy bitfield -- the same rule the status
+	// bar and the metadata panel read. a lazer-only mod has no legacy bit, so
+	// the bitfield would chip "NM" for a play the rest of the chrome names
+	const modChips = scene === null ? ["NM"] : modChipLabels(scene);
 
 	return (
 		<header className="flex min-w-0 items-center border-b border-border bg-surface-bar px-2 pl-2.5">
