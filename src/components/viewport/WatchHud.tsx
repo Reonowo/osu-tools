@@ -26,6 +26,7 @@ import { useShellPresence } from "@/lib/use-presence";
 import { cn } from "@/lib/utils";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore } from "@/state/store";
+import { simulated } from "@/lib/simulation";
 
 // physical keys, not raw bits -- a keyboard tap must light K1 alone, never
 // K1 and M1 together (buttons.ts's PHYSICAL_BUTTONS)
@@ -101,9 +102,11 @@ export function WatchHud() {
 	const hpFillRef = useRef<HTMLDivElement>(null);
 	const hpReadoutRef = useRef<HTMLDivElement>(null);
 
-	// combo/accuracy render only when the simulation is authoritative --
-	// unchanged rule, carried over from HudReadout
-	const authoritative = scene !== null && scene.simulation.status === "authoritative";
+	// combo/accuracy render whenever the scene carries a timeline, approximate
+	// included: the HUD is a display surface, and an approximate play has a
+	// combo to show like any other
+	const timeline = scene === null ? null : simulated(scene.simulation);
+	const authoritative = timeline !== null;
 
 	// the HP bar's own mode gate, folded once here rather than re-read at each
 	// of its three sites (the loop's branch, the effect's deps and the jsx)
@@ -121,7 +124,7 @@ export function WatchHud() {
 	// the score needs a curve to read: null is a fold that never ran, which the
 	// panel answers with the header's own total and which the HUD -- having no
 	// second number to show -- answers by not drawing the line at all
-	const scoreCurve = scene?.simulation.status === "authoritative" ? scene.simulation.scoreCurve : null;
+	const scoreCurve = timeline?.scoreCurve ?? null;
 	const scoreActive = scoreVisible && scoreCurve !== null;
 
 	// the pop needs the counter on screen, the master on and its own row on.
@@ -144,9 +147,9 @@ export function WatchHud() {
 	// at all is showing, since a rAF loop writing to four unmounted refs is
 	// exactly the work these rows exist to avoid
 	useEffect(() => {
-		if (!authoritative || scene === null) return;
+		if (timeline === null || scene === null) return;
 		if (!comboVisible && !accuracyVisible && !scoreActive && !hpActive) return;
-		const events = scene.simulation.status === "authoritative" ? scene.simulation.events : [];
+		const events = timeline.events;
 		const steps = scoreCurve ?? [];
 		const curve = derived?.hp.curve ?? [];
 		const changes = derived?.comboChanges ?? [];

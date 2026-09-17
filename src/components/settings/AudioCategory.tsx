@@ -29,6 +29,7 @@ import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AUDIO_OFFSET_MAX, AUDIO_OFFSET_MIN, VOLUME_MAX, VOLUME_MIN } from "@/state/defaults";
 import { useViewerStore, type AudioSettings, type GameplaySettings } from "@/state/store";
+import { hasTimeline } from "@/lib/simulation";
 
 /** the audio group's own toggles, as data -- categories.test.ts reads this
  * to assert every persisted audio pref reaches a control */
@@ -145,7 +146,7 @@ export function AudioCategory({
 	// settings for exactly that
 	const scene = useViewerStore((s) => s.scene);
 	const noAudioFile = scene !== null && scene.audioPath === null;
-	const notSimulated = scene !== null && scene.simulation.status !== "authoritative";
+	const notSimulated = scene !== null && !hasTimeline(scene.simulation);
 
 	return (
 		<div className="grid gap-4">

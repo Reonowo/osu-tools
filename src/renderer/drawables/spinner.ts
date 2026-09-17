@@ -36,6 +36,7 @@ import { isLeft, isRight } from "../../engine/buttons";
 import { cursorStateAt } from "../../engine/interpolation";
 import { jump, trackValueAt, tween, type Track } from "../../engine/transforms";
 import type { FrameDto } from "../../lib/scene-types";
+import { hasTimeline } from "../../lib/simulation";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
 
 export function spinnerRotationSamples(
@@ -350,9 +351,9 @@ export class SpinnerDrawable implements ObjectDrawable {
 	private readonly startTime: number;
 	private readonly endTime: number;
 	private readonly frames: FrameDto[];
-	/** simulation.status === "authoritative" -- gates whether spinTimes (the
-	 * simulator's spinnerSpin judgements) or the local rotation integration
-	 * drives progress (decision 5) */
+	/** whether the scene carries a timeline (authoritative or approximate) --
+	 * gates whether spinTimes (the simulator's spinnerSpin judgements) or the
+	 * local rotation integration drives progress (decision 5) */
 	private readonly simulated: boolean;
 
 	constructor(ctx: RenderContext, objectIndex: number) {
@@ -363,7 +364,7 @@ export class SpinnerDrawable implements ObjectDrawable {
 		this.endTime = obj.endTime;
 		this.spinsRequired = kind.spinsRequired;
 		this.frames = ctx.scene.frames;
-		this.simulated = ctx.scene.simulation.status === "authoritative";
+		this.simulated = hasTimeline(ctx.scene.simulation);
 		this.rotation = spinnerRotationSamples(ctx.scene.frames, obj.startTime, obj.endTime);
 		this.spinTimes = ctx.derived.judgementsByObject[objectIndex]
 			.filter((e) => e.kind.type === "spinnerSpin")

@@ -28,6 +28,7 @@ import {
 } from "react";
 import { EditContextMenu } from "@/components/EditContextMenu";
 import { frameEditGate } from "@/editor/gate";
+import { hasTimeline } from "@/lib/simulation";
 import { CLICK_SLOP_SCREEN_PX } from "@/editor/gesture-controller";
 import { pressRunCommit } from "@/editor/press-commits";
 import { pressDrag, type PressDragEffects, type PressDragPreview } from "@/editor/press-drag";
@@ -179,7 +180,7 @@ export function DetailLanes() {
 	// coarse zoom -- resolving with zoom is the intended behaviour, and no
 	// bands draw on a NotSimulated scene
 	const hitWindowBand = useMemo(() => {
-		if (scene === null || scene.simulation.status !== "authoritative") return null;
+		if (scene === null || !hasTimeline(scene.simulation)) return null;
 		const windows = scene.renderPlan.hitWindows;
 		if (!(windows.meh > 0)) return null;
 		const stop = (ms: number) => `${((ms / (2 * windows.meh)) * 100).toFixed(3)}%`;
