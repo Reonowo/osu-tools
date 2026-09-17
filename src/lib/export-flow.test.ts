@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	defaultExportPath,
 	expectationCopy,
+	truncationNote,
 	exportPathKind,
 	initialOverwriteConsent,
 	offersOverwriteConfirm,
@@ -89,6 +90,8 @@ describe("post-export summary", () => {
 		maxCombo: 1204,
 		perfect: false,
 		totalScore: 31415926,
+		truncatedAt: null,
+		lifeBarWritten: true,
 		lifeBarConverged: true
 	};
 
@@ -119,6 +122,27 @@ describe("post-export summary", () => {
 		// on the numbers behind it, not a missing field
 		const rows = regeneratedSummaryRows({ ...regenerated, lifeBarConverged: false });
 		expect(rows.find((r) => r.label === "life bar")!.value).toBe("regenerated (drain search did not converge)");
+	});
+
+	test("a native export's empty life bar is never offered as a regenerated one", () => {
+		// lazer writes no graph, so the projection writes none -- and the row
+		// beside the promise must agree with the bytes
+		const rows = regeneratedSummaryRows({ ...regenerated, lifeBarWritten: false });
+		expect(rows.find((r) => r.label === "life bar")!.value).toBe("none written — lazer writes no graph");
+		// and the expectation sentence stops promising one
+		expect(expectationCopy("regenerating", false, false)).not.toContain("life bar graph included");
+		expect(expectationCopy("regenerating", false, false)).toContain("left empty");
+		expect(expectationCopy("regenerating")).toContain("life bar graph included");
+	});
+
+	test("a failed native export says its fields stop at the fail", () => {
+		// the panels show the whole-play fold at the same moment, so a summary
+		// that silently carries lazer's truncated one is two numbers with no
+		// explanation between them
+		expect(truncationNote(regenerated)).toBeNull();
+		const note = truncationNote({ ...regenerated, truncatedAt: 28509.5 });
+		expect(note).toContain("28.5s");
+		expect(note).toContain("not the whole-play totals");
 	});
 
 	test("passthrough and carried get their own outcome copy", () => {

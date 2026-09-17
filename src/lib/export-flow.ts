@@ -19,11 +19,15 @@ export function exportPathKind(framesDirty: boolean, metadataDirty: boolean): Ex
  * incomplete play's regenerating export is honest-by-construction: the
  * derived fields describe the exported frames' full-map simulation, decayed
  * tail included, and the copy says so before the user commits */
-export function expectationCopy(kind: ExportPathKind, incomplete = false): string {
+export function expectationCopy(kind: ExportPathKind, incomplete = false, writesLifeBar = true): string {
 	switch (kind) {
 		case "regenerating": {
-			const base =
-				"frames were edited: every derived header field is regenerated from the re-simulated timeline, the life bar graph included, and the replay hash is recomputed";
+			// the native projection writes no life bar graph, because a lazer
+			// client writes none -- so the sentence must not promise one it is
+			// about to leave empty
+			const base = writesLifeBar
+				? "frames were edited: every derived header field is regenerated from the re-simulated timeline, the life bar graph included, and the replay hash is recomputed"
+				: "frames were edited: every derived header field is regenerated from the re-simulated timeline and the replay hash is recomputed, and the life bar graph is left empty as a lazer client leaves it";
 			const endedEarly =
 				". this play ended early, so the regenerated fields describe the exported frames simulated over the whole map — every object past the end of the frames counts as a miss";
 			return incomplete ? base + endedEarly : base;
@@ -162,12 +166,28 @@ export function regeneratedSummaryRows(fields: RegeneratedFields): { label: stri
 		{ label: "total score", value: fields.totalScore.toLocaleString() },
 		{
 			label: "life bar",
-			// the graph is written either way -- the search not settling is a
-			// caveat on the numbers behind it, not a missing field
-			value: fields.lifeBarConverged ? "regenerated" : "regenerated (drain search did not converge)"
+			// three states, because the native projection writes no graph at
+			// all: an unsettled search is a caveat on the numbers behind a
+			// written graph, and an empty field is not a regenerated one
+			value: !fields.lifeBarWritten
+				? "none written — lazer writes no graph"
+				: fields.lifeBarConverged
+					? "regenerated"
+					: "regenerated (drain search did not converge)"
 		},
 		{ label: "replay hash", value: "recomputed" }
 	];
+}
+
+/** the sentence a FAILED native export needs beside its summary: lazer's own
+ * score processor stopped counting at the failing result, so the regenerated
+ * header and block carry the fold up to there rather than the whole-timeline
+ * fold every panel in the app is showing at the same moment. without this the
+ * two disagree on screen with nothing saying why. null on every other export */
+export function truncationNote(fields: RegeneratedFields): string | null {
+	if (fields.truncatedAt === null) return null;
+	const at = (fields.truncatedAt / 1000).toFixed(1);
+	return `this play failed: the fields above count up to the fail at ${at}s, exactly as lazer's own score processor did, so they are not the whole-play totals the panels show`;
 }
 
 /** the outcome sentence for the two paths that regenerate nothing */

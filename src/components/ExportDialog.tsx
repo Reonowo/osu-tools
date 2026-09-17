@@ -25,7 +25,8 @@ import {
 	initialOverwriteConsent,
 	offersOverwriteConfirm,
 	outcomeCopy,
-	regeneratedSummaryRows
+	regeneratedSummaryRows,
+	truncationNote
 } from "@/lib/export-flow";
 import { isIpcError } from "@/lib/ipc";
 import type { ExportResult, IpcError } from "@/lib/scene-types";
@@ -64,6 +65,9 @@ function prefillFor(osrPath: string): string {
 export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
 	const osrPath = useViewerStore((s) => s.osrPath);
 	const incompleteness = useViewerStore((s) => s.scene?.incompleteness ?? null);
+	// the native projection writes no life bar graph, because a lazer client
+	// writes none -- the expectation sentence must not promise one
+	const writesLifeBar = useViewerStore((s) => s.scene?.configuration.profile !== "native");
 	// the session identity, not the path: reloading the same .osr installs a
 	// new scene under an unchanged osrPath, and that still has to reset the
 	// dialog and retire any request belonging to the session it replaced
@@ -143,7 +147,9 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 			<DialogContent className="sm:max-w-[452px]">
 				<DialogHeader>
 					<DialogTitle>export replay</DialogTitle>
-					<DialogDescription>{expectationCopy(pathKind, incompleteness !== null)}</DialogDescription>
+					<DialogDescription>
+						{expectationCopy(pathKind, incompleteness !== null, writesLifeBar)}
+					</DialogDescription>
 				</DialogHeader>
 
 				{phase.step === "done" ? (
@@ -171,6 +177,11 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 										</span>
 									))}
 								</div>
+							)}
+							{phase.result.regenerated !== null && truncationNote(phase.result.regenerated) !== null && (
+								<p className="mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.55] text-[#fbbf24]">
+									{truncationNote(phase.result.regenerated)}
+								</p>
 							)}
 						</div>
 						<p className="break-all text-[10.5px] text-[#8a8a93]">{phase.result.path}</p>
