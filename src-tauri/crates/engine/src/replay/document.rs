@@ -513,11 +513,11 @@ impl ReplayDocument {
     ///   ignored (the original simulation-derived fields still describe the
     ///   play).
     /// - **frames dirty** -> the action list reserialized from the edited
-    ///   frames with `derived` overlaid onto the header and the trailer
-    ///   stripped, since a block describing the source's play would lie
-    ///   about the edited one; refusing (typed) when `derived` is absent,
-    ///   since a frame-dirty header without regenerated fields would
-    ///   describe a different play.
+    ///   frames with `derived` overlaid onto the header, the source's online
+    ///   score id cleared, and the trailer stripped, since a block describing
+    ///   the source's play would lie about the edited one; refusing (typed)
+    ///   when `derived` is absent, since a frame-dirty header without
+    ///   regenerated fields would describe a different play.
     ///
     /// every dirty export -- carried included -- recomputes the replay hash
     /// from the (possibly edited) player name and timestamp.
@@ -582,6 +582,16 @@ impl ReplayDocument {
                 "a frame-dirty export requires regenerated derived fields".into(),
             ));
         };
+        // the online score id is CLEARED on this branch alone, for the same
+        // reason `export_regenerated_native` clears it: an edited play is not
+        // the play the server recorded, and zero is lazer's own spelling of
+        // none -- legacyscoredecoder.cs:112-113 reads a zero back as
+        // `LegacyOnlineID = -1`. the carried branch above must NOT do this:
+        // its frames are byte-identical, so every field describing them still
+        // describes them, and a rename stays exactly the rename ADR-0007
+        // promises. a no-op below version 20121008, where `encode_osr` does
+        // not frame the field at all
+        header.online_score_id = 0;
         // the overlay writes the regenerated life bar graph along with
         // every other derived field, so nothing here touches it
         derived.overlay_onto(&mut header);
@@ -1050,7 +1060,7 @@ mod tests {
                 mods: 0,
                 life_graph: None,
                 timestamp_ticks: 638_712_000_000_000_000,
-                online_score_id: 0,
+                online_score_id: SIXTY_FOUR_BIT_SCORE_ID,
             },
             actions: vec![
                 ReplayAction {
@@ -1135,6 +1145,16 @@ mod tests {
     /// stands in for whatever the health fold produced; export cares only
     /// that the regenerating path writes exactly this string
     const REGENERATED_GRAPH: &str = "1000|1,3200|0.86,";
+
+    /// an online score id that only fits the 64-bit field, so a carried one
+    /// is unmistakable in an export -- the shape a play downloaded from the
+    /// website has, and the value `synthetic_file` carries so that the
+    /// carried path's byte equalities say something about this field. it
+    /// therefore cannot be encoded at a replay version in
+    /// [20121008, 20140721), where `encode_osr` frames the id in 32 bits and
+    /// refuses a value that does not fit rather than writing the low half;
+    /// every call site is above that window
+    const SIXTY_FOUR_BIT_SCORE_ID: u64 = 4_294_967_297;
 
     /// same header shape as `synthetic_file`, but with a caller-supplied action
     /// list -- used for cases that need actions synthetic_file's fixed list
@@ -1381,9 +1401,7 @@ mod tests {
         // simulation says was never played
         let (_, mut decoded) = canonical_roundtrip(30000000, Vec::new());
         decoded.header.mods = 64;
-        // a value that only fits the 64-bit field, so a carried id would be
-        // unmistakable in the export
-        decoded.header.online_score_id = 4_294_967_297;
+        decoded.header.online_score_id = SIXTY_FOUR_BIT_SCORE_ID;
         let mut doc = ReplayDocument::new(decoded, 14);
         doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
 
@@ -1407,6 +1425,30 @@ mod tests {
         assert_eq!(re.header.mods, 0, "the bitfield is the projection, not the source's 64");
         assert_eq!(
             re.header.online_score_id, 0,
+            "an edited play never claims the score id the server recorded for the original"
+        );
+    }
+
+    /// the STABLE regenerating export clears the id on the same reasoning the
+    /// native one does, and on the frames-dirty branch alone: a rename leaves
+    /// the frames byte-identical, so every field describing them -- this one
+    /// included -- still describes them (ADR-0007)
+    #[test]
+    fn a_stable_regeneration_clears_the_online_score_id_and_a_rename_keeps_it() {
+        let (_, decoded) = canonical_roundtrip(20240101, Vec::new());
+        assert_eq!(decoded.header.online_score_id, SIXTY_FOUR_BIT_SCORE_ID);
+        let mut doc = ReplayDocument::new(decoded, 14);
+
+        // carried: a rename rewrites the hash and nothing else
+        doc.set_player_name(Some("renamed".into()));
+        let renamed = decode_osr(&doc.export_with_derived(None).unwrap()).unwrap();
+        assert_eq!(renamed.header.online_score_id, SIXTY_FOUR_BIT_SCORE_ID);
+
+        // regenerating: an edited play is not the play the server recorded
+        doc.move_frame(0, Vec2::new(1.0, 2.0)).unwrap();
+        let regenerated = decode_osr(&doc.export_with_derived(Some(&derived())).unwrap()).unwrap();
+        assert_eq!(
+            regenerated.header.online_score_id, 0,
             "an edited play never claims the score id the server recorded for the original"
         );
     }
