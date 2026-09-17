@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fromHex } from "../../engine/color";
 import { trackValueAt } from "../../engine/transforms";
-import { testScene } from "../../test/scene";
+import { nativeTestScene, testScene } from "../../test/scene";
 import { ALL_PIECES_ENABLED, resolvePieces } from "@/skin/pieces";
 import { BUNDLED_SKIN } from "@/skin/texture-sources";
 import { ARGON_COMBO_COLOURS } from "@/skin/combo-colours";
@@ -29,7 +29,9 @@ describe("judgement specs", () => {
 	});
 
 	test("not-simulated scenes produce nothing", () => {
-		const scene = testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } });
+		const scene = testScene({
+			simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
+		});
 		expect(judgementSpecs(scene, ARGON_PIECES, ACCENTS)).toHaveLength(0);
 	});
 
@@ -98,21 +100,21 @@ describe("judgement specs", () => {
 					{
 						time: 1000,
 						objectIndex: 0,
-						kind: { type: "sliderHead", hit: true },
+						kind: { type: "sliderHead", grade: "great" },
 						comboAfter: 1,
 						accuracyAfter: 1
 					},
 					{
 						time: 1250,
 						objectIndex: 0,
-						kind: { type: "sliderTick", hit: false },
+						kind: { type: "sliderTick", hit: false, nestedIndex: null },
 						comboAfter: 0,
 						accuracyAfter: 1
 					},
 					{
 						time: 1500,
 						objectIndex: 0,
-						kind: { type: "sliderTail", hit: true },
+						kind: { type: "sliderTail", hit: true, nestedIndex: null },
 						comboAfter: 1,
 						accuracyAfter: 1
 					},
@@ -124,7 +126,15 @@ describe("judgement specs", () => {
 						accuracyAfter: 0.9
 					}
 				],
-				totals: { count300: 0, count100: 1, count50: 0, countMiss: 0, maxCombo: 1 }
+				totals: {
+					count300: 0,
+					count100: 1,
+					count50: 0,
+					countMiss: 0,
+					maxCombo: 1,
+					accuracy: 100 / 300,
+					rank: "d"
+				}
 			}
 		});
 		const specs = judgementSpecs(scene, ARGON_PIECES, ACCENTS);
@@ -134,6 +144,112 @@ describe("judgement specs", () => {
 		const aggregate = specs.find((s) => s.piece.kind === "procedural" && s.piece.style === "text")!;
 		expect([aggregate.x, aggregate.y]).toEqual([200, 100]);
 		expect(aggregate.grade).toBe("ok");
+	});
+
+	test("under the native profile the slider head's own grade pops at the head, with no aggregate to draw", () => {
+		const base = testScene();
+		const slider = {
+			...base.renderPlan.objects[0],
+			endTime: 1500,
+			kind: {
+				type: "slider" as const,
+				vertices: [0, 0, 100, 0],
+				cumulativeLengths: [0, 100],
+				distance: 100,
+				segmentEnds: [1],
+				repeatCount: 0,
+				spanCount: 1,
+				spanDuration: 500,
+				duration: 500,
+				endPosition: [200, 100] as [number, number],
+				snakeInDuration: 200,
+				nested: [
+					{
+						kind: "head" as const,
+						spanIndex: 0,
+						time: 1000,
+						position: [100, 100] as [number, number],
+						pathProgress: 0,
+						preempt: 600,
+						fadeIn: 400,
+						samples: []
+					},
+					{
+						kind: "tail" as const,
+						spanIndex: 0,
+						time: 1500,
+						position: [200, 100] as [number, number],
+						pathProgress: 1,
+						preempt: 600,
+						fadeIn: 400,
+						samples: []
+					}
+				]
+			}
+		};
+		const events = [
+			{
+				time: 1070,
+				objectIndex: 0,
+				kind: { type: "sliderHead" as const, grade: "ok" as const },
+				comboAfter: 1,
+				accuracyAfter: 100 / 300
+			},
+			{
+				time: 1464,
+				objectIndex: 0,
+				kind: { type: "sliderTail" as const, hit: true, nestedIndex: 1 },
+				comboAfter: 2,
+				accuracyAfter: 250 / 450
+			},
+			{
+				time: 1500,
+				objectIndex: 0,
+				kind: { type: "sliderEnd" as const, complete: true },
+				comboAfter: 2,
+				accuracyAfter: 250 / 450
+			}
+		];
+		const native = nativeTestScene({
+			renderPlan: { ...base.renderPlan, objects: [slider] },
+			simulation: {
+				status: "authoritative",
+				hpCurve: [],
+				scoreCurve: [],
+				events,
+				totals: {
+					count300: 0,
+					count100: 1,
+					count50: 0,
+					countMiss: 0,
+					maxCombo: 2,
+					accuracy: 250 / 450,
+					rank: "d",
+					statistics: [
+						{ result: "ok", count: 1 },
+						{ result: "slider_tail_hit", count: 1 },
+						{ result: "ignore_hit", count: 1 }
+					]
+				}
+			}
+		});
+		const specs = judgementSpecs(native, ARGON_PIECES, ACCENTS);
+		expect(specs).toHaveLength(1);
+		expect(specs[0]).toMatchObject({
+			time: 1070,
+			x: 100,
+			y: 100,
+			grade: "ok",
+			piece: { kind: "procedural", style: "text" }
+		});
+
+		// the same events under the stable profile draw nothing for the head:
+		// the aggregate is the stable slider's popup, and there is none here
+		const stable = testScene({
+			renderPlan: { ...base.renderPlan, objects: [slider] },
+			simulation: { ...native.simulation }
+		});
+		expect(judgementSpecs(stable, ARGON_PIECES, ACCENTS)).toHaveLength(0);
 	});
 
 	test("hit slider ticks/repeats produce nothing even when nested data matches", () => {
@@ -181,12 +297,12 @@ describe("judgement specs", () => {
 					{
 						time: 1250,
 						objectIndex: 0,
-						kind: { type: "sliderTick", hit: true },
+						kind: { type: "sliderTick", hit: true, nestedIndex: null },
 						comboAfter: 1,
 						accuracyAfter: 1
 					}
 				],
-				totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 1 }
+				totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 1, accuracy: 0, rank: "d" }
 			}
 		});
 		expect(judgementSpecs(scene, ARGON_PIECES, ACCENTS)).toHaveLength(0);
@@ -207,7 +323,15 @@ describe("judgement specs", () => {
 						accuracyAfter: 1
 					}
 				],
-				totals: { count300: 0, count100: 0, count50: 1, countMiss: 0, maxCombo: 1 }
+				totals: {
+					count300: 0,
+					count100: 0,
+					count50: 1,
+					countMiss: 0,
+					maxCombo: 1,
+					accuracy: 50 / 300,
+					rank: "d"
+				}
 			}
 		});
 		const specs = judgementSpecs(scene, ARGON_PIECES, ACCENTS);
@@ -234,7 +358,15 @@ describe("judgement specs", () => {
 								accuracyAfter: 1
 							}
 						],
-						totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 1 }
+						totals: {
+							count300: 0,
+							count100: 0,
+							count50: 0,
+							countMiss: 0,
+							maxCombo: 1,
+							accuracy: 0,
+							rank: "d"
+						}
 					}
 				}),
 				ARGON_PIECES,
@@ -279,7 +411,15 @@ describe("judgement specs", () => {
 						accuracyAfter: 1
 					}
 				],
-				totals: { count300: 0, count100: 0, count50: 1, countMiss: 0, maxCombo: 1 }
+				totals: {
+					count300: 0,
+					count100: 0,
+					count50: 1,
+					countMiss: 0,
+					maxCombo: 1,
+					accuracy: 50 / 300,
+					rank: "d"
+				}
 			}
 		});
 		const specs = judgementSpecs(scene, ARGON_PIECES, ACCENTS);

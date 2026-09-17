@@ -16,6 +16,7 @@ import {
 } from "@/skin/legacy/constants";
 import type { JudgementPieceSpec, JudgedResult, SkinPieces } from "@/skin/pieces";
 import type { Grade, LoadedScene, RenderNested } from "../../lib/scene-types";
+import { simulated, simulatedProfile } from "../../lib/simulation";
 
 /** osucolour.cs:325,331,337,464 -- Blue/Yellow/Green/Red, read via ForHitResult
  * (osucolour.cs:114-145). reused by the timeline (task 20) for marker colours */
@@ -55,14 +56,33 @@ function nestedAt(nested: RenderNested[], time: number, kind: RenderNested["kind
 	return nested.find((n) => n.kind === kind && Math.abs(n.time - time) <= 1) ?? null;
 }
 
+/** the nested element a tick or repeat judgement names, by the identity it
+ * carries. a stable-only tick (no lazer counterpart, null index) falls back
+ * to the element of its kind at its own time, the one place the time join
+ * survives */
+function nestedFor(
+	nested: RenderNested[],
+	kind: { type: "sliderTick" | "sliderRepeat"; nestedIndex: number | null },
+	time: number
+): RenderNested | null {
+	const wanted = kind.type === "sliderTick" ? "tick" : "repeat";
+	if (kind.nestedIndex !== null) {
+		const element = nested[kind.nestedIndex];
+		return element !== undefined && element.kind === wanted ? element : null;
+	}
+	return nestedAt(nested, time, wanted);
+}
+
 /** drawableosujudgement.cs:39-71 -- popup position (slider tail for the
  * aggregate, playfield centre for spinners, the object itself otherwise). what
  * each result draws is not decided here: every candidate is put to the skin
  * (argonProJudgementPiece) and only a `piece` answer becomes a spec */
 export function judgementSpecs(scene: LoadedScene, pieces: SkinPieces, accents: readonly Rgba[]): JudgementSpec[] {
-	if (scene.simulation.status !== "authoritative") return [];
+	const nativelyJudged = simulatedProfile(scene) === "native";
+	const timeline = simulated(scene.simulation);
+	if (timeline === null) return [];
 	const specs: JudgementSpec[] = [];
-	scene.simulation.events.forEach((event, seed) => {
+	timeline.events.forEach((event, seed) => {
 		const obj = scene.renderPlan.objects[event.objectIndex];
 		const kind = event.kind;
 		// what the skin is asked about, and where the piece it may return
@@ -79,6 +99,16 @@ export function judgementSpecs(scene: LoadedScene, pieces: SkinPieces, accents: 
 				result = kind.grade;
 				[x, y] = obj.kind.type === "slider" ? obj.kind.endPosition : obj.position;
 				break;
+			case "sliderHead":
+				// under the native profile the head's own grade is the slider's
+				// popup, at the head, as lazer draws it: DrawableSlider.DisplayResult
+				// is the classic flag (drawableslider.cs:58) and the head inherits
+				// the circle's display. under stable the aggregate draws instead
+				// and the head, a classic tick judgement there, draws nothing
+				if (!nativelyJudged) return;
+				result = kind.grade;
+				[x, y] = obj.position;
+				break;
 			case "spinnerFinal":
 				result = kind.grade;
 				x = 256;
@@ -87,7 +117,7 @@ export function judgementSpecs(scene: LoadedScene, pieces: SkinPieces, accents: 
 			case "sliderTick":
 			case "sliderRepeat": {
 				if (obj.kind.type !== "slider") return;
-				const nested = nestedAt(obj.kind.nested, event.time, kind.type === "sliderTick" ? "tick" : "repeat");
+				const nested = nestedFor(obj.kind.nested, kind, event.time);
 				if (nested === null) return;
 				result = kind.hit ? "largeTickHit" : "largeTickMiss";
 				[x, y] = nested.position;

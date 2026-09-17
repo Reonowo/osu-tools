@@ -81,7 +81,9 @@ function stubContextWithoutCanvas(scene: ReturnType<typeof testScene>): RenderCo
 
 describe("JudgementsDrawable, notSimulated (decision 5)", () => {
 	test("constructs and updates across a wide time range without throwing or ever building a popup", () => {
-		const scene = testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } });
+		const scene = testScene({
+			simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
+		});
 		const ctx = stubContext(scene);
 		const drawable = new JudgementsDrawable(ctx);
 
@@ -113,7 +115,15 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 						accuracyAfter: 1
 					}
 				],
-				totals: { count300: 0, count100: 1, count50: 0, countMiss: 0, maxCombo: 1 }
+				totals: {
+					count300: 0,
+					count100: 1,
+					count50: 0,
+					countMiss: 0,
+					maxCombo: 1,
+					accuracy: 100 / 300,
+					rank: "d"
+				}
 			}
 		});
 	}
@@ -191,12 +201,12 @@ describe("JudgementsDrawable, backward-seek orphan regression (playfield.ts's re
 					{
 						time: 1000,
 						objectIndex: 0,
-						kind: { type: "sliderTick", hit: false },
+						kind: { type: "sliderTick", hit: false, nestedIndex: null },
 						comboAfter: 0,
 						accuracyAfter: 1
 					}
 				],
-				totals: { count300: 0, count100: 0, count50: 0, countMiss: 1, maxCombo: 0 }
+				totals: { count300: 0, count100: 0, count50: 0, countMiss: 1, maxCombo: 0, accuracy: 0, rank: "d" }
 			}
 		});
 		const ctx = stubContextWithoutCanvas(scene);

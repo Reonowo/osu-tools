@@ -18,9 +18,9 @@ export interface CircleResult {
 export function resolveCircleResult(events: JudgementEventDto[], startTime: number): CircleResult {
 	for (const event of events) {
 		if (event.kind.type === "circle") return { time: event.time, grade: event.kind.grade };
-		if (event.kind.type === "sliderHead") {
-			return { time: event.time, grade: event.kind.hit ? "great" : "miss" };
-		}
+		// the head carries its own timing grade: great or miss under the
+		// stable profile, the grade lazer gave under the native one
+		if (event.kind.type === "sliderHead") return { time: event.time, grade: event.kind.grade };
 	}
 	// not simulated: the stand-in is a clean hit exactly on time (decision 5)
 	return { time: startTime, grade: "great" };

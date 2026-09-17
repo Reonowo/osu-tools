@@ -31,7 +31,7 @@ describe("resolveCircleResult", () => {
 					{
 						time: 990,
 						objectIndex: 0,
-						kind: { type: "sliderHead", hit: false },
+						kind: { type: "sliderHead", grade: "miss" },
 						comboAfter: 0,
 						accuracyAfter: 1
 					}
