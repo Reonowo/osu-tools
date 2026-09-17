@@ -10,20 +10,33 @@
 //! lazer judges inside `FrameStabilityContainer`'s update loop, and the
 //! replay handler decides which instants that loop may visit
 //! (framedreplayinputhandler.cs:113-160): the clock always lands on every
-//! replay frame's own time, and while a frame with a button down is the
-//! current one and the next frame is within 20ms (`AllowedImportantTimeSpan`,
-//! 1000/60 * 1.2), no time strictly between the two may be used at all --
-//! the next update is the next frame. outside such an important section
-//! the display rate sets the cadence, which no replay records; this walk
-//! takes the limit of an arbitrarily fast display, visiting every instant
-//! at which something can change: every frame (duplicated timestamps as
-//! separate updates, in order, since `SetFrameFromTime` steps one frame
-//! per call), every circle timeout, nested element time, tail leniency
-//! point and end time -- except those the important-section rule defers to
-//! the next frame. an update that leaves a judgement pending on the next
-//! update (a slider whose tail judged this update, a tail whose last tick
-//! did) is followed by another at the same instant, which is where the
-//! next display frame would have landed.
+//! replay frame's own time, and otherwise `SetFrameFromTime` clamps the
+//! proposed time into the current frame span and hands it straight back, so
+//! every instant in that span is one the loop may land on. the display rate
+//! sets the cadence within it, which no replay records; this walk takes the
+//! limit of an arbitrarily fast display, visiting every instant at which
+//! something can change: every frame (duplicated timestamps as separate
+//! updates, in order, since `SetFrameFromTime` steps one frame per call),
+//! every circle timeout, nested element time, tail leniency point and end
+//! time. an update that leaves a judgement pending on the next update (a
+//! slider whose tail judged this update, a tail whose last tick did) is
+//! followed by another at the same instant, which is where the next display
+//! frame would have landed.
+//!
+//! the handler's **important section** -- a pressed frame forbidding every
+//! time strictly inside the 20ms before its successor -- is NOT modelled,
+//! and that is a port decision rather than an omission. the gate reads
+//! `FrameAccuratePlayback` (framedreplayinputhandler.cs:78,110), a public
+//! field the game assigns nowhere: the only assignment in the whole
+//! checkout is in `FramedReplayInputHandlerTest`. so `inImportantSection` is
+//! always false in a real client, `SetFrameFromTime` never returns null for
+//! that reason, and a walk that honours the rule refuses instants lazer
+//! visits. it was modelled here until 2026-09-17, and refusing them cost
+//! slider tails: a tail's leniency point (`end - 36`) falls inside a frame
+//! span far more often than not, and deferring it to the next frame samples
+//! tracking up to a frame late, by which time the follow circle has moved
+//! on. measured against the pinned client over the native corpus, that one
+//! rule was the whole of the tail divergence (`docs/engine-parity.md`).
 //!
 //! within one update the order is lazer's: input first (the cursor's
 //! position, then releases, then presses in list order, each press taken
@@ -39,9 +52,8 @@
 //! a press-triggered judgement lands at the frame's time; a timeout at the
 //! window's own edge (lazer's `TimeAbsolute` clamps the raw update time to
 //! the judgement offset, so the recorded time is the edge whichever update
-//! crossed it); a nested element's at its own time, or at the frame the
-//! important-section rule deferred it to. the dumps this walk is pinned
-//! against record no times at all -- they are the one thing lazer's own
+//! crossed it); a nested element's at its own time. the dumps this walk is
+//! pinned against record no times at all -- they are the one thing lazer's own
 //! cadence does not fix -- so the pin is order, result and combo.
 //!
 //! # the sub-frame limit
@@ -59,22 +71,25 @@
 //! LEAVES (`scoring.rs`'s `combo_portion`, scoreprocessor.cs:344), so the
 //! pair scores differently and the running combo stays off by one for every
 //! scorable judgement until the next break -- both are native oracle fields
-//! (`NATIVE_FIELD_NAMES`), so triage should expect the pair, not one; and
-//! `SliderInputManager`'s accepted-key unlock is a THREE-PASS rule -- the
-//! arming test reads `last_pressed`, which each pass fills at its own END
+//! (`NATIVE_FIELD_NAMES`), so triage should expect the pair, not one; and a
+//! spinner's rotation accumulates once per display frame, so a bonus tick
+//! either side of the last sample falls one way in lazer and the other
+//! here.
+//!
+//! `SliderInputManager`'s accepted-key unlock is NOT among them, though it
+//! reads like it should be. it is a THREE-PASS rule in lazer -- the arming
+//! test reads `lastPressedActions`, which each pass fills at its own END
 //! (sliderinputmanager.cs:252-261), so one pass must OBSERVE the other key
-//! released, a second arms `time_to_accept_any_key_after`, and only a third
+//! released, a second arms `timeToAcceptAnyKeyAfter`, and only a third
 //! accepts any key (cs:286's `Time.Current <= ...` keeps the arming pass
-//! itself restricted). lazer pays that over three display frames, a few ms;
-//! this walk pays it over three visited instants, so the gap runs up to TWO
-//! replay frames from the release. the first two move no statistic. the
-//! third can move a count: a tick or
-//! repeat falling inside that widened gap is a `LargeTickMiss` here and a
-//! `LargeTickHit` in lazer, which costs combo and accuracy. no dump in the
-//! family reproduces it and the corpus pair does not either, so it is
-//! written down rather than modelled -- buying it back means visiting an
-//! extra instant per button-state change on a tracked slider, which is a
-//! cadence change this walk's fixtures would have to be re-pinned against
+//! itself restricted). lazer pays that over three display frames, a few ms,
+//! and a walk paying it over three of the instants IT visits would charge
+//! up to two whole replay frames. so this walk takes that rule's own
+//! fast-display limit instead, reading the CURRENT pass's pressed set
+//! (`slider.rs`'s note at `update_tracking`), which converges on the same
+//! behaviour as the display rate rises. measured over 65 native corpus
+//! pairs, taking the limit moved nothing at all: the rule is real, and it
+//! was never what the tail divergences were made of.
 //!
 //! the walk emits the timeline kinds of `simulation::score` and folds
 //! lazer's own score processor beside them (`scoring`), so the totals carry
@@ -102,10 +117,6 @@ use spinner::SpinnerRun;
 
 /// osuhitobject.cs:29,94 -- the radius scale multiplies
 const OBJECT_RADIUS: f32 = 64.0;
-
-/// framedreplayinputhandler.cs:94,105 -- the window before the next frame
-/// inside which a pressed frame forbids intermediate update times
-const IMPORTANT_TIME_SPAN: f64 = 1000.0 / 60.0 * 1.2;
 
 /// drawablehitcircle.cs:214 -- a judged circle stays alive this long past
 /// its judgement time, which is how long it can still be the last blocking
@@ -457,70 +468,46 @@ fn slider_of(obj: &ProcessedObject) -> &ProcessedSlider {
 impl<'a> Walk<'a> {
     fn run(&mut self, deadlines: &[f64]) -> Result<()> {
         let mut next_deadline = 0usize;
-        let mut prev_frame: Option<(f64, bool)> = None;
         for frame_index in 0..self.frames.len() {
             let frame_time = self.frames[frame_index].time;
-            // the deadlines strictly between the previous frame and this one
+            // the deadlines strictly between the previous frame and this
+            // one, each at its own time: `SetFrameFromTime` clamps the
+            // proposed time into `[frameStart, frameEnd]` and hands it back
+            // (framedreplayinputhandler.cs:160), so every instant in the
+            // open span is one the update loop may land on
             while next_deadline < deadlines.len() && deadlines[next_deadline] < frame_time {
                 let deadline = deadlines[next_deadline];
                 next_deadline += 1;
-                match prev_frame {
-                    // the important-section rule: deferred to this frame
-                    Some((_, important)) if important && frame_time - deadline <= IMPORTANT_TIME_SPAN => continue,
-                    _ => self.process(Instant::Deadline(deadline))?,
-                }
+                self.process(Instant::Deadline(deadline))?;
             }
             self.process(Instant::Frame(frame_index))?;
-            let important = Actions::from_buttons(self.frames[frame_index].buttons).any();
-            prev_frame = Some((frame_time, important));
 
             // a deadline on this frame's own time falls due at the first
             // instant past it -- after every frame at this time, a strict
             // threshold reading false at the frame itself (hitwindows.cs
-            // `CanBeHit` admits the edge) -- and the same rule defers it to
-            // the next frame when that one is within the span; past the
-            // last frame the loop below resolves it
+            // `CanBeHit` admits the edge); past the last frame the loop
+            // below resolves it
             let next_frame_time = self.frames.get(frame_index + 1).map(|f| f.time);
             if next_frame_time.is_some_and(|next| next == frame_time) {
                 continue;
             }
             while next_deadline < deadlines.len() && deadlines[next_deadline] == frame_time {
-                let Some(next) = next_frame_time else {
+                if next_frame_time.is_none() {
                     break;
-                };
-                next_deadline += 1;
-                if important && next - frame_time <= IMPORTANT_TIME_SPAN {
-                    continue;
                 }
+                next_deadline += 1;
                 self.process(Instant::Deadline(frame_time))?;
             }
         }
 
         // past the last frame the handler's end frame IS the last frame, so
-        // a pressed last frame refuses every time within the span after it
-        // (framedreplayinputhandler.cs:105,160); those deadlines resolve at
-        // the first instant past the span, one on the last frame's own time
-        // among them
-        let (last_time, important) = prev_frame.expect("emptiness rejected above");
-        let mut deferred = false;
+        // `frameEnd` is positive infinity and the clamp is a no-op: time
+        // runs on freely and every remaining deadline is usable at its own
+        // time, including one on the last frame's own
         while next_deadline < deadlines.len() {
             let deadline = deadlines[next_deadline];
             next_deadline += 1;
-            if deadline < last_time {
-                continue;
-            }
-            if important && deadline - last_time <= IMPORTANT_TIME_SPAN {
-                deferred = true;
-                continue;
-            }
-            if deferred {
-                self.process(Instant::Deadline(last_time + IMPORTANT_TIME_SPAN))?;
-                deferred = false;
-            }
             self.process(Instant::Deadline(deadline))?;
-        }
-        if deferred {
-            self.process(Instant::Deadline(last_time + IMPORTANT_TIME_SPAN))?;
         }
         Ok(())
     }
@@ -1236,31 +1223,28 @@ mod tests {
             vec![(JudgementKind::Circle(HitGrade::Miss), deadline)]
         );
 
-        // a pressed last frame refuses the span after it: the same miss
-        // resolves at the span's end
+        // a PRESSED frame changes none of this. the handler's important
+        // section, which would have refused the 20ms after such a frame, is
+        // gated on `FrameAccuratePlayback` -- a field the game never assigns
+        // (see the module doc) -- so the instant is reached at its own time
+        // whether or not a button is down, and whether or not a successor
+        // frame sits inside the span
         let frames = [frame(0.0, 400.0, 300.0, 0), frame(deadline, 400.0, 300.0, 1)];
         let timeline = simulate_native(&beatmap, &frames).expect("simulates");
         assert_eq!(
             timeline.events.iter().map(|e| (e.kind, e.time)).collect::<Vec<_>>(),
-            vec![(JudgementKind::Circle(HitGrade::Miss), deadline + IMPORTANT_TIME_SPAN)]
+            vec![(JudgementKind::Circle(HitGrade::Miss), deadline)]
         );
 
-        // a pressed frame with a successor within the span defers the
-        // instant to that successor; one further away does not
-        let frames = [
-            frame(0.0, 400.0, 300.0, 0),
-            frame(deadline, 400.0, 300.0, 1),
-            frame(deadline + 10.0, 400.0, 300.0, 0),
-        ];
-        let timeline = simulate_native(&beatmap, &frames).expect("simulates");
-        assert_eq!(timeline.events[0].time, deadline + 10.0);
-        let frames = [
-            frame(0.0, 400.0, 300.0, 0),
-            frame(deadline, 400.0, 300.0, 1),
-            frame(deadline + 30.0, 400.0, 300.0, 0),
-        ];
-        let timeline = simulate_native(&beatmap, &frames).expect("simulates");
-        assert_eq!(timeline.events[0].time, deadline);
+        for successor in [10.0, 30.0] {
+            let frames = [
+                frame(0.0, 400.0, 300.0, 0),
+                frame(deadline, 400.0, 300.0, 1),
+                frame(deadline + successor, 400.0, 300.0, 0),
+            ];
+            let timeline = simulate_native(&beatmap, &frames).expect("simulates");
+            assert_eq!(timeline.events[0].time, deadline, "successor {successor}ms away");
+        }
     }
 
     #[test]
