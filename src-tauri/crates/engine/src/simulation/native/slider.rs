@@ -42,7 +42,6 @@ pub(crate) struct SliderRun {
     /// the head receptor's `HitAction`
     pub head_hit_action: Option<OsuAction>,
     time_to_accept_any_key_after: Option<f64>,
-    last_pressed: Actions,
     /// the last tick or repeat in nested order, whose judgement the tail
     /// waits for
     pub last_tick_index: Option<usize>,
@@ -64,7 +63,6 @@ impl SliderRun {
             tracking: false,
             head_hit_action: None,
             time_to_accept_any_key_after: None,
-            last_pressed: Actions::default(),
             last_tick_index,
             tail_index,
         }
@@ -101,21 +99,36 @@ impl SliderRun {
         if head_action.is_none() {
             self.time_to_accept_any_key_after = None;
         }
-        // any button becomes acceptable once the other button was seen up in
-        // the previous update
+        // any button becomes acceptable once the other button is seen up.
+        //
+        // DELIBERATE DIVERGENCE, and the one place this rule is not a line
+        // port: lazer reads `lastPressedActions`, the set the PREVIOUS
+        // update filled at its own end (sliderinputmanager.cs:252-261), so
+        // the unlock costs three passes -- one to observe the release, one
+        // to arm, and a third for `Time.Current <= ...` to stop being true.
+        // that is three of lazer's DISPLAY frames, a few milliseconds; a
+        // walk paying it over three of the instants IT visits would charge
+        // up to two whole replay frames for the same rule, which is not the
+        // same behaviour and is measurably harsher (it costs ticks, repeats
+        // and tails a real client keeps). this walk takes the limit of an
+        // arbitrarily fast display everywhere else, so it takes it here too:
+        // reading THIS pass's set collapses the first two passes into the
+        // instant that observes the release, and the `time <= after` test
+        // below keeps that instant itself restricted -- exactly where the
+        // three-display-frame rule converges as the display rate rises. see
+        // the module doc's "the sub-frame limit"
         if let Some(head_action) = head_action {
             if self.time_to_accept_any_key_after.is_none() {
                 let other = match head_action {
                     OsuAction::Left => OsuAction::Right,
                     OsuAction::Right => OsuAction::Left,
                 };
-                if !self.last_pressed.contains(other) {
+                if !pressed.contains(other) {
                     self.time_to_accept_any_key_after = Some(time);
                 }
             }
         }
 
-        self.last_pressed = pressed;
         let valid_action = pressed.iter().any(|action| self.is_valid_tracking_action(action, time));
 
         // even past the slider's time an unfinished judgement keeps the
@@ -258,10 +271,6 @@ mod tests {
             tracking: false,
             head_hit_action: Some(OsuAction::Right),
             time_to_accept_any_key_after: None,
-            last_pressed: Actions {
-                left: true,
-                right: true,
-            },
             last_tick_index: None,
             tail_index: 0,
         };
@@ -289,10 +298,15 @@ mod tests {
             true,
         );
         assert!(!run.tracking);
-        // left released too, then pressed again: the other button was seen
-        // up in a previous update, so from the update after that any button
-        // tracks
+        // left released too: this update SEES the other button up, so it is
+        // the one that arms the rule -- the display-rate limit, where
+        // lazer's observe-then-arm pair collapses onto the instant the
+        // release happens (see update_tracking's divergence note)
         run.update_tracking(140.0, 1000.0, false, Actions::default(), true);
+        assert_eq!(run.time_to_accept_any_key_after, Some(140.0));
+        assert!(!run.tracking, "the arming update itself still answers to the head's own button");
+        // pressed again at the next instant: strictly past the arming time,
+        // so left tracks
         run.update_tracking(
             160.0,
             1000.0,
@@ -303,19 +317,7 @@ mod tests {
             },
             true,
         );
-        assert_eq!(run.time_to_accept_any_key_after, Some(160.0));
-        assert!(!run.tracking, "at the update that opens the rule the head's own button still rules");
-        run.update_tracking(
-            180.0,
-            1000.0,
-            false,
-            Actions {
-                left: true,
-                right: false,
-            },
-            true,
-        );
-        assert!(run.tracking, "one update later left tracks");
+        assert!(run.tracking, "from the first instant past the arming one, either button tracks");
     }
 
     #[test]
@@ -324,10 +326,6 @@ mod tests {
             tracking: false,
             head_hit_action: Some(OsuAction::Left),
             time_to_accept_any_key_after: None,
-            last_pressed: Actions {
-                left: true,
-                right: false,
-            },
             last_tick_index: None,
             tail_index: 0,
         };
