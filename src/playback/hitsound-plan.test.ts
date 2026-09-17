@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { JudgementEventDto, LoadedScene, RenderNested, RenderObject, SampleLookup } from "../lib/scene-types";
-import { testScene } from "../test/scene";
+import { approximateNativeTestScene, nativeTestScene, testScene } from "../test/scene";
 import {
 	buildHitsoundPlan,
 	COMBO_BREAK_THRESHOLD,
@@ -85,7 +85,7 @@ function sceneOf(objects: RenderObject[], events: JudgementEventDto[]): LoadedSc
 			hpCurve: [],
 			scoreCurve: [],
 			events,
-			totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0 }
+			totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0, accuracy: 0, rank: "d" }
 		}
 	});
 }
@@ -114,8 +114,19 @@ describe("samples fire off judgements, not beatmap times", () => {
 	});
 
 	test("a not-simulated scene makes no hit sounds at all", () => {
-		const scene = testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } });
+		const scene = testScene({
+			simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
+		});
 		expect(buildHitsoundPlan(scene, OPTIONS)).toHaveLength(0);
+	});
+
+	test("an approximate scene sounds exactly what the same timeline would authoritatively", () => {
+		const authoritative = testScene({
+			renderPlan: { ...testScene().renderPlan, objects: [circle(1000, [lookup()])] }
+		});
+		const approximate = approximateNativeTestScene({ renderPlan: authoritative.renderPlan });
+		expect(buildHitsoundPlan(approximate, OPTIONS)).toEqual(buildHitsoundPlan(authoritative, OPTIONS));
+		expect(buildHitsoundPlan(approximate, OPTIONS)).toHaveLength(1);
 	});
 
 	test("every sample the object carries sounds together, layered hitnormal included", () => {
@@ -198,12 +209,13 @@ describe("slider pieces", () => {
 		const scene = sceneOf(
 			[slider(1000, parts)],
 			[
-				event(1000, { type: "sliderHead", hit: true }),
-				event(1250, { type: "sliderTick", hit: true }),
-				event(1500, { type: "sliderRepeat", hit: true, repeatIndex: 0 }),
-				event(2000, { type: "sliderRepeat", hit: true, repeatIndex: 1 }),
-				event(2500, { type: "sliderTail", hit: true }),
-				event(2500, { type: "sliderAggregate", grade: "great" })
+				event(1000, { type: "sliderHead", grade: "great" }),
+				event(1250, { type: "sliderTick", hit: true, nestedIndex: 1 }),
+				event(1500, { type: "sliderRepeat", hit: true, repeatIndex: 0, nestedIndex: 2 }),
+				event(2000, { type: "sliderRepeat", hit: true, repeatIndex: 1, nestedIndex: 3 }),
+				event(2500, { type: "sliderTail", hit: true, nestedIndex: 4 }),
+				event(2500, { type: "sliderAggregate", grade: "great" }),
+				event(2500, { type: "sliderEnd", complete: true })
 			]
 		);
 		expect(names(buildHitsoundPlan(scene, OPTIONS))).toEqual([
@@ -226,7 +238,8 @@ describe("slider pieces", () => {
 		// (slider.cs:285-289)
 
 		// the shapes the real engine produces: the tail NODE at the slider's
-		// end, the tail JUDGEMENT 36ms before it, the aggregate on the end
+		// end, the tail JUDGEMENT 36ms before it, the aggregate and the
+		// lifecycle end on the end
 		const endTime = 2500;
 		const tailJudgedAt = endTime - 36;
 
@@ -234,25 +247,51 @@ describe("slider pieces", () => {
 			const scene = sceneOf(
 				[slider(1000, parts)],
 				[
-					event(tailJudgedAt, { type: "sliderTail", hit: true }),
-					event(endTime, { type: "sliderAggregate", grade: "great" })
+					event(tailJudgedAt, { type: "sliderTail", hit: true, nestedIndex: 4 }),
+					event(endTime, { type: "sliderAggregate", grade: "great" }),
+					event(endTime, { type: "sliderEnd", complete: true })
 				]
 			);
 			const plan = buildHitsoundPlan(scene, OPTIONS);
 			expect(plan.map((s) => [s.time, s.request.names[0]])).toEqual([[endTime, "Gameplay/soft-hitclap"]]);
 		});
 
-		test("it sounds exactly once -- the tail judgement no longer carries it", () => {
-			// the failure mode of moving a sample rather than copying it: both
-			// events firing would flam every slider in the map
+		test("it sounds exactly once -- neither the tail judgement nor the aggregate carries it", () => {
+			// the failure mode of moving a sample rather than copying it: two
+			// events firing would flam every slider in the map. the anchor is the
+			// lifecycle end, which both profiles emit; the stable aggregate beside
+			// it is silent
 			const scene = sceneOf(
 				[slider(1000, parts)],
 				[
-					event(tailJudgedAt, { type: "sliderTail", hit: true }),
-					event(endTime, { type: "sliderAggregate", grade: "great" })
+					event(tailJudgedAt, { type: "sliderTail", hit: true, nestedIndex: 4 }),
+					event(endTime, { type: "sliderAggregate", grade: "great" }),
+					event(endTime, { type: "sliderEnd", complete: true })
 				]
 			);
 			expect(buildHitsoundPlan(scene, OPTIONS)).toHaveLength(1);
+		});
+
+		test("the anchor is the lifecycle end alone: an aggregate with no end event sounds nothing", () => {
+			// the native profile emits no aggregate at all, so nothing may hang
+			// on it -- and a stable timeline without the end event is a timeline
+			// the engine never produces
+			const scene = sceneOf(
+				[slider(1000, parts)],
+				[
+					event(tailJudgedAt, { type: "sliderTail", hit: true, nestedIndex: 4 }),
+					event(endTime, { type: "sliderAggregate", grade: "great" })
+				]
+			);
+			expect(buildHitsoundPlan(scene, OPTIONS)).toHaveLength(0);
+			const native = sceneOf(
+				[slider(1000, parts)],
+				[
+					event(tailJudgedAt, { type: "sliderTail", hit: true, nestedIndex: 4 }),
+					event(endTime, { type: "sliderEnd", complete: true })
+				]
+			);
+			expect(buildHitsoundPlan(native, OPTIONS).map((s) => s.time)).toEqual([endTime]);
 		});
 
 		test("a dropped tail is silent even though the slider itself scored", () => {
@@ -262,8 +301,9 @@ describe("slider pieces", () => {
 			const scene = sceneOf(
 				[slider(1000, parts)],
 				[
-					event(tailJudgedAt, { type: "sliderTail", hit: false }),
-					event(endTime, { type: "sliderAggregate", grade: "ok" })
+					event(tailJudgedAt, { type: "sliderTail", hit: false, nestedIndex: 4 }),
+					event(endTime, { type: "sliderAggregate", grade: "ok" }),
+					event(endTime, { type: "sliderEnd", complete: true })
 				]
 			);
 			expect(buildHitsoundPlan(scene, OPTIONS)).toHaveLength(0);
@@ -271,15 +311,16 @@ describe("slider pieces", () => {
 
 		test("a slider that scored nothing makes no end sound -- only the break", () => {
 			// drawableslider.cs:317-320 -- a slider armed Miss never reaches
-			// PlaySamples. the tail cannot be hit under a miss aggregate, so this
-			// is belt and braces, and it is the gate that would matter first if
-			// the engine's proportional fold ever changed. the break the dropped
-			// combo makes is a sound the GAME makes, not one this slider does
+			// PlaySamples; the engine's `complete` flag is that condition. the
+			// tail cannot be hit under an incomplete slider, so this is belt and
+			// braces. the break the dropped combo makes is a sound the GAME
+			// makes, not one this slider does
 			const scene = sceneOf(
 				[slider(1000, parts)],
 				[
-					event(tailJudgedAt, { type: "sliderTail", hit: true }),
-					event(endTime, { type: "sliderAggregate", grade: "miss" }, 0)
+					event(tailJudgedAt, { type: "sliderTail", hit: true, nestedIndex: 4 }),
+					event(endTime, { type: "sliderAggregate", grade: "miss" }, 0),
+					event(endTime, { type: "sliderEnd", complete: false }, 0)
 				]
 			);
 			expect(names(buildHitsoundPlan(scene, OPTIONS))).toEqual(["Gameplay/combobreak"]);
@@ -293,10 +334,12 @@ describe("slider pieces", () => {
 			const scene = sceneOf(
 				[dropped, held],
 				[
-					event(tailJudgedAt, { type: "sliderTail", hit: false }, 1, 0),
+					event(tailJudgedAt, { type: "sliderTail", hit: false, nestedIndex: 4 }, 1, 0),
 					event(endTime, { type: "sliderAggregate", grade: "ok" }, 1, 0),
-					event(4464, { type: "sliderTail", hit: true }, 1, 1),
-					event(4500, { type: "sliderAggregate", grade: "great" }, 1, 1)
+					event(endTime, { type: "sliderEnd", complete: true }, 1, 0),
+					event(4464, { type: "sliderTail", hit: true, nestedIndex: 4 }, 1, 1),
+					event(4500, { type: "sliderAggregate", grade: "great" }, 1, 1),
+					event(4500, { type: "sliderEnd", complete: true }, 1, 1)
 				]
 			);
 			expect(buildHitsoundPlan(scene, OPTIONS).map((s) => s.time)).toEqual([4500]);
@@ -311,8 +354,8 @@ describe("slider pieces", () => {
 		const scene = sceneOf(
 			[slider(1000, parts)],
 			[
-				event(2000, { type: "sliderRepeat", hit: true, repeatIndex: 1 }),
-				event(1500, { type: "sliderRepeat", hit: true, repeatIndex: 0 })
+				event(2000, { type: "sliderRepeat", hit: true, repeatIndex: 1, nestedIndex: 3 }),
+				event(1500, { type: "sliderRepeat", hit: true, repeatIndex: 0, nestedIndex: 2 })
 			]
 		);
 		const plan = buildHitsoundPlan(scene, OPTIONS);
@@ -327,30 +370,63 @@ describe("slider pieces", () => {
 		const scene = sceneOf(
 			[slider(1000, parts)],
 			[
-				event(1000, { type: "sliderHead", hit: false }, 0),
-				event(1250, { type: "sliderTick", hit: false }, 0),
-				event(1500, { type: "sliderRepeat", hit: false, repeatIndex: 0 }, 0),
-				event(2500, { type: "sliderTail", hit: false }, 0)
+				event(1000, { type: "sliderHead", grade: "miss" }, 0),
+				event(1250, { type: "sliderTick", hit: false, nestedIndex: 1 }, 0),
+				event(1500, { type: "sliderRepeat", hit: false, repeatIndex: 0, nestedIndex: 2 }, 0),
+				event(2500, { type: "sliderTail", hit: false, nestedIndex: 4 }, 0)
 			]
 		);
 		expect(buildHitsoundPlan(scene, OPTIONS)).toHaveLength(0);
 	});
 
-	test("an aggregate whose tail was never hit is silent", () => {
-		// the aggregate is what TIMES the end sound, but the tail is what
+	test("a lifecycle end whose tail was never hit is silent", () => {
+		// the end event is what TIMES the end sound, but the tail is what
 		// decides there is one (drawableslidertail.cs:31 SamplePlaysOnlyOnHit
 		// defaults to true). with no tail judgement at all there is nothing to
 		// have hit, and a slider that sounded anyway would be sounding a node
 		// the play dropped
-		const scene = sceneOf([slider(1000, parts)], [event(2500, { type: "sliderAggregate", grade: "great" })]);
+		const scene = sceneOf([slider(1000, parts)], [event(2500, { type: "sliderEnd", complete: true })]);
 		expect(buildHitsoundPlan(scene, OPTIONS)).toHaveLength(0);
 	});
 
-	test("a tick joins the nearest generated tick even when the two lists time it differently", () => {
+	test("a tick joins the element it names even when the two lists time it differently", () => {
 		// the simulation times its ticks by stable's own accumulated walk while
 		// the render plan's nested list is lazer's -- a documented divergence,
-		// so the join is by nearest rather than by exact equality
-		const scene = sceneOf([slider(1000, parts)], [event(1253, { type: "sliderTick", hit: true })]);
+		// so the join is by the identity the event carries, never by its time
+		const scene = sceneOf([slider(1000, parts)], [event(1253, { type: "sliderTick", hit: true, nestedIndex: 1 })]);
+		expect(names(buildHitsoundPlan(scene, OPTIONS))).toEqual(["Gameplay/drum-slidertick"]);
+	});
+
+	test("INSIDE THE NESTED-TIME HAZARD the index still picks the right tick", () => {
+		// two ticks 150ms apart, and a stable judgement of the FIRST landing
+		// nearer the second (the ~140ms generator disagreement the old
+		// nearest-time join fell into). by identity the first tick's sample
+		// and pan are what play; by time the second's would have
+		const hazard = [
+			nested("head", 0, 1000, []),
+			{
+				...nested("tick", 0, 1250, [lookup({ bank: "drum", name: "slidertick" })]),
+				position: [0, 192] as [number, number]
+			},
+			{
+				...nested("tick", 0, 1400, [lookup({ bank: "soft", name: "slidertick" })]),
+				position: [512, 192] as [number, number]
+			},
+			nested("tail", 0, 2000, [])
+		];
+		const scene = sceneOf([slider(1000, hazard)], [event(1390, { type: "sliderTick", hit: true, nestedIndex: 1 })]);
+		const plan = buildHitsoundPlan(scene, OPTIONS);
+		expect(plan.map((s) => [s.request.names[0], s.balance])).toEqual([["Gameplay/drum-slidertick", -0.2]]);
+	});
+
+	test("a tick with no lazer counterpart still sounds, on the nearest generated tick's pan", () => {
+		// a stable score point the lazer list never generated has no identity
+		// to join on; it sounded in stable, so it sounds here, and borrows
+		// the nearest tick's position since every tick shares one sample
+		const scene = sceneOf(
+			[slider(1000, parts)],
+			[event(1253, { type: "sliderTick", hit: true, nestedIndex: null })]
+		);
 		expect(names(buildHitsoundPlan(scene, OPTIONS))).toEqual(["Gameplay/drum-slidertick"]);
 	});
 });
@@ -397,9 +473,10 @@ describe("spinners", () => {
 		const scene = sceneOf(
 			[slider(1000, [nested("head", 0, 1000, [lookup()]), nested("tail", 0, 2000, [lookup()])])],
 			[
-				event(1000, { type: "sliderHead", hit: true }),
-				event(1964, { type: "sliderTail", hit: true }),
-				event(2000, { type: "sliderAggregate", grade: "great" })
+				event(1000, { type: "sliderHead", grade: "great" }),
+				event(1964, { type: "sliderTail", hit: true, nestedIndex: 1 }),
+				event(2000, { type: "sliderAggregate", grade: "great" }),
+				event(2000, { type: "sliderEnd", complete: true })
 			]
 		);
 		const requested = buildHitsoundPlan(scene, OPTIONS).flatMap((s) => s.request.names);
@@ -471,5 +548,44 @@ describe("combo break", () => {
 		const [breakSound] = breakAfter(1);
 		expect(breakSound.balance).toBe(0);
 		expect(breakSound.gain).toBe(1);
+	});
+});
+
+describe("the native slider end sound with no aggregate", () => {
+	const parts = [
+		nested("head", 0, 1000, [lookup()]),
+		nested("tick", 0, 1250, [lookup({ bank: "drum", name: "slidertick" })]),
+		nested("tail", 0, 2000, [lookup({ bank: "soft", name: "hitclap" })])
+	];
+	const native = (events: JudgementEventDto[]) => ({
+		...sceneOf([slider(1000, parts)], events),
+		configuration: nativeTestScene().configuration
+	});
+
+	test("the end sound fires off the completion event when the tail was hit", () => {
+		const plan = buildHitsoundPlan(
+			native([
+				event(1000, { type: "sliderHead", grade: "great" }),
+				event(1250, { type: "sliderTick", hit: true, nestedIndex: 1 }),
+				event(1964, { type: "sliderTail", hit: true, nestedIndex: 2 }),
+				event(2000, { type: "sliderEnd", complete: true })
+			]),
+			OPTIONS
+		);
+		expect(names(plan)).toEqual(["Gameplay/normal-hitnormal", "Gameplay/drum-slidertick", "Gameplay/soft-hitclap"]);
+		expect(plan[2].time).toBe(2000);
+	});
+
+	test("a dropped tail leaves the end silent even though the slider completed", () => {
+		const plan = buildHitsoundPlan(
+			native([
+				event(1000, { type: "sliderHead", grade: "great" }),
+				event(1250, { type: "sliderTick", hit: true, nestedIndex: 1 }),
+				event(2000, { type: "sliderTail", hit: false, nestedIndex: 2 }),
+				event(2000, { type: "sliderEnd", complete: true })
+			]),
+			OPTIONS
+		);
+		expect(names(plan)).toEqual(["Gameplay/normal-hitnormal", "Gameplay/drum-slidertick"]);
 	});
 });

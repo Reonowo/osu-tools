@@ -14,6 +14,7 @@
 // simulated has no judgements at all and therefore makes no hit sounds.
 
 import type { JudgementEventDto, LoadedScene, RenderNested, RenderObject, SampleLookup } from "@/lib/scene-types";
+import { simulated } from "@/lib/simulation";
 import { namedRequest, sampleRequest, type SampleRequest } from "./sample-sources";
 
 /** drawablehitobject.cs:186 MINIMUM_SAMPLE_VOLUME -- a sample never plays
@@ -106,12 +107,16 @@ function nestedFor(object: RenderObject, kind: RenderNested["kind"], match: (n: 
  * and a marker held in the scheduler would leave the next one silent
  */
 export function buildHitsoundPlan(scene: LoadedScene, options: HitsoundOptions): ScheduledSample[] {
-	if (scene.simulation.status !== "authoritative") return [];
+	// authoritative or approximate alike: what is heard follows whatever
+	// timeline the scene carries, which is what makes an approximate play
+	// audible at all
+	const timeline = simulated(scene.simulation);
+	if (timeline === null) return [];
 	const plan: ScheduledSample[] = [];
 	const objects = scene.renderPlan.objects;
 	// the slider's end sound is gated on one judgement and timed by another, so
 	// the gate has to be in hand before the timing one is reached
-	const tailsHit = hitTails(scene.simulation.events);
+	const tailsHit = hitTails(timeline.events);
 
 	// comboeffects.cs:24,59 -- "the first break of the play", recomputed from
 	// this timeline every time rather than carried across edits
@@ -125,7 +130,7 @@ export function buildHitsoundPlan(scene: LoadedScene, options: HitsoundOptions):
 		}
 	};
 
-	for (const event of scene.simulation.events) {
+	for (const event of timeline.events) {
 		const object = objects[event.objectIndex];
 		if (object !== undefined) pushObjectSamples(push, event, object, tailsHit.has(event.objectIndex));
 		if (comboBreaks(event, previousCombo, seenFirstBreak, options)) {
@@ -190,18 +195,22 @@ function pushObjectSamples(
 		// here is only about WHICH piece. WHEN is a separate question, and the
 		// tail is the one piece whose two answers differ -- see below
 		case "sliderHead": {
-			if (!kind.hit) return;
+			if (kind.grade === "miss") return;
 			const head = nestedFor(object, "head", () => true);
 			if (head !== null) push(event.time, head.samples, head.position[0]);
 			return;
 		}
 		case "sliderRepeat": {
 			if (!kind.hit) return;
-			// by the node identity the judgement carries, NEVER by counting
-			// repeat events: a positional join goes silently wrong the first
-			// time emission order changes, and wrong here means the map's own
-			// hitsounding plays on the wrong reverse
-			const repeat = nestedFor(object, "repeat", (n) => n.spanIndex === kind.repeatIndex);
+			// by the identity the judgement carries, NEVER by counting repeat
+			// events: a positional join goes silently wrong the first time
+			// emission order changes, and wrong here means the map's own
+			// hitsounding plays on the wrong reverse. the nested index is the
+			// element itself; the repeat ordinal is the same identity spelled
+			// as a node, for an event that carries no index
+			const repeat =
+				nestedByIndex(object, kind.nestedIndex, "repeat") ??
+				nestedFor(object, "repeat", (n) => n.spanIndex === kind.repeatIndex);
 			if (repeat !== null) push(event.time, repeat.samples, repeat.position[0]);
 			return;
 		}
@@ -216,44 +225,39 @@ function pushObjectSamples(
 		// if LastTick is removed otherwise they would play earlier than they're
 		// intended to. For now, the samples are played by the slider itself at
 		// the correct end time" (slider.cs:285-289). so does this -- see
-		// sliderAggregate below
+		// sliderEnd below
 		case "sliderTail":
 			return;
 		case "sliderTick": {
 			if (!kind.hit) return;
-			// ticks have no identity of their own on the timeline, so they join
-			// by time -- and the join is APPROXIMATE, not exact. the two sides
-			// come from different generators: the simulation times its ticks
-			// differently from the lazer nested list (the documented issue-13
-			// divergence), so `nearestNested` takes the closest tick with NO
-			// tolerance at all -- the two disagree by far more than rounding
-			// (`beatmap::stable_points`' own test pins a stable tick at
-			// 1464ms against lazer's ~1607).
-			//
-			// what that costs is bounded and small: every tick of a slider
-			// sounds the SAME sample -- the slider's own hitnormal renamed --
-			// so a mismatched tick can only borrow the wrong POSITION, which
-			// moves the pan and nothing else. the exception is a slider
-			// stable ticks and lazer does not, where there is no tick to
-			// match and this one is silent. fixing either properly means
-			// carrying the tick's own lookup on the judgement, which is a
-			// wire-contract change -- recorded in TODO.md
-			const tick = nearestNested(object, "tick", event.time);
+			// by the element the judgement names. the two sides come from
+			// different generators -- the simulation times its ticks by
+			// stable's own walk, the render plan's nested list is lazer's, and
+			// the two disagree by more than a tick spacing (`beatmap::
+			// stable_points`' own test pins a stable tick at 1464ms against
+			// lazer's ~1607) -- which is exactly why a nearest-time join was
+			// the wrong tool: it could borrow a neighbouring tick's position.
+			// the one tick without an identity is a stable score point lazer
+			// never generated (a null index); it still sounds, as stable did,
+			// and takes the nearest generated tick's pan since it has none of
+			// its own -- every tick of a slider sounds the same sample
+			const tick = nestedByIndex(object, kind.nestedIndex, "tick") ?? nearestNested(object, "tick", event.time);
 			if (tick !== null) push(event.time, tick.samples, tick.position[0]);
 			return;
 		}
-		// where the slider's end sound actually lands. the aggregate is the
-		// slider's OWN judgement, and lazer holds it until `Time.Current >=
-		// HitObject.EndTime` (drawableslider.cs:295) -- so this event is at the
-		// end time the tail node misses by 36ms.
+		// where the slider's end sound actually lands. the lifecycle end is
+		// the slider's OWN event, and lazer holds the slider's judgement until
+		// `Time.Current >= HitObject.EndTime` (drawableslider.cs:295) -- so
+		// this event is at the end time the tail node misses by 36ms.
 		//
-		// two gates, both lazer's. the slider has to be armed Hit at all, which
-		// is every grade but a miss (drawableslider.cs:317-320, and the engine's
-		// aggregate grade is already that same proportional fold); and
-		// `SamplePlaysOnlyOnHit` defaults to true (drawableslidertail.cs:31), so
-		// a dropped tail is silent even when the slider itself scored
-		case "sliderAggregate": {
-			if (kind.grade === "miss" || !tailHit) return;
+		// two gates, both lazer's. the slider has to be armed Hit at all,
+		// which is any nested element hit (drawableslider.cs:317-320 -- the
+		// engine's `complete` flag is that condition, and under the stable
+		// profile it agrees with the aggregate's not-a-miss); and
+		// `SamplePlaysOnlyOnHit` defaults to true (drawableslidertail.cs:31),
+		// so a dropped tail is silent even when the slider itself scored
+		case "sliderEnd": {
+			if (!kind.complete || !tailHit) return;
 			const tail = nestedFor(object, "tail", () => true);
 			// the tail node still OWNS the samples -- the engine resolved the
 			// last node's lookups onto it, and moving what plays them does not
@@ -261,12 +265,24 @@ function pushObjectSamples(
 			if (tail !== null) push(event.time, tail.samples, tail.position[0]);
 			return;
 		}
+		// the stable profile's grade fold: it sounds nothing of its own, the
+		// end sound having moved onto the lifecycle end both profiles emit
+		case "sliderAggregate":
+			return;
 	}
 }
 
-/** the nested piece of a kind closest in time to `time`. used only for ticks,
- * whose simulated times come from stable's own walk rather than from the lazer
- * nested list they are being matched against */
+/** the nested piece the judgement names by index, when it names one of the
+ * expected kind; null otherwise, so the caller can fall back */
+function nestedByIndex(object: RenderObject, index: number | null, kind: RenderNested["kind"]): RenderNested | null {
+	if (index === null || object.kind.type !== "slider") return null;
+	const nested = object.kind.nested[index];
+	return nested !== undefined && nested.kind === kind ? nested : null;
+}
+
+/** the nested piece of a kind closest in time to `time`. used only for a tick
+ * with no identity -- a stable score point the lazer list never generated --
+ * whose only known coordinate is the time stable judged it at */
 function nearestNested(object: RenderObject, kind: RenderNested["kind"], time: number): RenderNested | null {
 	if (object.kind.type !== "slider") return null;
 	let best: RenderNested | null = null;
