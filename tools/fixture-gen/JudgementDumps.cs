@@ -286,7 +286,7 @@ public static partial class JudgementDumps
         var mods = scenario.Mods();
 
         using var host = new HeadlessGameHost($"fixture-gen-judgement-{scenario.Name}", new HostOptions(), realtime: false);
-        var game = new JudgementDumpGame(Path.Combine(outDir, "judgement", "maps", scenario.BeatmapFile), frames, mods);
+        var game = new JudgementDumpGame(Path.Combine(outDir, "judgement", "maps", scenario.BeatmapFile), frames, mods, clock_step_ms);
         host.Run(game);
 
         if (game.Failure != null)
@@ -362,8 +362,24 @@ public static partial class JudgementDumps
         private readonly string beatmapPath;
         private readonly List<OsuReplayFrame> frames;
         private readonly Mod[] mods;
+        /// how far the ManualClock advances per update frame -- lazer's
+        /// display rate, in other words. every scenario passes the
+        /// clock_step_ms constant, and the replay re-run instrument is the
+        /// only caller that varies it: a slider's accepted-key unlock is a
+        /// three-PASS rule, so how much gameplay time three passes cost is a
+        /// function of this number, and sweeping it is how a display-rate
+        /// artifact is told apart from a rules difference
+        private readonly double clockStep;
 
         public readonly List<DumpEvent> Events = new List<DumpEvent>();
+        /// one row per entry in Events: the raw judgement offset and the
+        /// absolute time lazer applied the result at. deliberately absent
+        /// from the scenario dumps -- both sample at whatever gameplay
+        /// instant the update loop reached, which is a render-loop artifact
+        /// there -- and collected only for the replay re-run path, which
+        /// reads them to locate a diverging object rather than to pin a
+        /// fixture
+        public readonly List<(double timeOffset, double time)> EventDetails = new List<(double, double)>();
         public DumpEndState? EndState;
         public string? Failure;
 
@@ -375,11 +391,12 @@ public static partial class JudgementDumps
         private bool exiting;
         private long updateCount;
 
-        public JudgementDumpGame(string beatmapPath, List<OsuReplayFrame> frames, Mod[] mods)
+        public JudgementDumpGame(string beatmapPath, List<OsuReplayFrame> frames, Mod[] mods, double clockStep)
         {
             this.beatmapPath = beatmapPath;
             this.frames = frames;
             this.mods = mods;
+            this.clockStep = clockStep;
         }
 
         [BackgroundDependencyLoader]
@@ -472,13 +489,14 @@ public static partial class JudgementDumps
                 IsHit = result.IsHit,
                 ComboAfter = scoreProcessor.Combo.Value,
             });
+            EventDetails.Add((result.TimeOffset, result.TimeAbsolute));
         }
 
         protected override void Update()
         {
             base.Update();
 
-            manualClock.CurrentTime += clock_step_ms;
+            manualClock.CurrentTime += clockStep;
             referenceClock.ProcessFrame();
             updateCount++;
 

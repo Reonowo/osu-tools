@@ -16,6 +16,19 @@ string? onlyFamily = null;
 // per process (see JudgementDumps.Run)
 string? judgementScenario = null;
 string? scenarioOut = null;
+// --rerun-map <map.osu> --rerun-replay <replay.osr> --rerun-out <file>: the
+// replay re-run INSTRUMENT (ReplayRerun.cs), which plays a real pair through
+// the pinned client and dumps its judgement timeline. it writes only where
+// --rerun-out points, never into a fixture family, and exists to tell an
+// engine bug apart from lazer's own gameplay drift
+string? rerunMap = null;
+string? rerunReplay = null;
+string? rerunOut = null;
+// --rerun-clock-step <ms>: gameplay milliseconds per update frame, i.e. the
+// display rate the re-run plays at. defaults to the judgement family's own
+// 4ms; sweeping it is how a display-rate artifact is told apart from a rules
+// difference, since lazer's slider unlock is counted in display passes
+double rerunClockStep = 4;
 for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--out")
@@ -26,6 +39,14 @@ for (int i = 0; i < args.Length - 1; i++)
         judgementScenario = args[i + 1];
     if (args[i] == "--scenario-out")
         scenarioOut = args[i + 1];
+    if (args[i] == "--rerun-map")
+        rerunMap = args[i + 1];
+    if (args[i] == "--rerun-replay")
+        rerunReplay = args[i + 1];
+    if (args[i] == "--rerun-out")
+        rerunOut = args[i + 1];
+    if (args[i] == "--rerun-clock-step")
+        rerunClockStep = double.Parse(args[i + 1], CultureInfo.InvariantCulture);
 }
 bool runFamily(string name) => onlyFamily == null || onlyFamily == name;
 
@@ -91,6 +112,20 @@ if (judgementScenario != null)
         Environment.Exit(2);
     }
     FixtureGen.JudgementDumps.RunSingleScenario(outDir, judgementScenario, scenarioOut, jsonOptions);
+    return;
+}
+
+if (rerunMap != null || rerunReplay != null || rerunOut != null)
+{
+    if (rerunMap == null || rerunReplay == null || rerunOut == null)
+    {
+        Console.Error.WriteLine("the replay re-run needs all three of --rerun-map, --rerun-replay and --rerun-out");
+        Environment.Exit(2);
+    }
+    // one host per process, for the same reason the judgement family runs
+    // one scenario per subprocess: a game host booted second-or-later in one
+    // process has proven flaky
+    FixtureGen.JudgementDumps.RunReplayRerun(rerunMap, rerunReplay, rerunOut, rerunClockStep, jsonOptions);
     return;
 }
 
