@@ -93,18 +93,30 @@ export interface NativeStatistic {
 	recorded: number | null;
 }
 
-/** the native statistics row beside the 300/100/50/miss tiles: every result
- * kind the map carries, in lazer's own order, with the block's count as the
- * frozen "was" beside each. null for a stable scene, which has no such map,
- * and for a native scene with no timeline */
+/** the results the panel's own 300/100/50/miss tiles already carry, spelled
+ * in lazer's vocabulary. the engine projects the legacy counts straight off
+ * this map -- `count_300` is the `great` count, `count_100` the `ok`, and
+ * `count_50` the `meh`, read from the one array (`simulation::native`) -- so
+ * a row for any of the four would be the tile above it under a second name */
+const TILE_RESULTS = new Set(["great", "ok", "meh", "miss"]);
+
+/** the native statistics row beside the 300/100/50/miss tiles: what lazer
+ * counted BEYOND them -- the tile results dropped, the rest in lazer's own
+ * order, with the block's count as the frozen "was" beside each. null for a
+ * stable scene, which has no such map, and for a native scene with no
+ * timeline; EMPTY for a play whose every result is already a tile (a
+ * circles-only map), which is the row having nothing to add rather than no
+ * row existing */
 export function nativeStatistics(scene: LoadedScene): NativeStatistic[] | null {
 	const statistics = simulated(scene.simulation)?.totals.statistics ?? null;
 	if (statistics == null) return null;
 	const record = scene.replay.scoreInfo;
 	const recorded = record.status === "present" ? record.statistics : [];
-	return statistics.map((entry) => ({
-		result: entry.result,
-		count: entry.count,
-		recorded: recorded.find((r) => r.result === entry.result)?.count ?? null
-	}));
+	return statistics
+		.filter((entry) => !TILE_RESULTS.has(entry.result))
+		.map((entry) => ({
+			result: entry.result,
+			count: entry.count,
+			recorded: recorded.find((r) => r.result === entry.result)?.count ?? null
+		}));
 }

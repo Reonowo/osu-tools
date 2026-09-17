@@ -91,10 +91,13 @@ describe("recordedInFile", () => {
 });
 
 describe("nativeStatistics", () => {
-	test("a stable scene has no row; a native scene lists the totals' map with the block's count as the reference", () => {
+	test("a stable scene has no row; a native scene lists what lazer counted beyond the tiles, block count as the reference", () => {
 		expect(nativeStatistics(testScene())).toBeNull();
 		const scene = nativeTestScene();
-		expect(nativeStatistics(scene)).toEqual([{ result: "ok", count: 1, recorded: null }]);
+		// the fixture's whole map is one `ok`, which the 100 tile already
+		// carries -- nothing is left to add, and that is an empty row, not a
+		// missing one
+		expect(nativeStatistics(scene)).toEqual([]);
 		if (scene.simulation.status !== "authoritative") throw new Error("the native fixture simulates");
 		const edited = nativeTestScene({
 			simulation: {
@@ -109,10 +112,32 @@ describe("nativeStatistics", () => {
 				}
 			}
 		});
+		// `great` is the 300 tile under lazer's name and is dropped; the two
+		// results no tile carries survive, in the map's own order
 		expect(nativeStatistics(edited)).toEqual([
-			{ result: "great", count: 2, recorded: 1 },
 			{ result: "slider_tail_hit", count: 1, recorded: 0 },
 			{ result: "ignore_hit", count: 1, recorded: null }
 		]);
+	});
+
+	test("every result a tile already carries is dropped, whatever else the map holds", () => {
+		const scene = nativeTestScene();
+		if (scene.simulation.status !== "authoritative") throw new Error("the native fixture simulates");
+		const all = nativeTestScene({
+			simulation: {
+				...scene.simulation,
+				totals: {
+					...scene.simulation.totals,
+					statistics: [
+						{ result: "miss", count: 4 },
+						{ result: "meh", count: 3 },
+						{ result: "ok", count: 2 },
+						{ result: "great", count: 1 },
+						{ result: "large_tick_hit", count: 5 }
+					]
+				}
+			}
+		});
+		expect(nativeStatistics(all)?.map((entry) => entry.result)).toEqual(["large_tick_hit"]);
 	});
 });

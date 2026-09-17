@@ -11,6 +11,13 @@ import { PanelHeader } from "@/components/shell/SidePanel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RankGrade, ReplayStat } from "@/lib/derive";
 import { ticksToUnixMs } from "@/lib/format";
+import {
+	nativeStatistics,
+	recordedInFile,
+	replayHeaderTrailing,
+	resultLabel,
+	simulatedStatsLabel
+} from "@/lib/replay-panel";
 import { useViewerStore } from "@/state/store";
 
 // osu!'s own logotype slant (see TopBar.tsx), reused for the grade tile so
@@ -29,7 +36,8 @@ const GRADE_TILE_COLOURS: Record<RankGrade, { fill: string; text: string }> = {
 	A: { fill: "#88b300", text: "#11170a" },
 	B: { fill: "#ffcc22", text: "#1a1400" },
 	C: { fill: "#ffcc22", text: "#1a1400" },
-	D: { fill: "#ed1121", text: "#1b0505" }
+	D: { fill: "#ed1121", text: "#1b0505" },
+	F: { fill: "#ed1121", text: "#1b0505" }
 };
 
 // the four-letter tiles are the app's most compressed readout; each carries
@@ -76,14 +84,31 @@ export function ReplayPanel() {
 		playedMs === null
 			? "unknown"
 			: new Date(playedMs).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+	// the approximate label rides beside the stats it qualifies, and the
+	// file's own block is read into the recorded-in-file card, both off the
+	// panel's pure selectors
+	const statsLabel = simulatedStatsLabel(scene);
+	const recorded = recordedInFile(replay.scoreInfo, scene.configuration.profile);
+	// the native statistics row: what lazer counted beyond the four tiles,
+	// with the block's own count as the frozen "was"
+	const native = nativeStatistics(scene);
 
 	return (
 		<>
-			<PanelHeader title="replay" trailing={`v${replay.version}`} />
+			<PanelHeader title="replay" trailing={replayHeaderTrailing(scene)} />
 			<div
 				data-native-wheel=""
 				className="flex min-w-0 flex-1 flex-col gap-3.5 overflow-x-hidden overflow-y-auto p-3.5"
 			>
+				{/* an approximate simulation is labelled where its numbers start,
+				naming the profile it ran under, so the stats below are never read
+				as the play's own */}
+				{statsLabel !== null && (
+					<div className="rounded-[7px] border border-[#ffcc2240] bg-[#ffcc220f] px-2.5 py-1.5 text-[10.5px] text-[#ffcc22]">
+						simulated {statsLabel}
+					</div>
+				)}
+
 				{/* accuracy + grade tile, simulated-primary; the "was" line keeps
 				the header readout visible once an edit drifts it */}
 				<div className="flex items-center justify-between">
@@ -142,6 +167,33 @@ export function ReplayPanel() {
 							</div>
 						))}
 					</div>
+					{/* the native statistics row: every result kind lazer counted beyond
+					the four tiles, in lazer's own order, the block's own count as the
+					frozen "was" wherever it differs */}
+					{native !== null && native.length > 0 && (
+						<div className="mt-[7px] border-t border-border pt-[7px]">
+							<div className="mb-[5px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
+								native results
+							</div>
+							<div className="grid grid-cols-2 gap-x-3.5 gap-y-[5px]">
+								{native.map((entry) => (
+									<div key={entry.result} className="flex items-center gap-1.5 text-[11px]">
+										<span className="text-[#a1a1aa]">{resultLabel(entry.result)}</span>
+										<span className="ml-auto flex items-baseline gap-1.5 select-text">
+											{entry.recorded !== null && entry.recorded !== entry.count && (
+												<span className="text-[10px] text-[#8a8a93] tabular-nums">
+													was {entry.recorded.toLocaleString()}
+												</span>
+											)}
+											<span className="text-[#e4e4e7] tabular-nums">
+												{entry.count.toLocaleString()}
+											</span>
+										</span>
+									</div>
+								))}
+							</div>
+						</div>
+					)}
 					{/* max combo and the score ride with the simulated stats, not the header
 					card: the simulation recounts one and re-folds the other on every
 					edit */}
@@ -188,6 +240,49 @@ export function ReplayPanel() {
 							<dd className="text-right text-[#e4e4e7] tabular-nums select-text">{playedText}</dd>
 						</div>
 					</dl>
+					{/* the file's own score-info block, kept apart from the header
+					fields above it and from the simulated stats: what lazer wrote,
+					or the stated reason there is nothing to show */}
+					<div className="mt-2 rounded-[9px] border border-border bg-surface-card px-3 py-[9px] text-[11px]">
+						<div className="mb-[5px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
+							score-info block
+						</div>
+						{recorded.kind !== "present" ? (
+							<p className="leading-[1.5] text-[#8a8a93]">{recorded.note}</p>
+						) : (
+							<>
+								<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[5px]">
+									{recorded.rows.map((row) => (
+										<div key={row.label} className="contents">
+											<dt className="text-[#8a8a93]">{row.label}</dt>
+											<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
+												{row.value}
+											</dd>
+										</div>
+									))}
+								</dl>
+								<div className="mt-[7px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
+									statistics
+								</div>
+								<dl className="mt-[3px] grid grid-cols-[auto_1fr] gap-x-3 gap-y-[3px]">
+									{recorded.statistics.map((entry) => (
+										<div key={entry.result} className="contents">
+											<dt className="text-[#8a8a93]">{resultLabel(entry.result)}</dt>
+											<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
+												{entry.count.toLocaleString()}
+												{(() => {
+													const max = recorded.maximumStatistics.find(
+														(m) => m.result === entry.result
+													);
+													return max === undefined ? "" : ` / ${max.count.toLocaleString()}`;
+												})()}
+											</dd>
+										</div>
+									))}
+								</dl>
+							</>
+						)}
+					</div>
 				</div>
 
 				{/* beatmap stats -- bpm and combo elements are not in LoadedScene,
