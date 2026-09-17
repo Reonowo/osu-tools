@@ -360,11 +360,32 @@ fn verify_native_pair(
             native.total_score
         ));
     }
-    if statistics != block_statistics {
-        complaints.push(format!("statistics {statistics:?} against the block's {block_statistics:?}"));
+    // the block's key ORDER is its serializer's, and the two producers that
+    // write one disagree: a client export and the server's own stored copy
+    // spell the same map in different sequences. the oracle is the MAP, so
+    // compare it as one. sorted rather than collected into a map so a
+    // duplicate result name -- which the codec carries verbatim rather than
+    // dropping -- still reads as a difference. document order is the CODEC's
+    // round-trip contract (formats::score_info keeps it for exactly that),
+    // never this comparison's
+    let sorted = |rows: &[(String, i64)]| {
+        let mut rows = rows.to_vec();
+        rows.sort();
+        rows
+    };
+    if sorted(&statistics) != sorted(&block_statistics) {
+        complaints.push(format!(
+            "statistics {:?} against the block's {:?}",
+            sorted(&statistics),
+            sorted(&block_statistics)
+        ));
     }
-    if maximum != block_maximum {
-        complaints.push(format!("maximum statistics {maximum:?} against the block's {block_maximum:?}"));
+    if sorted(&maximum) != sorted(&block_maximum) {
+        complaints.push(format!(
+            "maximum statistics {:?} against the block's {:?}",
+            sorted(&maximum),
+            sorted(&block_maximum)
+        ));
     }
     if max_combo != u32::from(osr.header.max_combo) {
         complaints.push(format!("max combo {max_combo} against the header's {}", osr.header.max_combo));
