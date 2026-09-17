@@ -8,6 +8,7 @@ import { toNumber, type Rgba } from "../../engine/color";
 import { curvePositionAt } from "../../engine/slider-path";
 import { trackValueAt, type Track } from "../../engine/transforms";
 import type { Grade, JudgementEventDto, RenderNested, RenderObject, RenderSlider } from "../../lib/scene-types";
+import { hasTimeline } from "../../lib/simulation";
 import type { ObjectDrawable, RenderContext } from "../GameplayRenderer";
 import { SliderBodyRenderer } from "../slider/body";
 import {
@@ -38,15 +39,31 @@ const NESTED_EVENT_KIND = {
 	tail: "sliderTail"
 } as const;
 
-function nestedResult(events: JudgementEventDto[], nested: RenderNested, simulated: boolean): "hit" | "miss" | null {
+/** what the simulation judged for this nested element, by the identity its
+ * event names rather than by the time it was judged at: the two sides come
+ * from different generators and disagree by more than a tick spacing, so a
+ * time join can read a neighbouring tick's result. the one element without an
+ * identity is a stable score point lazer never generated (a null index),
+ * which still falls back to a match at its own time */
+function nestedResult(
+	events: JudgementEventDto[],
+	nested: RenderNested,
+	nestedIndex: number,
+	simulated: boolean
+): "hit" | "miss" | null {
 	if (!simulated) return null;
 	const wanted = NESTED_EVENT_KIND[nested.kind as "tick" | "repeat" | "tail"];
+	let unnamed: "hit" | "miss" | null = null;
 	for (const event of events) {
-		if (event.kind.type === wanted && Math.abs(event.time - nested.time) <= 1 && "hit" in event.kind) {
-			return event.kind.hit ? "hit" : "miss";
+		const kind = event.kind;
+		if (kind.type !== "sliderTick" && kind.type !== "sliderRepeat" && kind.type !== "sliderTail") continue;
+		if (kind.type !== wanted) continue;
+		if (kind.nestedIndex === nestedIndex) return kind.hit ? "hit" : "miss";
+		if (unnamed === null && kind.nestedIndex === null && Math.abs(event.time - nested.time) <= 1) {
+			unnamed = kind.hit ? "hit" : "miss";
 		}
 	}
-	return "hit";
+	return unnamed ?? "hit";
 }
 
 interface NestedPiece {
@@ -106,7 +123,7 @@ export class SliderDrawable implements ObjectDrawable {
 		this.obj = obj;
 		this.slider = slider;
 		this.planScale = ctx.scene.renderPlan.scale;
-		this.simulated = ctx.scene.simulation.status === "authoritative";
+		this.simulated = hasTimeline(ctx.scene.simulation);
 		this.hitAnimations = ctx.getEffects().hitAnimations;
 		const gameplay = ctx.getGameplay();
 		this.snakingIn = gameplay.snakingInSliders;
@@ -183,23 +200,29 @@ export class SliderDrawable implements ObjectDrawable {
 		this.view.addChild(this.approach.view);
 		ctx.layers.approach.attach(this.approach.view);
 
-		// container + body fades; the aggregate event carries the end result
-		const aggregate = events.find((e) => e.kind.type === "sliderAggregate");
-		const aggregateKind = aggregate?.kind;
+		// container + body fades; the slider armed Miss is the aggregate's
+		// miss under the stable profile, and the lifecycle end's incomplete
+		// flag where there is no aggregate (the native profile)
+		const aggregateKind = events.find((e) => e.kind.type === "sliderAggregate")?.kind;
+		const endKind = events.find((e) => e.kind.type === "sliderEnd")?.kind;
+		const aggregateMiss =
+			aggregateKind?.type === "sliderAggregate"
+				? aggregateKind.grade === "miss"
+				: endKind?.type === "sliderEnd" && !endKind.complete;
 		this.fades = st.sliderFadeTracks(
 			obj,
 			{
 				endTime: obj.endTime,
-				aggregateMiss: aggregateKind?.type === "sliderAggregate" && aggregateKind.grade === "miss",
+				aggregateMiss,
 				headHitTime: this.headHit.miss ? null : this.headHit.time
 			},
 			this.snakingOut
 		);
 
 		// nested pieces (positions arrive stacked; store head-relative)
-		for (const nested of slider.nested) {
+		for (const [nestedIndex, nested] of slider.nested.entries()) {
 			if (nested.kind === "head" || nested.kind === "tail") continue;
-			const result = nestedResult(events, nested, this.simulated);
+			const result = nestedResult(events, nested, nestedIndex, this.simulated);
 			const view = new Container();
 			view.position.set(nested.position[0] - obj.position[0], nested.position[1] - obj.position[1]);
 			view.scale.set(this.planScale);
