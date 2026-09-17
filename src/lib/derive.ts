@@ -9,6 +9,7 @@ import { comboChanges, type ComboChange } from "./combo";
 import { hpExtremes, type HpExtremes } from "./hp";
 import { severityTargets, type SeverityTargets, type SeverityTick } from "./judgement-nav";
 import { finalScore } from "./score";
+import { simulated, simulatedProfile } from "./simulation";
 import type {
 	Grade,
 	HpCurve,
@@ -16,7 +17,8 @@ import type {
 	LoadedScene,
 	RenderNested,
 	RenderObject,
-	RenderSlider
+	RenderSlider,
+	WireRank
 } from "./scene-types";
 
 /** the tether: the bond from an object to its judging press. exists exactly
@@ -47,14 +49,18 @@ export interface NestedMark {
 /** one object lane entry, index-aligned with renderPlan.objects -- extent
  * and kind stay readable off the render object itself */
 export interface ObjectLaneEntry {
-	/** null when the simulation is not authoritative */
+	/** null when the scene carries no timeline */
 	grade: Grade | null;
 	tether: Tether | null;
 	/** sliders only: head/repeat/tail marks at their drawn geometry times,
 	 * ticks already filtered out; empty for circles and spinners */
 	nestedMarks: NestedMark[];
-	/** judgement event times of dropped ticks, ascending -- the lane's extra
-	 * miss-red marks, populated only where the aggregate lands ok/meh */
+	/** the times of the dropped ticks, ascending -- the lane's extra miss-red
+	 * marks. under the stable profile populated only where the aggregate lands
+	 * ok/meh; under the native profile for every slider, lazer having judged
+	 * each element itself, so a great head carries them too. a tick that names
+	 * its nested element marks at that element's own time; a stable score
+	 * point with no lazer counterpart marks at the time it was judged */
 	tickDrops: number[];
 }
 
@@ -112,17 +118,45 @@ export interface DerivedScene {
  * read off it. the resampling to pixel columns deliberately does NOT happen
  * here — it needs the strip's observed width, which is a render-time fact */
 export interface DerivedHp extends HpExtremes {
-	/** empty for a scene with no authoritative simulation, and for one whose
-	 * drain-rate search never settled */
+	/** empty for a scene with no timeline, and for one whose drain-rate search
+	 * never settled */
 	curve: HpCurve;
 }
 
-/** the letter ranks, distinct from scene-types' judgement Grade */
-export type RankGrade = "SS" | "S" | "A" | "B" | "C" | "D";
+/** the letter ranks as the app shows them, distinct from scene-types'
+ * judgement Grade. lazer's `x` is displayed as SS and its hidden variants
+ * fold onto their base letter (the tile has no silver treatment); `F` is
+ * the native profile's fail */
+export type RankGrade = "SS" | "S" | "A" | "B" | "C" | "D" | "F";
 
-/** one replay-panel stat: the value the panel leads with and the .osr
- * header's own value as the frozen reference. the two are equal whenever no
- * authoritative simulation is present */
+/** the wire's lazer vocabulary to the displayed letter. the only thing the
+ * frontend does with a rank: the engine decides it, this spells it */
+export function displayRank(rank: WireRank): RankGrade {
+	switch (rank) {
+		case "x":
+		case "xh":
+			return "SS";
+		case "sh":
+			return "S";
+		case "s":
+			return "S";
+		case "a":
+			return "A";
+		case "b":
+			return "B";
+		case "c":
+			return "C";
+		case "d":
+			return "D";
+		case "f":
+			return "F";
+	}
+}
+
+/** one replay-panel stat: the value the panel leads with and the file's own
+ * frozen reference -- the .osr header, or the score-info block where accuracy
+ * and grade have one. the two are equal whenever the scene carries no
+ * timeline, both sides reading that one record then */
 export interface ReplayStat<T = number> {
 	value: T;
 	header: T;
@@ -134,9 +168,13 @@ export interface ReplayStat<T = number> {
  * and re-folds the score curve with it, so these go live the moment a delta
  * lands) with the header as the "was" reference, while geki and katu have no
  * simulation to follow -- taking them live is one `derive_score` call away and
- * is recorded as a follow-up in TODO.md -- and stay header-valued outright */
+ * is recorded as a follow-up in TODO.md -- and stay header-valued outright.
+ * accuracy and grade are READ off the wire on both sides, never computed
+ * here from the counts: the engine is their one author, which is what lets
+ * the native profile fill the same seats with lazer's rules */
 export interface ReplayStats {
-	/** true when value came from an authoritative simulation */
+	/** true when value came from a simulation -- authoritative or approximate;
+	 * the scene's simulation status says which */
 	simulated: boolean;
 	count300: ReplayStat;
 	count100: ReplayStat;
@@ -155,52 +193,45 @@ export interface ReplayStats {
 	countKatsu: number;
 }
 
-interface HitCounts {
-	count300: number;
-	count100: number;
-	count50: number;
-	countMiss: number;
-}
-
-/** osu! standard accuracy: weighted hit value over total judged hits */
-function accuracyOf(counts: HitCounts): number {
-	const judged = counts.count300 + counts.count100 + counts.count50 + counts.countMiss;
-	if (judged === 0) return 0;
-	return (300 * counts.count300 + 100 * counts.count100 + 50 * counts.count50) / (300 * judged);
-}
-
-// a miss always costs at least S, even when the count-share accuracy still
-// lands at or above the S threshold -- matches osu!'s own grading rule
-function gradeFor(accuracy: number, countMiss: number): RankGrade {
-	if (countMiss === 0 && accuracy >= 1) return "SS";
-	if (countMiss === 0 && accuracy >= 0.95) return "S";
-	if (accuracy >= 0.9) return "A";
-	if (accuracy >= 0.8) return "B";
-	if (accuracy >= 0.7) return "C";
-	return "D";
-}
-
 function replayStats(scene: LoadedScene): ReplayStats {
 	const header = scene.replay;
-	const totals = scene.simulation.status === "authoritative" ? scene.simulation.totals : null;
+	// authoritative or approximate: the stats follow whatever timeline the
+	// scene carries, and the panel says which it was (`simulated`)
+	const timeline = simulated(scene.simulation);
+	const totals = timeline?.totals ?? null;
 	// null for a scene with no simulation AND for one whose curve could not be
 	// folded; both fall back to the header, because neither knows a score. an
 	// EMPTY curve is a third thing and is a real 0 (scene-types' ScoreCurve)
-	const scoreCurve = scene.simulation.status === "authoritative" ? scene.simulation.scoreCurve : null;
+	const scoreCurve = timeline?.scoreCurve ?? null;
 	const live = totals ?? header;
-	const headerAccuracy = accuracyOf(header);
-	const liveAccuracy = totals === null ? headerAccuracy : accuracyOf(totals);
+	// the frozen "was" for the rank: the block's own rank on a file that
+	// carries one -- lazer's record of the play, F included -- and the
+	// header's counts read through the rank rule otherwise
+	const recorded = scene.replay.scoreInfo;
+	const recordedRank = recorded.status === "present" && recorded.rank !== null ? recorded.rank : header.rank;
+	// the same frozen "was" for accuracy, and for the same reason: under the
+	// native profile the live value is lazer's accuracy (slider tails and large
+	// ticks weighed in), while the header's four counts are a legacy projection
+	// that cannot express it. reading the header there would light the panel's
+	// drift line on load for every lazer play with a slider, and pair a
+	// legacy-rule accuracy with the block's own rank in one line
+	const recordedAccuracy =
+		recorded.status === "present" && recorded.accuracy !== null ? recorded.accuracy : header.accuracy;
 	return {
 		simulated: totals !== null,
 		count300: { value: live.count300, header: header.count300 },
 		count100: { value: live.count100, header: header.count100 },
 		count50: { value: live.count50, header: header.count50 },
 		countMiss: { value: live.countMiss, header: header.countMiss },
-		accuracy: { value: liveAccuracy, header: headerAccuracy },
-		grade: {
-			value: gradeFor(liveAccuracy, live.countMiss),
-			header: gradeFor(headerAccuracy, header.countMiss)
-		},
+		// the timeline leads where there is one, and the RECORDED value leads
+		// where there is not -- never the header's legacy projection, which
+		// would sit opposite the block as its own reference and light the
+		// panel's drift line on a play nothing has edited. it also decides
+		// which record the tile leads with: `rank_from_accuracy` has no `f`
+		// arm (score/rank.rs), so a failed lazer play read through the header
+		// leads with an A and relegates the block's own F to the "was" line
+		accuracy: { value: totals?.accuracy ?? recordedAccuracy, header: recordedAccuracy },
+		grade: { value: displayRank(totals?.rank ?? recordedRank), header: displayRank(recordedRank) },
 		maxCombo: { value: live.maxCombo, header: header.maxCombo },
 		totalScore: {
 			value: scoreCurve === null ? header.totalScore : finalScore(scoreCurve),
@@ -267,9 +298,20 @@ function markDropped(entry: ObjectLaneEntry, marked: readonly RenderNested[], ma
 	if (mark !== undefined) mark.dropped = true;
 }
 
+/** the nested element a judgement names by index, when it names one of the
+ * expected kind -- the identity join every drop mark prefers; null lets the
+ * caller fall back to the kind's own identity (the one tail, the repeat
+ * ending the named span) */
+function namedNested(slider: RenderSlider, index: number | null, kind: RenderNested["kind"]): RenderNested | null {
+	if (index === null) return null;
+	const nested = slider.nested[index];
+	return nested !== undefined && nested.kind === kind ? nested : null;
+}
+
 /** dropped slider elements by kind: one slider's, or every slider's summed.
- * only the recorded drops count -- those on sliders whose aggregate landed
- * ok/meh, since a fully missed slider carries no per-element marks */
+ * only the recorded drops count: under the stable profile those on sliders
+ * whose aggregate landed ok/meh (a fully missed slider carries no per-element
+ * marks), under the native profile every element lazer dropped */
 export interface DropCounts {
 	heads: number;
 	repeats: number;
@@ -281,11 +323,12 @@ export const NO_DROPS: DropCounts = { heads: 0, repeats: 0, ticks: 0, tails: 0 }
 
 /** one entry's drop state counted by kind: ticks from tickDrops, the others
  * from the marks aligned with the object's own head/repeat/tail nested
- * elements. null where the entry carries no drop state at all (not a
- * slider, or aggregate outside ok/meh) */
+ * elements. null where the entry carries no drop state at all: not a
+ * slider, or nothing recorded dropped -- which under the stable profile is
+ * every aggregate outside ok/meh, since the marks are applied only there */
 function dropCounts(object: RenderObject, entry: ObjectLaneEntry): DropCounts | null {
 	if (object.kind.type !== "slider") return null;
-	if (entry.grade !== "ok" && entry.grade !== "meh") return null;
+	if (!entry.nestedMarks.some((mark) => mark.dropped) && entry.tickDrops.length === 0) return null;
 	const marked = markedNested(object.kind);
 	const droppedOf = (kind: RenderNested["kind"]) =>
 		marked.filter((n, i) => n.kind === kind && entry.nestedMarks[i]?.dropped === true).length;
@@ -324,10 +367,11 @@ export function describeDrops(counts: DropCounts): string | null {
 	return parts.length === 0 ? null : parts.join(" + ");
 }
 
-/** the hover readout's cause segment for a below-great slider -- `dropped
- * tail`, `dropped 2 ticks + tail` -- worded from the entry's drop state, or
- * null where no cause belongs (not a slider, aggregate outside ok/meh, or
- * nothing recorded dropped) */
+/** the hover readout's cause segment for a slider with recorded drops --
+ * `dropped tail`, `dropped 2 ticks + tail` -- worded from the entry's drop
+ * state, or null where no cause belongs (not a slider, or nothing recorded
+ * dropped). the grade is not the gate: under the native profile a great head
+ * can sit over a dropped tick, and a missed one over a dropped tail */
 export function dropSummary(object: RenderObject, entry: ObjectLaneEntry): string | null {
 	const counts = dropCounts(object, entry);
 	if (counts === null) return null;
@@ -335,16 +379,13 @@ export function dropSummary(object: RenderObject, entry: ObjectLaneEntry): strin
 	return words === null ? null : `dropped ${words}`;
 }
 
-/** the scene's HP curve with its lowest point and fail point. gated on an
- * authoritative simulation exactly as combo and accuracy are: an unsimulated
- * or beatmap-mismatched play has no HP to show, and the wire already ships an
- * empty curve for a drain search that never settled.
- *
- * a lazer-native play IS authoritative here, exactly as it is for combo and
- * accuracy — only the integrity report is version-gated (`load.rs`) — so it
- * carries an HP curve like it carries a combo */
+/** the scene's HP curve with its lowest point and fail point. gated on a
+ * timeline existing exactly as combo and accuracy are: an unsimulated or
+ * beatmap-mismatched play has no HP to show, and the wire already ships an
+ * empty curve for a drain search that never settled. an approximate timeline
+ * carries an HP curve like it carries a combo -- it is a display surface */
 function derivedHp(scene: LoadedScene): DerivedHp {
-	const curve = scene.simulation.status === "authoritative" ? scene.simulation.hpCurve : [];
+	const curve = simulated(scene.simulation)?.hpCurve ?? [];
 	return { curve, ...hpExtremes(curve) };
 }
 
@@ -375,9 +416,13 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 	// cover that full fade or the clock pauses mid-animation when the audio
 	// is absent or shorter
 	let lastEventTime = lastEnd;
-	if (scene.simulation.status === "authoritative") {
+	const timeline = simulated(scene.simulation);
+	// under the native profile a slider has no aggregate: its head's timing
+	// grade is its grade, and a dropped element is a mark of its own
+	const nativelyJudged = simulatedProfile(scene) === "native";
+	if (timeline !== null) {
 		const judgingPress = judgingPressResolver(presses);
-		for (const event of scene.simulation.events) {
+		for (const event of timeline.events) {
 			lastEventTime = Math.max(lastEventTime, event.time);
 			judgementsByObject[event.objectIndex]?.push(event);
 			const kind = event.kind;
@@ -389,19 +434,27 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 			if (kind.type === "circle" || kind.type === "sliderAggregate" || kind.type === "spinnerFinal") {
 				// the object rides along with the mark: the strip draws by time, but
 				// navigating to a mark needs the object it belongs to, and this push
-				// is the one place both are already in hand
+				// is the one place both are already in hand. the drop flag is
+				// settled below, once the object's drop list exists
 				if (kind.grade !== "great") {
 					severityTicks.push({
 						time: event.time,
 						grade: kind.grade,
 						objectIndex: event.objectIndex,
-						// exact under the legacy simulation path, the only one today:
-						// the slider aggregate is a pure element-count fold, so every
-						// below-great slider is drop-caused, and aggregate miss means
-						// zero elements collected (the plain tick already says it all).
-						// a lazer-native rules profile would break that equivalence,
-						// and this one site would then consult the drop lists instead
-						drop: kind.type === "sliderAggregate" && kind.grade !== "miss"
+						drop: false
+					});
+				}
+				if (entry !== undefined) entry.grade = kind.grade;
+			} else if (kind.type === "sliderHead" && nativelyJudged) {
+				// the native slider's grade IS its head's timing grade -- a 100 on
+				// a head with nothing dropped is a fixture fact -- and the mark it
+				// leaves is a timing mark, never a drop, whatever the elements did
+				if (kind.grade !== "great") {
+					severityTicks.push({
+						time: event.time,
+						grade: kind.grade,
+						objectIndex: event.objectIndex,
+						drop: false
 					});
 				}
 				if (entry !== undefined) entry.grade = kind.grade;
@@ -423,44 +476,98 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 				}
 			}
 		}
-		// dropped-element marks, applied only where the aggregate lands ok/meh:
-		// that is exactly the population the aggregate under-informs. aggregate
-		// great means nothing dropped, and aggregate miss means zero elements
-		// collected -- a fully-missed slider's span colour and plain miss tick
-		// already say everything, so it gets no per-element marks
+		// dropped-element marks. under the stable profile, applied only where
+		// the aggregate lands ok/meh: that is exactly the population the
+		// aggregate under-informs. aggregate great means nothing dropped, and
+		// aggregate miss means zero elements collected -- a fully-missed
+		// slider's span colour and plain miss tick already say everything, so
+		// it gets no per-element marks. under the native profile every slider
+		// reads its elements: lazer judged each one, and a great head with a
+		// dropped tick is a drop the aggregate never existed to fold away
 		for (let index = 0; index < objectLane.length; index++) {
 			const entry = objectLane[index];
 			const kind = objects[index].kind;
-			if (kind.type !== "slider" || (entry.grade !== "ok" && entry.grade !== "meh")) continue;
+			if (kind.type !== "slider") continue;
+			if (!nativelyJudged && entry.grade !== "ok" && entry.grade !== "meh") continue;
 			const marked = markedNested(kind);
 			for (const event of judgementsByObject[index]) {
 				const judged = event.kind;
-				if (judged.type === "sliderHead" && !judged.hit) {
+				if (judged.type === "sliderHead" && judged.grade === "miss") {
 					markDropped(entry, marked, (n) => n.kind === "head");
 				} else if (judged.type === "sliderRepeat" && !judged.hit) {
-					// the event's repeatIndex and the render plan's spanIndex agree
-					// by construction: the repeat ending span N is repeat N on both
-					// sides (stable_points.rs:199, render_plan.rs's passthrough)
+					// by the element the event names, else by the ordinal it
+					// carries: the event's repeatIndex and the render plan's
+					// spanIndex agree by construction (the repeat ending span N is
+					// repeat N on both sides -- stable_points.rs, render_plan.rs)
+					const named = namedNested(kind, judged.nestedIndex, "repeat");
 					const repeatIndex = judged.repeatIndex;
-					markDropped(entry, marked, (n) => n.kind === "repeat" && n.spanIndex === repeatIndex);
+					markDropped(entry, marked, (n) =>
+						named !== null ? n === named : n.kind === "repeat" && n.spanIndex === repeatIndex
+					);
 				} else if (judged.type === "sliderTail" && !judged.hit) {
-					// matched by kind, never moved to the event's own time: the
+					// matched by identity, never moved to the event's own time: the
 					// simulation judges the tail at the legacy last tick ~36ms
 					// early, and a mark sliding left of the span's end would read
 					// as a bug rather than as the drop it marks
-					markDropped(entry, marked, (n) => n.kind === "tail");
+					const named = namedNested(kind, judged.nestedIndex, "tail");
+					markDropped(entry, marked, (n) => (named !== null ? n === named : n.kind === "tail"));
 				} else if (judged.type === "sliderTick" && !judged.hit) {
-					// the event's own time, deliberately never matched against the
-					// render plan's tick list: tick judgements carry no identity,
-					// and nearest-time matching across the two generators is the
-					// recorded ~140ms stable-vs-lazer hazard (hitsound-plan.ts's
-					// nearestNested). reverses cheaply if tick judgements ever
-					// gain identity on the wire
-					entry.tickDrops.push(event.time);
+					// by the element the event names -- its own geometry time --
+					// which is what closes the recorded nearest-time hazard
+					// between the two generators. a stable score point lazer never
+					// generated has no element to name and marks where it was judged
+					const named = namedNested(kind, judged.nestedIndex, "tick");
+					entry.tickDrops.push(named === null ? event.time : named.time);
 				}
 			}
 			entry.tickDrops.sort((a, b) => a - b);
+			// the native drop mark: one tick per slider with anything dropped,
+			// separate from the head's timing mark, drawn at the earliest drop.
+			// a dropped tick or repeat broke combo, which is a miss's weight; a
+			// dropped tail alone cost score and no combo, a meh's
+			// the head is never one of them: its miss is its own timing mark,
+			// pushed above, and counting it here too would mark one missed
+			// head twice
+			if (nativelyJudged) {
+				const counts = dropCounts(objects[index], entry);
+				if (counts !== null && counts.repeats + counts.ticks + counts.tails > 0) {
+					const droppedTimes = [
+						...marked.flatMap((n, i) =>
+							n.kind !== "head" && entry.nestedMarks[i]?.dropped === true
+								? [entry.nestedMarks[i].time]
+								: []
+						),
+						...entry.tickDrops
+					];
+					severityTicks.push({
+						// folded, never spread: one slider may drop up to limits.rs's
+						// MAX_SLIDER_NESTED_OBJECTS elements, and a spread that long
+						// is a RangeError rather than a minimum
+						time: droppedTimes.reduce((earliest, time) => (time < earliest ? time : earliest), Infinity),
+						grade: counts.ticks + counts.repeats > 0 ? "miss" : "meh",
+						objectIndex: index,
+						drop: true
+					});
+				}
+			}
 		}
+		// under the stable profile a severity tick is drop-caused when its
+		// object's drop list says so: every ok/meh slider (the aggregate is
+		// an element-count fold, so below great means something dropped) and
+		// never a fully missed one, which carries no drop state. the native
+		// ticks already said which they are when they were pushed
+		if (!nativelyJudged) {
+			for (const tick of severityTicks) {
+				const object = objects[tick.objectIndex];
+				const entry = objectLane[tick.objectIndex];
+				if (object === undefined || entry === undefined) continue;
+				const counts = dropCounts(object, entry);
+				tick.drop = counts !== null && counts.heads + counts.repeats + counts.ticks + counts.tails > 0;
+			}
+		}
+		// the strip draws by time and the jump lists sort by landing time, so
+		// the native drop marks fall into place wherever they were pushed
+		severityTicks.sort((a, b) => a.time - b.time);
 	}
 
 	const minTime = Math.min(0, -scene.beatmap.audioLeadIn, firstFrame, firstAppear);
@@ -480,7 +587,7 @@ export function deriveScene(scene: LoadedScene): DerivedScene {
 		drops: dropTotals(objects, objectLane),
 		severityTicks,
 		severityTargets: severityTargets(severityTicks, objects),
-		comboChanges: comboChanges(scene.simulation.status === "authoritative" ? scene.simulation.events : []),
+		comboChanges: comboChanges(timeline?.events ?? []),
 		hp: derivedHp(scene),
 		analysis: analyseScene(scene, presses),
 		stats: replayStats(scene)

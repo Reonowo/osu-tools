@@ -33,9 +33,11 @@ export interface SeverityTick {
 	 * cannot identify an object reliably: a miss's event sits at its deadline,
 	 * hundreds of milliseconds past anything the object itself is at */
 	objectIndex: number;
-	/** true when the object is a slider and the grade is ok/meh -- drop-caused
-	 * by construction, so the strip draws its distinguishing shape. a fully
-	 * missed slider stays plain per the partially-hit exception */
+	/** true when the mark is a slider's dropped elements: under the stable
+	 * profile the ok/meh aggregate, drop-caused by construction; under the
+	 * native profile a mark of its own beside the head's timing mark. a fully
+	 * missed slider stays plain per the partially-hit exception, so the strip
+	 * draws the distinguishing shape only where something was dropped */
 	drop: boolean;
 }
 
@@ -156,8 +158,13 @@ function countBefore(list: readonly SeverityTarget[], time: number): number {
  * than one that does nothing.
  *
  * `remaining` counts judgements, which is what the tooltip promises. it equals
- * the number of successive jumps that succeed except where two objects share a
- * landing time (a 2B stack), where one press covers both.
+ * the number of successive jumps that succeed except where two targets share a
+ * landing time, where one press covers both. that happens two ways: two
+ * objects stacked at one time (a 2B stack), and -- under the native profile --
+ * one slider that left both a below-great head mark and a drop mark, which are
+ * two judgements at one object and so two counted targets at its start time.
+ * counting them once would make the tooltip under-report what actually went
+ * wrong, which is the promise it is read for.
  */
 export function severityJump(
 	targets: SeverityTargets,

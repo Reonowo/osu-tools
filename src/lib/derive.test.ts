@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { testScene } from "../test/scene";
+import { approximateNativeTestScene, nativeTestScene, testScene } from "../test/scene";
 import type { Grade, HpCurve, JudgementEventDto, LoadedScene, RenderNested, RenderObject } from "./scene-types";
-import { deriveScene, describeDrops, dropSummary, type ObjectLaneEntry } from "./derive";
+import { deriveScene, describeDrops, displayRank, dropSummary, type ObjectLaneEntry } from "./derive";
+import { severityJump } from "./judgement-nav";
 
 describe("deriveScene", () => {
 	describe("hp", () => {
@@ -13,7 +14,11 @@ describe("deriveScene", () => {
 		}
 
 		test("a scene with no authoritative simulation has no curve at all", () => {
-			const d = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+			const d = deriveScene(
+				testScene({
+					simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
+				})
+			);
 			expect(d.hp).toEqual({ curve: [], lowest: null, failPoint: null });
 		});
 
@@ -103,7 +108,7 @@ describe("deriveScene", () => {
 							accuracyAfter: 0
 						}
 					],
-					totals: { count300: 0, count100: 0, count50: 0, countMiss: 1, maxCombo: 0 }
+					totals: { count300: 0, count100: 0, count50: 0, countMiss: 1, maxCombo: 0, accuracy: 0, rank: "d" }
 				}
 			})
 		);
@@ -132,7 +137,15 @@ describe("deriveScene", () => {
 							accuracyAfter: 50 / 300
 						}
 					],
-					totals: { count300: 0, count100: 0, count50: 1, countMiss: 0, maxCombo: 1 }
+					totals: {
+						count300: 0,
+						count100: 0,
+						count50: 1,
+						countMiss: 0,
+						maxCombo: 1,
+						accuracy: 50 / 300,
+						rank: "d"
+					}
 				}
 			})
 		);
@@ -146,7 +159,9 @@ describe("deriveScene", () => {
 	});
 
 	test("notSimulated scenes derive empty judgement data", () => {
-		const d = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+		const d = deriveScene(
+			testScene({ simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } } })
+		);
 		expect(d.judgementsByObject[0]).toEqual([]);
 		expect(d.severityTicks).toEqual([]);
 		expect(d.severityTargets).toEqual({ ok: [], meh: [], miss: [] });
@@ -222,7 +237,7 @@ function laneScene(objects: RenderObject[], events: JudgementEventDto[], frames:
 			hpCurve: [],
 			scoreCurve: [],
 			events,
-			totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0 }
+			totals: { count300: 0, count100: 0, count50: 0, countMiss: 0, maxCombo: 0, accuracy: 0, rank: "d" }
 		}
 	});
 }
@@ -257,7 +272,7 @@ describe("deriveScene object lane", () => {
 			laneScene(
 				[slider(1000, 1500, [nested("head", 1000), nested("tick", 1250), nested("tail", 1500)])],
 				[
-					event(1012, 0, { type: "sliderHead", hit: true }),
+					event(1012, 0, { type: "sliderHead", grade: "great" }),
 					event(1500, 0, { type: "sliderAggregate", grade: "meh" })
 				],
 				[
@@ -276,7 +291,7 @@ describe("deriveScene object lane", () => {
 			laneScene(
 				[slider(1000, 1500, [nested("head", 1000), nested("tail", 1500)])],
 				[
-					event(1150, 0, { type: "sliderHead", hit: false }),
+					event(1150, 0, { type: "sliderHead", grade: "miss" }),
 					event(1500, 0, { type: "sliderAggregate", grade: "ok" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -381,7 +396,7 @@ describe("deriveScene object lane", () => {
 		const d = deriveScene(
 			testScene({
 				renderPlan: { ...base.renderPlan, objects: [circle(1000), spinner(1500, 2500)] },
-				simulation: { status: "notSimulated", reason: "unsupportedMods" }
+				simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
 			})
 		);
 		expect(d.objectLane).toHaveLength(2);
@@ -410,6 +425,8 @@ describe("deriveScene object lane", () => {
 				[circle(1000), slider(2000, 2500, [nested("head", 2000)]), spinner(3000, 4000), circle(5000)],
 				[
 					event(1005, 0, { type: "circle", grade: "meh" }),
+					// the ok aggregate's cause rides beside it: the dropped head
+					event(2150, 1, { type: "sliderHead", grade: "miss" }),
 					event(2500, 1, { type: "sliderAggregate", grade: "ok" }),
 					event(4000, 2, { type: "spinnerFinal", grade: "miss" }),
 					event(5000, 3, { type: "circle", grade: "great" })
@@ -424,10 +441,13 @@ describe("deriveScene object lane", () => {
 		]);
 	});
 
-	test("the drop flag is true exactly for ok/meh sliders -- circles, spinners and missed sliders stay plain", () => {
-		// every below-great slider is drop-caused under the legacy simulation
-		// path (the aggregate is a pure element-count fold), while a fully
-		// missed slider keeps the plain miss tick per the partially-hit
+	test("the drop flag reads the object's drop list -- circles, spinners and missed sliders stay plain", () => {
+		// every below-great slider is drop-caused under the stable profile
+		// (the aggregate is a pure element-count fold, so an ok or meh always
+		// has a dropped element beside it), and the flag reads that drop list
+		// rather than the grade, which is what lets the native profile's
+		// timing-100 head read as no drop. a fully missed slider carries no
+		// drop state and keeps the plain miss tick per the partially-hit
 		// exception
 		const d = deriveScene(
 			laneScene(
@@ -440,8 +460,12 @@ describe("deriveScene object lane", () => {
 				],
 				[
 					event(1005, 0, { type: "circle", grade: "ok" }),
+					event(2464, 1, { type: "sliderTail", hit: false, nestedIndex: 1 }),
 					event(2500, 1, { type: "sliderAggregate", grade: "ok" }),
+					event(3150, 2, { type: "sliderHead", grade: "miss" }),
 					event(3500, 2, { type: "sliderAggregate", grade: "meh" }),
+					event(4150, 3, { type: "sliderHead", grade: "miss" }),
+					event(4464, 3, { type: "sliderTail", hit: false, nestedIndex: 1 }),
 					event(4900, 3, { type: "sliderAggregate", grade: "miss" }),
 					event(6000, 4, { type: "spinnerFinal", grade: "meh" })
 				],
@@ -501,9 +525,9 @@ describe("deriveScene object lane", () => {
 				[
 					event(990, 0, { type: "circle", grade: "great" }),
 					event(2400, 1, { type: "circle", grade: "miss" }),
-					event(3020, 2, { type: "sliderHead", hit: true }),
+					event(3020, 2, { type: "sliderHead", grade: "great" }),
 					event(3500, 2, { type: "sliderAggregate", grade: "great" }),
-					event(4150, 3, { type: "sliderHead", hit: false }),
+					event(4150, 3, { type: "sliderHead", grade: "miss" }),
 					event(4500, 3, { type: "sliderAggregate", grade: "ok" }),
 					event(6000, 4, { type: "spinnerFinal", grade: "great" })
 				],
@@ -532,16 +556,16 @@ describe("deriveScene drop marks", () => {
 					slider(3000, 3500, [nested("head", 3000), nested("tail", 3500)])
 				],
 				[
-					event(1100, 0, { type: "sliderHead", hit: false }),
-					event(1250, 0, { type: "sliderTick", hit: true }),
-					event(1464, 0, { type: "sliderTail", hit: true }),
+					event(1100, 0, { type: "sliderHead", grade: "miss" }),
+					event(1250, 0, { type: "sliderTick", hit: true, nestedIndex: null }),
+					event(1464, 0, { type: "sliderTail", hit: true, nestedIndex: null }),
 					event(1500, 0, { type: "sliderAggregate", grade: "ok" }),
-					event(2010, 1, { type: "sliderHead", hit: true }),
-					event(2250, 1, { type: "sliderRepeat", hit: false, repeatIndex: 0 }),
-					event(2464, 1, { type: "sliderTail", hit: true }),
+					event(2010, 1, { type: "sliderHead", grade: "great" }),
+					event(2250, 1, { type: "sliderRepeat", hit: false, repeatIndex: 0, nestedIndex: null }),
+					event(2464, 1, { type: "sliderTail", hit: true, nestedIndex: null }),
 					event(2500, 1, { type: "sliderAggregate", grade: "ok" }),
-					event(3010, 2, { type: "sliderHead", hit: true }),
-					event(3464, 2, { type: "sliderTail", hit: false }),
+					event(3010, 2, { type: "sliderHead", grade: "great" }),
+					event(3464, 2, { type: "sliderTail", hit: false, nestedIndex: null }),
 					// the true fold value: 1 of 2 elements is exactly 0.5, and a
 					// two-element slider can never land meh
 					event(3500, 2, { type: "sliderAggregate", grade: "ok" })
@@ -579,10 +603,10 @@ describe("deriveScene drop marks", () => {
 					])
 				],
 				[
-					event(1010, 0, { type: "sliderHead", hit: true }),
-					event(1666, 0, { type: "sliderRepeat", hit: true, repeatIndex: 0 }),
-					event(2333, 0, { type: "sliderRepeat", hit: false, repeatIndex: 1 }),
-					event(2964, 0, { type: "sliderTail", hit: true }),
+					event(1010, 0, { type: "sliderHead", grade: "great" }),
+					event(1666, 0, { type: "sliderRepeat", hit: true, repeatIndex: 0, nestedIndex: null }),
+					event(2333, 0, { type: "sliderRepeat", hit: false, repeatIndex: 1, nestedIndex: null }),
+					event(2964, 0, { type: "sliderTail", hit: true, nestedIndex: null }),
 					event(3000, 0, { type: "sliderAggregate", grade: "ok" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -610,15 +634,15 @@ describe("deriveScene drop marks", () => {
 					])
 				],
 				[
-					event(1010, 0, { type: "sliderHead", hit: true }),
+					event(1010, 0, { type: "sliderHead", grade: "great" }),
 					// deliberately not the render plan's tick times: the mark sits
 					// where the simulation judged the drop
-					event(1252, 0, { type: "sliderTick", hit: false }),
-					event(1500, 0, { type: "sliderTick", hit: true }),
-					event(1751, 0, { type: "sliderTick", hit: false }),
+					event(1252, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
+					event(1500, 0, { type: "sliderTick", hit: true, nestedIndex: null }),
+					event(1751, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
 					// the dropped tail keeps the aggregate a genuine meh: 2 of 5
 					// elements folds to 0.4
-					event(1964, 0, { type: "sliderTail", hit: false }),
+					event(1964, 0, { type: "sliderTail", hit: false, nestedIndex: null }),
 					event(2000, 0, { type: "sliderAggregate", grade: "meh" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -629,6 +653,67 @@ describe("deriveScene drop marks", () => {
 		expect(d.objectLane[0].nestedMarks).toEqual([
 			{ time: 1000, dropped: false },
 			{ time: 2000, dropped: true }
+		]);
+	});
+
+	test("a dropped tick that names its element marks at that element's own time", () => {
+		// the identity join: the stable judgement of the FIRST tick lands
+		// 140ms late, nearer the second tick's time -- the mark goes where the
+		// named element is, not where a nearest-time guess would put it
+		const d = deriveScene(
+			laneScene(
+				[
+					slider(1000, 2000, [
+						nested("head", 1000),
+						nested("tick", 1250),
+						nested("tick", 1400),
+						nested("tail", 2000)
+					])
+				],
+				[
+					event(1010, 0, { type: "sliderHead", grade: "great" }),
+					event(1390, 0, { type: "sliderTick", hit: false, nestedIndex: 1 }),
+					event(1400, 0, { type: "sliderTick", hit: true, nestedIndex: 2 }),
+					event(1964, 0, { type: "sliderTail", hit: true, nestedIndex: 3 }),
+					event(2000, 0, { type: "sliderAggregate", grade: "ok" }),
+					event(2000, 0, { type: "sliderEnd", complete: true })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.objectLane[0].tickDrops).toEqual([1250]);
+		expect(d.drops).toEqual({ heads: 0, repeats: 0, ticks: 1, tails: 0 });
+		// and the severity tick reads the drop off the same list
+		expect(d.severityTicks).toEqual([{ time: 2000, grade: "ok", objectIndex: 0, drop: true }]);
+	});
+
+	test("a dropped repeat and tail that name their element flip exactly that mark", () => {
+		const d = deriveScene(
+			laneScene(
+				[
+					slider(1000, 3000, [
+						nested("head", 1000),
+						nested("repeat", 1666, 0),
+						nested("repeat", 2333, 1),
+						nested("tail", 3000)
+					])
+				],
+				[
+					event(1010, 0, { type: "sliderHead", grade: "great" }),
+					event(1666, 0, { type: "sliderRepeat", hit: true, repeatIndex: 0, nestedIndex: 1 }),
+					event(2333, 0, { type: "sliderRepeat", hit: false, repeatIndex: 1, nestedIndex: 2 }),
+					event(2964, 0, { type: "sliderTail", hit: false, nestedIndex: 3 }),
+					event(3000, 0, { type: "sliderAggregate", grade: "ok" }),
+					event(3000, 0, { type: "sliderEnd", complete: true })
+				],
+				[{ time: 0, x: 0, y: 0, buttons: 0 }]
+			)
+		);
+		expect(d.objectLane[0].nestedMarks).toEqual([
+			{ time: 1000, dropped: false },
+			{ time: 1666, dropped: false },
+			{ time: 2333, dropped: true },
+			{ time: 3000, dropped: true }
 		]);
 	});
 
@@ -647,8 +732,8 @@ describe("deriveScene drop marks", () => {
 					])
 				],
 				[
-					event(1751, 0, { type: "sliderTick", hit: false }),
-					event(1252, 0, { type: "sliderTick", hit: false }),
+					event(1751, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
+					event(1252, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
 					event(2000, 0, { type: "sliderAggregate", grade: "meh" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -662,9 +747,9 @@ describe("deriveScene drop marks", () => {
 			laneScene(
 				[slider(1000, 2000, [nested("head", 1000), nested("tick", 1500), nested("tail", 2000)])],
 				[
-					event(1010, 0, { type: "sliderHead", hit: true }),
-					event(1500, 0, { type: "sliderTick", hit: false }),
-					event(1964, 0, { type: "sliderTail", hit: false }),
+					event(1010, 0, { type: "sliderHead", grade: "great" }),
+					event(1500, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
+					event(1964, 0, { type: "sliderTail", hit: false, nestedIndex: null }),
 					event(2000, 0, { type: "sliderAggregate", grade: "great" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -679,9 +764,9 @@ describe("deriveScene drop marks", () => {
 			laneScene(
 				[slider(1000, 2000, [nested("head", 1000), nested("tick", 1500), nested("tail", 2000)])],
 				[
-					event(1150, 0, { type: "sliderHead", hit: false }),
-					event(1500, 0, { type: "sliderTick", hit: false }),
-					event(1964, 0, { type: "sliderTail", hit: false }),
+					event(1150, 0, { type: "sliderHead", grade: "miss" }),
+					event(1500, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
+					event(1964, 0, { type: "sliderTail", hit: false, nestedIndex: null }),
 					event(2000, 0, { type: "sliderAggregate", grade: "miss" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -741,12 +826,19 @@ describe("dropSummary", () => {
 	});
 
 	test("answers null where no cause segment belongs", () => {
-		// a below-great slider with no recorded drops, a great one, a fully
-		// missed one, and a non-slider
+		// a slider with no recorded drops, whatever its grade, and a non-slider
 		expect(dropSummary(object, entryWith([false, false, false, false]))).toBeNull();
-		expect(dropSummary(object, entryWith([false, false, false, true], [], "great"))).toBeNull();
-		expect(dropSummary(object, entryWith([false, false, false, true], [], "miss"))).toBeNull();
+		expect(dropSummary(object, entryWith([false, false, false, false], [], "great"))).toBeNull();
+		expect(dropSummary(object, entryWith([false, false, false, false], [], "miss"))).toBeNull();
 		expect(dropSummary(circle(1000), { grade: "ok", tether: null, nestedMarks: [], tickDrops: [] })).toBeNull();
+	});
+
+	test("a recorded drop is named whatever the grade: the native profile drops elements under a great head", () => {
+		// under the stable profile no mark is ever applied outside ok/meh, so
+		// these states arise only under the native profile, where lazer
+		// judged the element and the readout must say so
+		expect(dropSummary(object, entryWith([false, false, false, true], [], "great"))).toBe("dropped tail");
+		expect(dropSummary(object, entryWith([false, false, false, true], [], "miss"))).toBe("dropped tail");
 	});
 });
 
@@ -760,16 +852,16 @@ describe("deriveScene drop totals", () => {
 					slider(3000, 3500, [nested("head", 3000), nested("tail", 3500)])
 				],
 				[
-					event(1100, 0, { type: "sliderHead", hit: false }),
-					event(1250, 0, { type: "sliderTick", hit: false }),
-					event(1464, 0, { type: "sliderTail", hit: true }),
+					event(1100, 0, { type: "sliderHead", grade: "miss" }),
+					event(1250, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
+					event(1464, 0, { type: "sliderTail", hit: true, nestedIndex: null }),
 					event(1500, 0, { type: "sliderAggregate", grade: "meh" }),
-					event(2010, 1, { type: "sliderHead", hit: true }),
-					event(2250, 1, { type: "sliderRepeat", hit: false, repeatIndex: 0 }),
-					event(2464, 1, { type: "sliderTail", hit: false }),
+					event(2010, 1, { type: "sliderHead", grade: "great" }),
+					event(2250, 1, { type: "sliderRepeat", hit: false, repeatIndex: 0, nestedIndex: null }),
+					event(2464, 1, { type: "sliderTail", hit: false, nestedIndex: null }),
 					event(2500, 1, { type: "sliderAggregate", grade: "meh" }),
-					event(3010, 2, { type: "sliderHead", hit: true }),
-					event(3464, 2, { type: "sliderTail", hit: false }),
+					event(3010, 2, { type: "sliderHead", grade: "great" }),
+					event(3464, 2, { type: "sliderTail", hit: false, nestedIndex: null }),
 					event(3500, 2, { type: "sliderAggregate", grade: "ok" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -783,9 +875,9 @@ describe("deriveScene drop totals", () => {
 			laneScene(
 				[slider(1000, 1500, [nested("head", 1000), nested("tick", 1250), nested("tail", 1500)])],
 				[
-					event(1400, 0, { type: "sliderHead", hit: false }),
-					event(1250, 0, { type: "sliderTick", hit: false }),
-					event(1464, 0, { type: "sliderTail", hit: false }),
+					event(1400, 0, { type: "sliderHead", grade: "miss" }),
+					event(1250, 0, { type: "sliderTick", hit: false, nestedIndex: null }),
+					event(1464, 0, { type: "sliderTail", hit: false, nestedIndex: null }),
 					event(1500, 0, { type: "sliderAggregate", grade: "miss" })
 				],
 				[{ time: 0, x: 0, y: 0, buttons: 0 }]
@@ -795,7 +887,9 @@ describe("deriveScene drop totals", () => {
 	});
 
 	test("an unsimulated scene counts nothing", () => {
-		const d = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+		const d = deriveScene(
+			testScene({ simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } } })
+		);
 		expect(d.drops).toEqual({ heads: 0, repeats: 0, ticks: 0, tails: 0 });
 	});
 });
@@ -829,7 +923,9 @@ describe("deriveScene replay stats", () => {
 	});
 
 	test("without simulated totals every row falls back to the header value", () => {
-		const { stats } = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+		const { stats } = deriveScene(
+			testScene({ simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } } })
+		);
 		expect(stats.simulated).toBe(false);
 		expect(stats.count300).toEqual({ value: 1, header: 1 });
 		expect(stats.count100).toEqual({ value: 0, header: 0 });
@@ -837,6 +933,27 @@ describe("deriveScene replay stats", () => {
 		expect(stats.accuracy).toEqual({ value: 1, header: 1 });
 		expect(stats.grade).toEqual({ value: "SS", header: "SS" });
 		expect(stats.maxCombo).toEqual({ value: 1, header: 1 });
+	});
+
+	test("a native play's accuracy reference is the block's own, never the legacy projection", () => {
+		// the "was" line pairs an accuracy with a rank, and both halves must come
+		// from the SAME record. the block folds to 1 (one great of one possible)
+		// while this header's four counts say something else, so reading the
+		// header here would light the drift line on load for a file nothing has
+		// edited -- and pair a legacy-rule accuracy with the block's rank
+		const { stats } = deriveScene(nativeTestScene());
+		expect(stats.accuracy.header).toBe(1);
+		expect(stats.grade.header).toBe("SS");
+
+		// and when the block states no accuracy, the header is the only reference
+		// left, which is a fallback rather than a claim
+		const scene = nativeTestScene();
+		if (scene.replay.scoreInfo.status !== "present") throw new Error("present");
+		const silent = deriveScene({
+			...scene,
+			replay: { ...scene.replay, scoreInfo: { ...scene.replay.scoreInfo, accuracy: null } }
+		});
+		expect(silent.stats.accuracy.header).toBe(scene.replay.accuracy);
 	});
 
 	test("the score follows the curve, with the header riding along as the reference", () => {
@@ -865,7 +982,9 @@ describe("deriveScene replay stats", () => {
 	});
 
 	test("without a simulation the score falls back to the header, as every other row does", () => {
-		const { stats } = deriveScene(testScene({ simulation: { status: "notSimulated", reason: "unsupportedMods" } }));
+		const { stats } = deriveScene(
+			testScene({ simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } } })
+		);
 		expect(stats.totalScore).toEqual({ value: 300, header: 300 });
 	});
 
@@ -875,30 +994,53 @@ describe("deriveScene replay stats", () => {
 		expect(stats.countKatsu).toBe(0);
 	});
 
-	test("a miss always costs at least S, whatever the count-share accuracy says", () => {
+	test("accuracy and grade are read off the wire, never recomputed from the counts", () => {
+		// the header claims 97x300 with 3 misses, and the engine answered the
+		// accuracy and the miss-demoted A for it; the counts alone are not
+		// consulted, which is what lets the native profile answer otherwise
 		const scene = testScene();
 		const { stats } = deriveScene(
 			testScene({
-				replay: { ...scene.replay, count300: 97, countMiss: 3 },
-				simulation: { status: "notSimulated", reason: "unsupportedMods" }
+				replay: { ...scene.replay, count300: 97, countMiss: 3, accuracy: 0.97, rank: "a" },
+				simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
 			})
 		);
-		// 97×300 over 100 judged = 0.97, which clears the 0.95 S threshold --
-		// the misses still demote to A
 		expect(stats.accuracy.value).toBeCloseTo(0.97, 9);
 		expect(stats.grade.value).toBe("A");
 	});
 
-	test("zero judged hits read as zero accuracy, not NaN", () => {
-		const scene = testScene();
-		const { stats } = deriveScene(
-			testScene({
-				replay: { ...scene.replay, count300: 0, maxCombo: 0 },
-				simulation: { status: "notSimulated", reason: "unsupportedMods" }
-			})
-		);
-		expect(stats.accuracy.value).toBe(0);
-		expect(stats.grade.value).toBe("D");
+	test("with no timeline the accuracy and grade read one record, so an unedited lazer play shows no drift", () => {
+		// a lazer file the app will not simulate (mods) still carries its
+		// block, and the block is the record BOTH sides read there. reading
+		// the header's legacy projection as the value would pair it with the
+		// block as its own reference and drift a play nothing has touched --
+		// and since rank_from_accuracy has no `f` arm, it would lead a failed
+		// play with an A and hide the block's F in the "was" line
+		const scene = nativeTestScene();
+		if (scene.replay.scoreInfo.status !== "present") throw new Error("the native fixture carries a block");
+		const unsimulated = nativeTestScene({
+			replay: {
+				...scene.replay,
+				accuracy: 1,
+				rank: "x",
+				scoreInfo: { ...scene.replay.scoreInfo, accuracy: 0.8123, rank: "f" }
+			},
+			simulation: { status: "notSimulated", reason: { kind: "unsupportedMods", acronyms: ["HD"] } }
+		});
+		const { stats } = deriveScene(unsimulated);
+		expect(stats.accuracy.value).toBeCloseTo(0.8123, 9);
+		expect(stats.accuracy.value).toBe(stats.accuracy.header);
+		expect(stats.grade.value).toBe("F");
+		expect(stats.grade.value).toBe(stats.grade.header);
+	});
+
+	test("the wire's lazer rank vocabulary spells as the app's letters", () => {
+		expect(displayRank("x")).toBe("SS");
+		expect(displayRank("xh")).toBe("SS");
+		expect(displayRank("sh")).toBe("S");
+		expect(displayRank("s")).toBe("S");
+		expect(displayRank("d")).toBe("D");
+		expect(displayRank("f")).toBe("F");
 	});
 });
 
@@ -914,5 +1056,154 @@ describe("deriveScene analysis", () => {
 		const derived = deriveScene(scene);
 		expect(derived.analysis.frameCount).toBe(3);
 		expect(derived.analysis.velocity.length).toBeGreaterThan(0);
+	});
+});
+
+describe("an approximate simulation derives exactly as an authoritative one", () => {
+	test("lane, ticks, hp, combo changes and stats read the approximate timeline", () => {
+		const authoritative = deriveScene(testScene());
+		const approximate = deriveScene(approximateNativeTestScene());
+		expect(approximate.objectLane).toEqual(authoritative.objectLane);
+		expect(approximate.severityTicks).toEqual(authoritative.severityTicks);
+		expect(approximate.judgementsByObject).toEqual(authoritative.judgementsByObject);
+		expect(approximate.hp).toEqual(authoritative.hp);
+		expect(approximate.comboChanges).toEqual(authoritative.comboChanges);
+		expect(approximate.analysis.errors).toEqual(authoritative.analysis.errors);
+		expect(approximate.stats.simulated).toBe(true);
+		expect(approximate.stats.count100).toEqual(authoritative.stats.count100);
+		expect(approximate.stats.totalScore).toEqual(authoritative.stats.totalScore);
+	});
+});
+
+describe("native judgement-derived surfaces", () => {
+	// a lane scene judged under the native profile: no aggregate, the head's
+	// timing grade and the elements' own results say everything
+	function nativeLane(objects: RenderObject[], events: JudgementEventDto[], frames: LoadedScene["frames"]) {
+		return { ...laneScene(objects, events, frames), configuration: nativeTestScene().configuration };
+	}
+	const tracked = () => slider(1000, 1500, [nested("head", 1000), nested("tick", 1250), nested("tail", 1500)]);
+	const press = [
+		{ time: 0, x: 0, y: 0, buttons: 0 },
+		{ time: 1010, x: 0, y: 0, buttons: 1 },
+		{ time: 1600, x: 0, y: 0, buttons: 0 }
+	];
+
+	test("an ok head with every element hit is one timing mark, never a drop", () => {
+		const d = deriveScene(
+			nativeLane(
+				[tracked()],
+				[
+					event(1010, 0, { type: "sliderHead", grade: "ok" }),
+					event(1250, 0, { type: "sliderTick", hit: true, nestedIndex: 1 }),
+					event(1464, 0, { type: "sliderTail", hit: true, nestedIndex: 2 }),
+					event(1500, 0, { type: "sliderEnd", complete: true })
+				],
+				press
+			)
+		);
+		expect(d.objectLane[0].grade).toBe("ok");
+		expect(d.severityTicks).toEqual([{ time: 1010, grade: "ok", objectIndex: 0, drop: false }]);
+		expect(d.objectLane[0].nestedMarks.every((m) => !m.dropped)).toBe(true);
+		expect(d.objectLane[0].tickDrops).toEqual([]);
+		expect(d.severityTargets.ok).toEqual([{ objectIndex: 0, landingTime: 1000, grade: "ok" }]);
+		// the tether points at the press that judged the head, so the head's
+		// error enters the unstable rate as lazer's does
+		expect(d.objectLane[0].tether).toEqual({ fromTime: 1000, toTime: 1010, key: "M1", pressFrameIndex: 1 });
+	});
+
+	test("a great head with a dropped tick is one drop mark at the element's own time", () => {
+		const d = deriveScene(
+			nativeLane(
+				[tracked()],
+				[
+					event(1000, 0, { type: "sliderHead", grade: "great" }),
+					event(1250, 0, { type: "sliderTick", hit: false, nestedIndex: 1 }),
+					event(1464, 0, { type: "sliderTail", hit: true, nestedIndex: 2 }),
+					event(1500, 0, { type: "sliderEnd", complete: true })
+				],
+				press
+			)
+		);
+		expect(d.objectLane[0].grade).toBe("great");
+		expect(d.objectLane[0].tickDrops).toEqual([1250]);
+		expect(d.severityTicks).toEqual([{ time: 1250, grade: "miss", objectIndex: 0, drop: true }]);
+		expect(d.severityTargets.miss).toEqual([{ objectIndex: 0, landingTime: 1000, grade: "miss" }]);
+		expect(dropSummary(tracked(), d.objectLane[0])).toBe("dropped tick");
+	});
+
+	test("an ok head with a dropped tail is two marks, and the jump covers both without wrapping", () => {
+		const d = deriveScene(
+			nativeLane(
+				[tracked()],
+				[
+					event(1010, 0, { type: "sliderHead", grade: "ok" }),
+					event(1250, 0, { type: "sliderTick", hit: true, nestedIndex: 1 }),
+					event(1500, 0, { type: "sliderTail", hit: false, nestedIndex: 2 }),
+					event(1500, 0, { type: "sliderEnd", complete: true })
+				],
+				press
+			)
+		);
+		expect(d.severityTicks).toEqual([
+			{ time: 1010, grade: "ok", objectIndex: 0, drop: false },
+			{ time: 1500, grade: "meh", objectIndex: 0, drop: true }
+		]);
+		expect(d.objectLane[0].nestedMarks).toEqual([
+			{ time: 1000, dropped: false },
+			{ time: 1500, dropped: true }
+		]);
+		expect(d.severityTargets.ok).toHaveLength(1);
+		expect(d.severityTargets.meh).toHaveLength(1);
+		const first = severityJump(d.severityTargets, "meh", 1, 0);
+		expect(first.target?.landingTime).toBe(1000);
+		expect(severityJump(d.severityTargets, "meh", 1, 1000).target).toBeNull();
+	});
+
+	test("a missed native head is one timing mark, never doubled as a drop of its own", () => {
+		const d = deriveScene(
+			nativeLane(
+				[tracked()],
+				[
+					event(1150, 0, { type: "sliderHead", grade: "miss" }),
+					event(1250, 0, { type: "sliderTick", hit: true, nestedIndex: 1 }),
+					event(1464, 0, { type: "sliderTail", hit: true, nestedIndex: 2 }),
+					event(1500, 0, { type: "sliderEnd", complete: true })
+				],
+				press
+			)
+		);
+		expect(d.severityTicks).toEqual([{ time: 1150, grade: "miss", objectIndex: 0, drop: false }]);
+		expect(d.severityTargets.miss).toHaveLength(1);
+		expect(d.objectLane[0].nestedMarks[0]).toEqual({ time: 1000, dropped: true });
+		expect(d.objectLane[0].tether).toBeNull();
+	});
+
+	test("a stable slider's aggregate still grades it, whatever its head says", () => {
+		const d = deriveScene(
+			laneScene(
+				[tracked()],
+				[
+					event(1010, 0, { type: "sliderHead", grade: "great" }),
+					event(1250, 0, { type: "sliderTick", hit: false, nestedIndex: 1 }),
+					event(1464, 0, { type: "sliderTail", hit: true, nestedIndex: 2 }),
+					event(1500, 0, { type: "sliderAggregate", grade: "ok" }),
+					event(1500, 0, { type: "sliderEnd", complete: true })
+				],
+				press
+			)
+		);
+		expect(d.objectLane[0].grade).toBe("ok");
+		expect(d.severityTicks).toEqual([{ time: 1500, grade: "ok", objectIndex: 0, drop: true }]);
+	});
+
+	test("the rank tile's frozen reference is the block's own rank on a lazer file", () => {
+		const scene = nativeTestScene();
+		if (scene.replay.scoreInfo.status !== "present") throw new Error("the native fixture carries a block");
+		const failed = nativeTestScene({
+			replay: { ...scene.replay, scoreInfo: { ...scene.replay.scoreInfo, rank: "f" } }
+		});
+		expect(deriveScene(failed).stats.grade.header).toBe("F");
+		expect(deriveScene(scene).stats.grade.header).toBe("SS");
+		expect(deriveScene(testScene()).stats.grade.header).toBe(displayRank(testScene().replay.rank));
 	});
 });
