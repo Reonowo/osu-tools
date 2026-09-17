@@ -15,6 +15,7 @@ import {
 	describeCrossCheck,
 	headerFailNote,
 	incompletenessNote,
+	blockNote,
 	integrityRowLabel,
 	integrityRowValue,
 	lifeBarGraphNote,
@@ -24,6 +25,7 @@ import { describeDrops, type DerivedHp } from "@/lib/derive";
 import { formatLatticeStep, type Lattice, type OffLatticeSummary } from "@/lib/lattice";
 import type { Incompleteness, IntegrityReport } from "@/lib/scene-types";
 import { useViewerStore } from "@/state/store";
+import { simulated } from "@/lib/simulation";
 import { SectionLabel } from "./SectionLabel";
 
 // real minus (u2212), not a hyphen -- the design's chosen glyph for signed values
@@ -150,16 +152,18 @@ function HpSection({ hp, report }: { hp: DerivedHp; report: IntegrityReport | nu
 					/>
 				</dl>
 				<div className="mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] text-[#8a8a93]">
-					{headerFailNote(report?.lifeBarGraph ?? null)}
+					{headerFailNote(report)}
 				</div>
 			</div>
 		</div>
 	);
 }
 
-// the loaded file's header-vs-simulated comparison. rendered only when the
-// scene shipped a report (pre-lazer authoritative scenes), so an
-// inapplicable rules profile never raises false mismatch alarms. the report
+// the loaded file's own record against the simulation -- the header under the
+// stable profile, the score-info block under the native one. rendered only
+// when the scene shipped a report (an authoritative scene whose profile has
+// an oracle), so an inapplicable rules profile never raises false mismatch
+// alarms. the report
 // describes the loaded file across every in-session edit. an incomplete
 // play keeps its rows but drops the verdict treatment: the header stops at
 // the fail point while simulation judges the whole map, so a differing row
@@ -184,7 +188,14 @@ function IntegritySection({
 				)}
 				<div className="grid grid-cols-[auto_1fr_1fr_auto] items-center gap-x-3 gap-y-[6px] text-[11px]">
 					<span />
-					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">header</span>
+					{/* the reference column is named for where the values came from.
+					    stable's are all the header's. a native report's are mostly the
+					    block's, but maxCombo and totalScore are read off the header
+					    (the block carries neither), so "file" is the one title true of
+					    every row rather than trading one mislabel for another */}
+					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">
+						{report.profile === "native" ? "file" : "header"}
+					</span>
 					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">
 						simulated
 					</span>
@@ -218,16 +229,36 @@ function IntegritySection({
 						);
 					})}
 				</div>
+				{report.crossCheck !== null && (
+					<div
+						className={`mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] tabular-nums ${
+							consistent ? "text-[#8a8a93]" : "text-destructive"
+						}`}
+					>
+						{describeCrossCheck(report.crossCheck)}
+					</div>
+				)}
+				{/* never gated: the note answers for every state the graph has,
+				    the native profile's absent one included, and gating it on the
+				    cross-check -- a separately nullable field -- is what would
+				    make that answer unreachable. it takes the separator when the
+				    cross-check line above is not there to carry one */}
 				<div
-					className={`mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] tabular-nums ${
-						consistent ? "text-[#8a8a93]" : "text-destructive"
+					className={`text-[10.5px] text-[#8a8a93] tabular-nums ${
+						report.crossCheck === null ? "mt-2.5 border-t border-border pt-2" : "mt-1"
 					}`}
 				>
-					{describeCrossCheck(report.crossCheck)}
-				</div>
-				<div className="mt-1 text-[10.5px] text-[#8a8a93] tabular-nums">
 					{lifeBarGraphNote(report.lifeBarGraph)}
 				</div>
+				{report.block != null && (
+					<div
+						className={`mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] tabular-nums ${
+							report.block.rankMatch ? "text-[#8a8a93]" : "text-destructive"
+						}`}
+					>
+						{blockNote(report.block)}
+					</div>
+				)}
 			</div>
 		</div>
 	);
@@ -336,7 +367,11 @@ export function AnalysisPanel() {
 	if (scene === null || derived === null) return null;
 	const { analysis } = derived;
 	const { simulation } = scene;
-	const authoritative = simulation.status === "authoritative";
+	// the timing and hp sections display a timeline, authoritative or
+	// approximate; the integrity section below is the exact one, and the
+	// scene ships it only for an authoritative simulation
+	const timeline = simulated(simulation);
+	const authoritative = timeline !== null;
 	// judgedTime (analysis.ts) returns null for a miss -- it carries no press
 	// to measure an error against -- so an authoritative simulation can still
 	// finish with zero countable hit errors (a miss-only play, or a map with
@@ -346,15 +381,15 @@ export function AnalysisPanel() {
 	// measure
 	const hasTimedHits = authoritative && analysis.errors.length > 0;
 
-	// totals only exist on the authoritative variant -- an absent trailing is
+	// totals ride every timeline, approximate included -- an absent trailing is
 	// the honest header for a replay whose judgements were never simulated
 	const judgedTrailing =
-		simulation.status === "authoritative"
+		timeline !== null
 			? `${(
-					simulation.totals.count300 +
-					simulation.totals.count100 +
-					simulation.totals.count50 +
-					simulation.totals.countMiss
+					timeline.totals.count300 +
+					timeline.totals.count100 +
+					timeline.totals.count50 +
+					timeline.totals.countMiss
 				).toLocaleString()} judged`
 			: undefined;
 
@@ -435,8 +470,10 @@ export function AnalysisPanel() {
 					{/* the slider elements the cursor let go of, summed off the object
 					lane's own drop lists in the lane's own words (derive.ts's
 					describeDrops), so this row and a slider's hover readout can
-					never disagree. only sliders that still scored carry drop
-					state -- a fully missed slider says everything with its miss */}
+					never disagree. under the stable profile only sliders that still
+					scored carry drop state -- a fully missed one says everything
+					with its miss -- while under the native profile every slider
+					reports what lazer dropped, whatever its head graded */}
 					{authoritative && <StatRow label="dropped" value={describeDrops(derived.drops) ?? "none"} />}
 				</dl>
 

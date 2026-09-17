@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	blockNote,
 	crossCheckConsistent,
 	describeCrossCheck,
 	incompletenessNote,
@@ -9,16 +10,18 @@ import {
 	lifeBarGraphNote,
 	rowVerdict
 } from "./integrity";
-import type { IntegrityReport } from "./scene-types";
+import type { IntegrityReport, LifeBarGraphReport, WireRank } from "./scene-types";
 
 const report: IntegrityReport = {
+	profile: "stable",
 	rows: [
 		{ field: "count300", header: 100, simulated: 100, match: true },
 		{ field: "countGeki", header: 103, simulated: 99, match: false },
 		{ field: "perfect", header: 1, simulated: 0, match: false }
 	],
 	crossCheck: { sections: 105, gekiKatsu: 103, sectionsWithoutBurst: 2, countMiss: 2, count50: 0 },
-	lifeBarGraph: { status: "absent" }
+	lifeBarGraph: { status: "absent" },
+	block: null
 };
 
 describe("integrity rows", () => {
@@ -40,6 +43,7 @@ describe("integrity rows", () => {
 
 describe("cross-check", () => {
 	test("the sentence states the identity with the header misses and 50s beside it", () => {
+		if (report.crossCheck === null) throw new Error("the stable fixture carries a cross-check");
 		expect(describeCrossCheck(report.crossCheck)).toBe(
 			"105 sections − 103 geki+katu = 2 with a miss or 50 · header misses 2 · 50s 0"
 		);
@@ -115,21 +119,72 @@ describe("incompleteness note", () => {
 });
 
 describe("the header's own fail record", () => {
+	const withGraph = (lifeBarGraph: LifeBarGraphReport): IntegrityReport => ({
+		profile: "stable",
+		rows: [],
+		crossCheck: null,
+		lifeBarGraph,
+		block: null
+	});
+
 	test("the header's three states each get their own sentence", () => {
-		const failed = headerFailNote({ status: "compared", matched: 51, total: 51, headerFailed: true });
-		const survived = headerFailNote({
-			status: "compared",
-			matched: 51,
-			total: 51,
-			headerFailed: false
-		});
-		const silent = headerFailNote({ status: "absent" });
+		const failed = headerFailNote(withGraph({ status: "compared", matched: 51, total: 51, headerFailed: true }));
+		const survived = headerFailNote(
+			withGraph({
+				status: "compared",
+				matched: 51,
+				total: 51,
+				headerFailed: false
+			})
+		);
+		const silent = headerFailNote(withGraph({ status: "absent" }));
 		expect(failed).toContain("recorded a fail");
 		expect(survived).toContain("recorded no fail");
 		expect(silent).toContain("no life bar graph");
 		expect(new Set([failed, survived, silent]).size).toBe(3);
 		// an empty graph and no report at all say the same nothing
-		expect(headerFailNote({ status: "empty" })).toBe(silent);
+		expect(headerFailNote(withGraph({ status: "empty" }))).toBe(silent);
 		expect(headerFailNote(null)).toBe(silent);
+	});
+
+	test("a native report answers off the block's rank instead", () => {
+		const native = (rankBlock: WireRank | null): IntegrityReport => ({
+			profile: "native",
+			rows: [],
+			crossCheck: null,
+			lifeBarGraph: null,
+			block: { rankBlock, rankSimulated: "d", rankMatch: false, truncatedAt: null }
+		});
+		expect(headerFailNote(native("f"))).toContain("lazer recorded a fail");
+		expect(headerFailNote(native("s"))).toContain("lazer recorded no fail");
+		expect(headerFailNote(native(null))).toContain("says nothing either way");
+	});
+});
+
+describe("the native report's block line and row labels", () => {
+	test("the block line names both ranks and states the truncation a failed source is compared under", () => {
+		expect(blockNote({ rankBlock: "s", rankSimulated: "s", rankMatch: true, truncatedAt: null })).toBe(
+			"block records rank S · simulated S"
+		);
+		expect(blockNote({ rankBlock: "x", rankSimulated: "a", rankMatch: false, truncatedAt: null })).toContain(
+			"differs"
+		);
+		const truncated = blockNote({ rankBlock: "f", rankSimulated: "f", rankMatch: true, truncatedAt: 28509.5 });
+		expect(truncated).toContain("up to the engine's own fail point at 28.5s");
+		expect(truncated).toContain("parity finding");
+		expect(blockNote({ rankBlock: null, rankSimulated: "d", rankMatch: false, truncatedAt: null })).toContain(
+			"no rank"
+		);
+	});
+
+	test("a native row reads by its result name, a maximum entry by its prefix, a stable row by its label", () => {
+		expect(integrityRowLabel("large_tick_hit")).toBe("large tick hit");
+		expect(integrityRowLabel("maximum:slider_tail_hit")).toBe("max slider tail hit");
+		expect(integrityRowLabel("maxCombo")).toBe("max combo");
+	});
+
+	test("a missing cross-check reads as consistent and a missing graph says a lazer client wrote none", () => {
+		expect(crossCheckConsistent(null)).toBe(true);
+		expect(lifeBarGraphNote(null)).toContain("lazer client writes none");
 	});
 });
