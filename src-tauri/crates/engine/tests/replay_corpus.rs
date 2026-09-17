@@ -62,6 +62,10 @@ fn local_nomod_replays_self_verify() {
     };
 
     let mut checked = 0;
+    // native plays that verified in every field the block can be an oracle
+    // for, and carried a named excuse in the rest -- counted apart from
+    // `checked` so the summary never calls an excused play exact
+    let mut excused = 0;
     let mut ratified = 0;
     // every failing pair is reported before the assertion so a red run
     // shows the whole corpus picture, not the alphabetically first mismatch
@@ -102,18 +106,22 @@ fn local_nomod_replays_self_verify() {
         // native pair needs its ledger row first -- provenance is what keeps
         // historical lazer gameplay drift from being counted as an engine bug
         if configuration.profile == RulesProfile::Native {
-            match native_ledger_row(&dir, &name) {
+            let row = match native_ledger_row(&dir, &name) {
                 Err(complaint) => {
                     failures.push(complaint);
                     continue;
                 }
-                Ok(row) => eprintln!(
-                    "corpus: {name}: native pair from {} ({}), against pin {}",
-                    row.client, row.origin, row.pin
-                ),
-            }
-            match verify_native_pair(&name, &osr, &processed, &frames, map.hp_drain_rate) {
-                Ok(()) => checked += 1,
+                Ok(row) => {
+                    eprintln!(
+                        "corpus: {name}: native pair from {} ({}), against pin {}",
+                        row.client, row.origin, row.pin
+                    );
+                    row
+                }
+            };
+            match verify_native_pair(&name, &osr, &processed, &frames, map.hp_drain_rate, &row) {
+                Ok(true) => checked += 1,
+                Ok(false) => excused += 1,
                 Err(complaint) => failures.push(complaint),
             }
             continue;
@@ -245,7 +253,10 @@ fn local_nomod_replays_self_verify() {
         "{} corpus replays diverge from their headers (list above)",
         failures.len()
     );
-    eprintln!("corpus: verified {checked} replays exact, {ratified} on the ratified-divergence ledger");
+    eprintln!(
+        "corpus: verified {checked} replays exact, {excused} native plays exact but for a named \
+         excuse above, {ratified} on the ratified-divergence ledger"
+    );
 }
 
 /// one native pair's provenance, from `fixtures/replays/local/native_ledger.json`
@@ -260,7 +271,146 @@ struct NativeLedgerRow {
     /// `original` or `re-run`
     origin: String,
     pin: String,
+    /// the client's own date as `YYYY-MM-DD` -- for a row dated by a
+    /// changelog bracket, the bracket's UPPER bound, so "predates a lazer
+    /// change" is only ever claimed when the whole bracket does. this is
+    /// what decides whether the play may carry a grade claim at all
+    /// (`HIT_WINDOW_MERGE`), so a row without it carries none
+    client_date: Option<String>,
 }
+
+/// the day lazer's hit-window flooring merged: PR #33882 / `0f078ee550`,
+/// "Apply flooring and half-millisecond-adjustments to hit windows"
+/// (authored 2025-04-18, merged 2025-07-02), which narrowed every window
+/// from `DifficultyRange(od, ..)` to `floor(DifficultyRange(od, ..)) - 0.5`.
+/// this engine ports the pinned rule (`beatmap::difficulty`), so a play
+/// written by an EARLIER client was graded under wider windows and will read
+/// `great` low and `ok`/`meh` high by exactly the objects whose hit error
+/// sits at `|offset| == floor(window)`. that is lazer's own change, not a
+/// divergence of this port: verified by re-running such plays through the
+/// pinned client itself, which reproduces this engine's grades exactly and
+/// the file's not at all (`docs/engine-parity.md`)
+const HIT_WINDOW_MERGE: &str = "2025-07-02";
+
+/// the results whose count a `.osr` does not pin down to the object, because
+/// they are decided by tracking or rotation sampled at the client's own
+/// DISPLAY frames while `ReplayRecorder` throttles the replay's positional
+/// frames to 60hz. this walk takes the limit of an arbitrarily fast display,
+/// a real client ran at whatever rate it ran at, and the two land on
+/// opposite sides of an element every so often. measured over this corpus
+/// once the important-section port defect was removed, the whole residual is
+/// at most `CADENCE_NOISE_FLOOR` elements on a play and falls both ways --
+/// which is what makes it a noise floor rather than a bias to chase
+const CADENCE_RESULTS: &[HitResult] = &[
+    HitResult::SliderTailHit,
+    HitResult::IgnoreMiss,
+    HitResult::LargeTickHit,
+    HitResult::LargeTickMiss,
+    HitResult::SmallBonus,
+    HitResult::LargeBonus,
+];
+
+/// the cadence results a slider TICK or REPEAT trades between. it scores one
+/// or the other and never anything else (`native::slider`'s result map), so
+/// this group conserves entirely on its own
+const TICK_CADENCE_GROUP: &[HitResult] = &[HitResult::LargeTickHit, HitResult::LargeTickMiss];
+
+/// the cadence results an element that can go UNREACHED trades between. a
+/// slider tail is a `SliderTailHit` or an `IgnoreMiss`; a spinner's bonus tick
+/// is its own bonus or an `IgnoreMiss` (`native`'s end-of-spinner miss). so
+/// `IgnoreMiss` is the counterpart both share, which is what puts the three in
+/// one group rather than two
+const UNREACHED_CADENCE_GROUP: &[HitResult] =
+    &[HitResult::SliderTailHit, HitResult::SmallBonus, HitResult::LargeBonus, HitResult::IgnoreMiss];
+
+/// the observed magnitude of that residual, per play, and deliberately NOT a
+/// round number with room in it: it is the largest divergence left in the
+/// corpus, so anything bigger is new behaviour and comes back for review.
+/// before the important-section fix one play stood at 14
+const CADENCE_NOISE_FLOOR: i64 = 2;
+
+/// what an explained statistics difference does, and does not, excuse
+/// downstream. `max_combo`, the total and the rank are FUNCTIONS of the
+/// statistics, so a difference in the counts they are folded from explains a
+/// difference in them too -- but only as far as the differing RESULT CLASS
+/// can reach, which is the whole point of splitting this out from one
+/// boolean. a bonus the display cadence moved is worth points and nothing
+/// else: `SmallBonus`, `LargeBonus` and the `IgnoreMiss` they trade against
+/// neither affect combo nor affect accuracy, so on a play whose only
+/// difference is theirs, `max_combo` and the rank stay PINNED rather than
+/// going unchecked alongside the total. likewise a `great`-to-`ok` era
+/// downgrade moves accuracy and the total, and can never move combo
+#[derive(Debug, Default)]
+struct ExplainedDivergence {
+    /// one human note per explained class, printed per play
+    notes: Vec<String>,
+    /// the difference CROSSES combo classes, so `max_combo` may follow.
+    /// affecting combo is not enough on its own: `great` and `ok` both
+    /// increase it, so an object moving between them leaves the run intact
+    combo: bool,
+    /// a differing result scores, so the total may follow
+    score: bool,
+    /// a differing result affects accuracy, which is what the rank reads --
+    /// `Miss`'s own demotion of S and X included, that result affecting
+    /// accuracy too (`rank_from_accuracy`)
+    accuracy: bool,
+}
+
+impl ExplainedDivergence {
+    /// widen this reach by another CAUSE's. the era and the cadence explain
+    /// different results and are folded separately, so that neither borrows
+    /// the other's reach -- a play whose grades moved within `great`/`ok`
+    /// and whose bonuses traded against an `IgnoreMiss` has two differences,
+    /// neither of which can move combo, and pooling them would read as one
+    /// that can
+    fn widen(&mut self, other: &ExplainedDivergence) {
+        self.combo |= other.combo;
+        self.score |= other.score;
+        self.accuracy |= other.accuracy;
+    }
+}
+
+/// which side of combo a result falls on. a difference confined to ONE of
+/// these cannot move `max_combo`: trading a `great` for an `ok` leaves the
+/// run intact, and trading an `IgnoreMiss` for a bonus never touched it.
+/// one that spans two -- a `great` for a `miss`, an `IgnoreMiss` for a
+/// `SliderTailHit` -- can
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum ComboClass {
+    Increases,
+    Breaks,
+    Untouched,
+}
+
+/// how far a difference confined to `results` reaches into the fields folded
+/// from the statistics, read off the result classes that actually differ
+fn reach_of(results: &[HitResult], deltas: &std::collections::BTreeMap<String, i64>) -> ExplainedDivergence {
+    let mut reach = ExplainedDivergence::default();
+    let mut classes = std::collections::BTreeSet::new();
+    for result in results.iter().copied() {
+        if !deltas.contains_key(result.snake_name()) {
+            continue;
+        }
+        classes.insert(if result.increases_combo() {
+            ComboClass::Increases
+        } else if result.breaks_combo() {
+            ComboClass::Breaks
+        } else {
+            ComboClass::Untouched
+        });
+        reach.score |= result.is_scorable();
+        reach.accuracy |= result.affects_accuracy();
+    }
+    reach.combo = classes.len() > 1;
+    reach
+}
+
+/// the results the hit-window change moves, in the order it moves them: the
+/// LADDER, best first. this ORDER is load-bearing, not presentation --
+/// narrowing a window only ever pushes an object into a softer tier, and
+/// walking these in sequence is the whole of the shape test in
+/// `classify_native_statistics`
+const GRADE_RESULTS: &[HitResult] = &[HitResult::Great, HitResult::Ok, HitResult::Meh, HitResult::Miss];
 
 fn native_ledger_row(dir: &std::path::Path, stem: &str) -> Result<NativeLedgerRow, String> {
     let path = dir.join("native_ledger.json");
@@ -286,14 +436,20 @@ fn native_ledger_row(dir: &std::path::Path, stem: &str) -> Result<NativeLedgerRo
 /// rank-F source failed, so lazer's score processor stopped counting at the
 /// failing result; the comparison then runs up to the engine's own fail
 /// point, and a disagreement past that rule is a parity finding, never
-/// absorbed by widening the comparison. every other source compares whole
+/// absorbed by widening the comparison. every other source compares whole.
+///
+/// `Ok(true)` is an EXACT verification and `Ok(false)` one the block could
+/// not be a whole oracle for, its excused classes named on stderr -- two
+/// answers the summary line counts apart, since calling an excused play
+/// exact is the one way this test could overclaim quietly
 fn verify_native_pair(
     name: &str,
     osr: &engine::formats::osr::OsrFile,
     processed: &engine::beatmap::ProcessedBeatmap,
     frames: &[engine::replay::frames::ReplayFrame],
     hp_drain_rate: f32,
-) -> Result<(), String> {
+    row: &NativeLedgerRow,
+) -> Result<bool, String> {
     let Some(block) = osr.trailer.score_info() else {
         return Err(format!("{name}: a lazer-written play with no readable block has no oracle"));
     };
@@ -373,12 +529,17 @@ fn verify_native_pair(
         rows.sort();
         rows
     };
-    if sorted(&statistics) != sorted(&block_statistics) {
-        complaints.push(format!(
-            "statistics {:?} against the block's {:?}",
-            sorted(&statistics),
-            sorted(&block_statistics)
-        ));
+    // the statistics map, split into the half a `.osr` pins down to the
+    // object and the two halves it does not. an unexplained difference in
+    // ANY field is still a failure; the two explained classes are reported
+    // with their exact deltas instead, because failing on them would make
+    // this test unpassable by any implementation, lazer's own included
+    let mut explained = ExplainedDivergence::default();
+    match classify_native_statistics(&statistics, &block_statistics, row) {
+        // nothing is excused on a play that already fails: the derived
+        // fields below are checked too, so the report names every symptom
+        Err(complaint) => complaints.push(complaint),
+        Ok(divergence) => explained = divergence,
     }
     if sorted(&maximum) != sorted(&block_maximum) {
         complaints.push(format!(
@@ -387,30 +548,381 @@ fn verify_native_pair(
             sorted(&block_maximum)
         ));
     }
-    if max_combo != u32::from(osr.header.max_combo) {
+    // max combo, the total and the rank are FUNCTIONS of the statistics, so
+    // an explained statistics difference explains them too -- pinning them
+    // exactly while excusing the counts they are folded from would fail the
+    // same play twice for one cause. but each follows only the results that
+    // can REACH it (`ExplainedDivergence`), so a play excused its bonuses is
+    // still held to its combo and its rank, and one excused an era downgrade
+    // is still held to its combo
+    if max_combo != u32::from(osr.header.max_combo) && !explained.combo {
         complaints.push(format!("max combo {max_combo} against the header's {}", osr.header.max_combo));
     }
-    if total_score != i64::from(osr.header.total_score) {
+    if total_score != i64::from(osr.header.total_score) && !explained.score {
         complaints.push(format!("total score {total_score} against the header's {}", osr.header.total_score));
     }
     if let Some(without_mods) = block.total_score_without_mods {
-        if total_score != without_mods {
+        if total_score != without_mods && !explained.score {
             complaints.push(format!("total score {total_score} against the block's {without_mods} without mods"));
         }
     }
-    if Some(rank) != block.rank {
+    if Some(rank) != block.rank && !explained.accuracy {
         complaints.push(format!("rank {rank:?} against the block's {:?}", block.rank));
     }
     if complaints.is_empty() {
-        eprintln!(
-            "corpus: {name}: native play verified against its block ({} results; client {})",
-            statistics.len(),
-            block.client_version
-        );
-        Ok(())
+        if explained.notes.is_empty() {
+            eprintln!(
+                "corpus: {name}: native play verified against its block ({} results; client {})",
+                statistics.len(),
+                block.client_version
+            );
+        } else {
+            // reported, never silent: this is the whole of what the corpus
+            // does not claim exactly, printed per play so a drift in it is
+            // visible in the run rather than discovered later
+            eprintln!(
+                "corpus: {name}: native play verified except where the block cannot be an oracle -- {}",
+                explained.notes.join("; ")
+            );
+        }
+        Ok(explained.notes.is_empty())
     } else {
         Err(format!("{name}: {}", complaints.join("; ")))
     }
+}
+
+/// the statistics comparison's whole decision surface: the explained
+/// divergences as human notes, or the complaint that fails the play.
+///
+/// the block's key ORDER is its serializer's, and the two producers that
+/// write one disagree -- a client export and the server's own stored copy
+/// spell the same map in different sequences -- so both sides fold into a
+/// map keyed by result name. a name only one side carries still compares,
+/// as a count the other is missing entirely
+fn classify_native_statistics(
+    statistics: &[(String, i64)],
+    block: &[(String, i64)],
+    row: &NativeLedgerRow,
+) -> Result<ExplainedDivergence, String> {
+    let mut deltas: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for (result, count) in statistics {
+        *deltas.entry(result.clone()).or_default() += count;
+    }
+    for (result, count) in block {
+        *deltas.entry(result.clone()).or_default() -= count;
+    }
+    deltas.retain(|_, delta| *delta != 0);
+    if deltas.is_empty() {
+        return Ok(ExplainedDivergence::default());
+    }
+
+    let named =
+        |set: &[HitResult]| -> Vec<String> { set.iter().map(|r| r.snake_name().to_owned()).collect() };
+    let grade_names = named(GRADE_RESULTS);
+    let cadence_names = named(CADENCE_RESULTS);
+    let unexplained: Vec<String> = deltas
+        .keys()
+        .filter(|name| !grade_names.contains(name) && !cadence_names.contains(name))
+        .cloned()
+        .collect();
+    if !unexplained.is_empty() {
+        return Err(format!(
+            "statistics differ in {unexplained:?}, which neither the hit-window era nor the display \
+             cadence explains: {deltas:?} (engine minus block)"
+        ));
+    }
+
+    let mut explained = ExplainedDivergence::default();
+    // the reach of this difference, read off the results that actually
+    // differ rather than off the fact that SOMETHING did, and one cause at a
+    // time so neither borrows the other's
+    for cause in [GRADE_RESULTS, CADENCE_RESULTS] {
+        let reach = reach_of(cause, &deltas);
+        explained.widen(&reach);
+    }
+
+    let grade: std::collections::BTreeMap<&String, i64> =
+        deltas.iter().filter(|(k, _)| grade_names.contains(k)).map(|(k, v)| (k, *v)).collect();
+    if !grade.is_empty() {
+        let Some(client_date) = row.client_date.as_deref() else {
+            return Err(format!(
+                "the grades differ ({grade:?}, engine minus block) and the ledger row carries no \
+                 `client_date`, so there is no era to attribute it to -- date the client, or treat \
+                 this as a finding"
+            ));
+        };
+        if client_date > HIT_WINDOW_MERGE {
+            return Err(format!(
+                "the grades differ ({grade:?}, engine minus block) on a play from {client_date}, AFTER \
+                 lazer's hit-window merge ({HIT_WINDOW_MERGE}) -- the era cannot explain this one"
+            ));
+        }
+        // the change only ever NARROWS a window, so every object it moves
+        // moves DOWN the ladder -- out of `great` into `ok`, out of `ok`
+        // into `meh` -- and none moves up. walking the ladder best-first,
+        // that is exactly: the running balance of what has left the tiers
+        // above must never go positive (a tier may only be joined from a
+        // stricter one, never from a softer one) and must close at zero,
+        // since narrowing MOVES objects between tiers and creates none.
+        // reading `great` alone would both reject a legitimate `ok`-to-`meh`
+        // move, whose `great` never budges, and admit a shape like
+        // `{great: -1, ok: 3, meh: -2}`, which needs two objects to have got
+        // BETTER. a difference of any other shape is something else wearing
+        // this one's clothes
+        let mut balance = 0i64;
+        let mut descends = true;
+        for tier in GRADE_RESULTS {
+            balance += grade.get(&tier.snake_name().to_owned()).copied().unwrap_or(0);
+            descends &= balance <= 0;
+        }
+        if !descends || balance != 0 {
+            let ladder = grade_names.join(" -> ");
+            return Err(format!(
+                "the grades differ ({grade:?}, engine minus block) in a shape the hit-window change \
+                 cannot make: it only narrows windows, so every object it moves must move DOWN the \
+                 `{ladder}` ladder, and none may be created or destroyed"
+            ));
+        }
+        // every moved object arrives in exactly one tier, so the tiers that
+        // GAINED count them once each. that is a LOWER BOUND and not a
+        // census, which is why it is reported as one: an object falling
+        // `ok` to `meh` beside another falling `meh` to `miss` cancels in
+        // the middle and reads as the single `ok`-to-`miss` fall it is
+        // indistinguishable from. the aggregate map is the whole of what a
+        // block carries, so the smallest count consistent with it is the
+        // honest one to print
+        let moved: i64 = grade.values().filter(|delta| **delta > 0).sum();
+        let plural = if moved == 1 { "object" } else { "objects" };
+        explained.notes.push(format!(
+            "at least {moved} {plural} graded harder than a {client_date} client's wider hit \
+             windows (lazer {HIT_WINDOW_MERGE}, PR #33882)"
+        ));
+    }
+
+    let cadence: std::collections::BTreeMap<&String, i64> =
+        deltas.iter().filter(|(k, _)| cadence_names.contains(k)).map(|(k, v)| (k, *v)).collect();
+    if !cadence.is_empty() {
+        // every element scores exactly one of these whichever way it falls,
+        // so a cadence difference is a reshuffle, never a gain or a loss --
+        // and a reshuffle WITHIN the group its own element belongs to. the
+        // display rate can turn a tracked tick into a missed one; it cannot
+        // turn a tick into a TAIL, which is a different element altogether.
+        // summing the groups together would let exactly that through, since
+        // a `large_tick_hit: -1` cancels a `slider_tail_hit: +1` in the
+        // total -- a misclassification wearing the noise floor's clothes
+        for group in [TICK_CADENCE_GROUP, UNREACHED_CADENCE_GROUP] {
+            let net: i64 =
+                group.iter().map(|r| deltas.get(r.snake_name()).copied().unwrap_or(0)).sum();
+            if net != 0 {
+                let names = group.iter().map(|r| r.snake_name()).collect::<Vec<_>>().join(", ");
+                return Err(format!(
+                    "the cadence-decided results differ ({cadence:?}, engine minus block) by a net \
+                     {net} across `{names}`, which no display rate can do -- each element scores \
+                     exactly one result from its OWN group either way"
+                ));
+            }
+        }
+        let worst = cadence.values().map(|d| d.abs()).max().unwrap_or(0);
+        if worst > CADENCE_NOISE_FLOOR {
+            return Err(format!(
+                "the cadence-decided results differ ({cadence:?}, engine minus block) by up to {worst}, \
+                 past the {CADENCE_NOISE_FLOOR} this corpus has ever shown -- too big to be the \
+                 sub-display-frame residual, so triage it rather than widening the floor"
+            ));
+        }
+        explained
+            .notes
+            .push(format!("{cadence:?} decided by the display cadence the file does not record"));
+    }
+    Ok(explained)
+}
+
+/// the two conservation groups must between them be exactly the results the
+/// classifier admits as cadence-decided. a result in `CADENCE_RESULTS` but in
+/// neither group would be excused while conserving nothing, and one in a group
+/// but not in `CADENCE_RESULTS` would be conserved while never being reached
+#[test]
+fn the_cadence_groups_partition_the_cadence_results() {
+    let mut grouped: Vec<&str> =
+        TICK_CADENCE_GROUP.iter().chain(UNREACHED_CADENCE_GROUP).map(|r| r.snake_name()).collect();
+    let before = grouped.len();
+    grouped.sort_unstable();
+    grouped.dedup();
+    assert_eq!(before, grouped.len(), "no result may sit in both groups");
+
+    let mut admitted: Vec<&str> = CADENCE_RESULTS.iter().map(|r| r.snake_name()).collect();
+    admitted.sort_unstable();
+    assert_eq!(grouped, admitted, "the groups and the admitted set must be the same results");
+}
+
+/// the classifier's own boundaries, driven directly rather than through a
+/// corpus that happens not to contain them: the shapes each cause CAN make,
+/// the shapes it cannot, and how far each reaches into the fields folded
+/// from the counts. the corpus proves the rule is satisfiable; this proves
+/// it is a rule
+#[test]
+fn the_native_statistics_classifier_admits_exactly_what_the_two_causes_can_make() {
+    let counts = |rows: &[(&str, i64)]| -> Vec<(String, i64)> {
+        rows.iter().map(|(name, count)| ((*name).to_owned(), *count)).collect()
+    };
+    let dated = |date: Option<&str>| NativeLedgerRow {
+        stem: "T000".to_owned(),
+        client: "test".to_owned(),
+        origin: "original".to_owned(),
+        pin: "test".to_owned(),
+        client_date: date.map(str::to_owned),
+    };
+    let before = dated(Some("2025-01-01"));
+    let after = dated(Some("2026-01-01"));
+
+    // an exact pair excuses nothing and reaches nothing
+    let exact = classify_native_statistics(&counts(&[("great", 10)]), &counts(&[("great", 10)]), &before)
+        .expect("an exact pair classifies");
+    assert!(exact.notes.is_empty());
+    assert!(!exact.combo && !exact.score && !exact.accuracy);
+
+    // the era's own shape: one object falls out of `great` into `ok`. it
+    // moves accuracy and the total, and CANNOT move combo -- both grades
+    // increase it, so the run is the same length either way
+    let downgrade = classify_native_statistics(
+        &counts(&[("great", 9), ("ok", 1)]),
+        &counts(&[("great", 10), ("ok", 0)]),
+        &before,
+    )
+    .expect("a downgrade on a pre-merge client is the era's");
+    assert_eq!(downgrade.notes.len(), 1);
+    assert!(downgrade.notes[0].contains("1 object graded harder"), "{:?}", downgrade.notes);
+    assert!(downgrade.score && downgrade.accuracy);
+    assert!(!downgrade.combo, "`great` and `ok` both increase combo, so the run is untouched");
+
+    // the same change one rung down the ladder, which never touches `great`
+    // at all: narrowing the `ok` window does exactly this
+    let lower = classify_native_statistics(
+        &counts(&[("ok", 0), ("meh", 1)]),
+        &counts(&[("ok", 1), ("meh", 0)]),
+        &before,
+    )
+    .expect("an ok-to-meh move is the same narrowing one rung down");
+    assert!(lower.notes[0].contains("1 object graded harder"), "{:?}", lower.notes);
+
+    // two adjacent falls at once -- one `ok` to `meh`, one `meh` to `miss`
+    // -- cancel in the middle and are indistinguishable from the single
+    // `ok`-to-`miss` fall they aggregate to, so the count is reported as the
+    // lower bound it is rather than as a census the block cannot support
+    let cancelled = classify_native_statistics(
+        &counts(&[("ok", 0), ("meh", 1), ("miss", 1)]),
+        &counts(&[("ok", 1), ("meh", 1), ("miss", 0)]),
+        &before,
+    )
+    .expect("two adjacent falls are still a narrowing");
+    assert!(cancelled.notes[0].starts_with("at least 1 object"), "{:?}", cancelled.notes);
+
+    // a fall all the way to `miss` DOES break the run, so combo follows
+    let broken = classify_native_statistics(
+        &counts(&[("great", 9), ("miss", 1)]),
+        &counts(&[("great", 10), ("miss", 0)]),
+        &before,
+    )
+    .expect("great-to-miss is still a narrowing");
+    assert!(broken.combo, "a miss breaks the run, so `max_combo` may follow");
+
+    // a shape needing two objects to have got BETTER. it balances to zero,
+    // which is exactly why a sum over the softer grades admitted it
+    let up = classify_native_statistics(
+        &counts(&[("great", 0), ("ok", 3), ("meh", 0)]),
+        &counts(&[("great", 1), ("ok", 0), ("meh", 2)]),
+        &before,
+    )
+    .expect_err("no object may move UP the ladder");
+    assert!(up.contains("ladder"), "{up}");
+
+    // the era explains a pre-merge client and nothing else
+    classify_native_statistics(
+        &counts(&[("great", 9), ("ok", 1)]),
+        &counts(&[("great", 10), ("ok", 0)]),
+        &after,
+    )
+    .expect_err("a post-merge client has no era to blame");
+    classify_native_statistics(
+        &counts(&[("great", 9), ("ok", 1)]),
+        &counts(&[("great", 10), ("ok", 0)]),
+        &dated(None),
+    )
+    .expect_err("an undated client cannot be attributed to an era");
+
+    // a bonus the cadence moved is worth POINTS and nothing else, so it may
+    // excuse the total and neither the combo nor the rank
+    let bonus = classify_native_statistics(
+        &counts(&[("ignore_miss", 1), ("large_bonus", 0)]),
+        &counts(&[("ignore_miss", 0), ("large_bonus", 1)]),
+        &before,
+    )
+    .expect("a bonus traded against an ignore is the cadence's");
+    assert!(bonus.score, "a bonus scores");
+    assert!(!bonus.combo && !bonus.accuracy, "a bonus moves neither the run nor accuracy");
+
+    // a slider tail reaches all three, being a scoring, combo-increasing,
+    // accuracy-affecting result traded against one that is none of them
+    let tail = classify_native_statistics(
+        &counts(&[("ignore_miss", 0), ("slider_tail_hit", 1)]),
+        &counts(&[("ignore_miss", 1), ("slider_tail_hit", 0)]),
+        &before,
+    )
+    .expect("a tail traded against an ignore is the cadence's");
+    assert!(tail.combo && tail.score && tail.accuracy);
+
+    // the two causes are folded apart, so neither borrows the other's reach:
+    // grades moving within `great`/`ok` and bonuses trading against an
+    // `IgnoreMiss` are two differences, and combo survives both
+    let both = classify_native_statistics(
+        &counts(&[("great", 9), ("ok", 1), ("ignore_miss", 1), ("large_bonus", 0)]),
+        &counts(&[("great", 10), ("ok", 0), ("ignore_miss", 0), ("large_bonus", 1)]),
+        &before,
+    )
+    .expect("both causes at once still classify");
+    assert_eq!(both.notes.len(), 2);
+    assert!(!both.combo, "neither cause crosses a combo class, so pooling them must not either");
+
+    // a cadence difference that does not net to zero is a gain or a loss,
+    // which no display rate can produce
+    classify_native_statistics(
+        &counts(&[("slider_tail_hit", 1)]),
+        &counts(&[("slider_tail_hit", 0)]),
+        &before,
+    )
+    .expect_err("the cadence reshuffles elements, it never creates them");
+
+    // nor one that nets to zero only by trading ACROSS groups: a tick may
+    // become a missed tick, but it may never become a tail. the total is
+    // zero here, so only the per-group balance catches it
+    let across = classify_native_statistics(
+        &counts(&[("large_tick_hit", 0), ("slider_tail_hit", 1)]),
+        &counts(&[("large_tick_hit", 1), ("slider_tail_hit", 0)]),
+        &before,
+    )
+    .expect_err("a tick may not turn into a tail");
+    assert!(across.contains("OWN group"), "{across}");
+
+    // a tick trading against a MISSED tick is the shape the cadence can make
+    classify_native_statistics(
+        &counts(&[("large_tick_hit", 0), ("large_tick_miss", 1)]),
+        &counts(&[("large_tick_hit", 1), ("large_tick_miss", 0)]),
+        &before,
+    )
+    .expect("a tick trades with a missed tick, which is its own group");
+
+    // and one past the observed floor comes back for review
+    let over = CADENCE_NOISE_FLOOR + 1;
+    classify_native_statistics(
+        &counts(&[("ignore_miss", over), ("slider_tail_hit", 0)]),
+        &counts(&[("ignore_miss", 0), ("slider_tail_hit", over)]),
+        &before,
+    )
+    .expect_err("past the noise floor is a finding, not a residual");
+
+    // a result neither cause touches fails whatever its size
+    classify_native_statistics(&counts(&[("small_tick_hit", 1)]), &counts(&[("small_tick_hit", 0)]), &before)
+        .expect_err("an unexplained result class fails");
 }
 
 /// one fixture's expected drain-rate search products, as the python model in
