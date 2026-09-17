@@ -28,22 +28,32 @@
 //!
 //! # what a bad block is
 //!
-//! two different things, and the difference is load-bearing. a block that
-//! breaches a resource cap -- decompressed size, json depth, or one of the
-//! collection caps -- is a typed [`EngineError::ResourceLimit`] in every
-//! build profile, exactly as every other format boundary in [`crate::limits`]
-//! is. a block that is merely unreadable (not lzma, not utf-8, not json, or
-//! json of the wrong shape) is a [`ScoreInfoDecode::Malformed`] ANSWER
-//! carrying the reader's reason, not an error: the header and the frames
-//! decoded, the file plays back, and the play configuration is what reports
-//! that its mods could not be resolved.
+//! two different things AT THIS ENTRY POINT, and the difference is
+//! load-bearing here. a block that breaches a resource cap -- decompressed
+//! size, json depth, or one of the collection caps -- is a typed
+//! [`EngineError::ResourceLimit`] in every build profile, exactly as every
+//! other format boundary in [`crate::limits`] is. a block that is merely
+//! unreadable (not lzma, not utf-8, not json, or json of the wrong shape) is
+//! a [`ScoreInfoDecode::Malformed`] ANSWER carrying the reader's reason, not
+//! an error: the header and the frames decoded, the file plays back, and the
+//! play configuration is what reports that its mods could not be resolved.
 //!
-//! the one place the two meet: a corrupt block whose garbage lzma header
-//! happens to declare more than the size cap is refused as the cap breach it
-//! claims to be, corrupt or not, because the declared size is the only thing
-//! that can be checked before the decompression work is done and a real
-//! bomb declares exactly the same thing. every other corruption lands on the
-//! malformed answer
+//! the classification is not the file's fate. a corrupt block whose garbage
+//! lzma header happens to declare more than the size cap is CLASSIFIED as
+//! the cap breach it claims to be, corrupt or not, because the declared size
+//! is the only thing that can be checked before the decompression work is
+//! done and a real bomb declares exactly the same thing. but classification
+//! is all it is: [`super::osr`]'s framing reader folds a cap breach into
+//! `ScoreInfoBlock::Malformed` with the cap and both its numbers in the
+//! reason, so every bad block -- corrupt or bomb -- keeps the file. every
+//! cap still refuses exactly the work it always refused, which is the whole
+//! of what any of them ever bought: the size cap stops the corrupt-header
+//! case before a single byte is decompressed, and the five charged after
+//! that -- depth, the two mod caps, statistics, pauses -- stop the same
+//! materialisation they always stopped, at the same point. the fold buys no
+//! work back and spends none; it moves only the file's fate. refusing the
+//! file on top of the cap bought nothing and cost the frames, the one part
+//! of a damaged file that is provably undamaged
 //!
 //! # document order
 //!

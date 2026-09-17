@@ -2,7 +2,13 @@
 //! `EngineError::ResourceLimit` carrying the constant's name -- with one
 //! deliberate exception, [`MAX_HEALTH_DRAIN_SEARCH_ITERATIONS`], whose
 //! breach is a defined answer reported through the search's own result
-//! rather than an error (the row below says why). values are set generously
+//! rather than an error (the row below says why), and one deliberate fold:
+//! the six score-info caps raise the typed error at `formats::score_info`'s
+//! own entry point exactly as this rule says, which is where their boundary
+//! tests assert it, but that codec's one caller -- `formats::osr`'s framing
+//! reader -- turns it into a malformed BLOCK rather than a failed file, so a
+//! breach of them never reaches a `decode_osr` caller as an error (that
+//! module's "what a bad block is" says why). values are set generously
 //! above anything observed in real maps, aspire-tier included; each constant
 //! lands alongside the module that enforces it and gets a boundary test
 //! (accept at the limit, error just past it).

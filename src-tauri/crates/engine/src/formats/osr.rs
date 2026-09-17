@@ -107,9 +107,13 @@ pub enum ScoreInfoBlock {
     /// framed, retained so an export that keeps the block writes exactly
     /// the bytes it read
     Present { raw: Vec<u8>, value: ScoreInfo },
-    /// a framed block this crate could not read, with the reader's reason.
-    /// not a decode failure for the file: the header and frames are fine,
-    /// and it is the play configuration that reports this
+    /// a framed block this crate could not read, with the reader's reason:
+    /// either unreadable (not lzma, not utf-8, not json, json of the wrong
+    /// shape) or over one of [`crate::limits`]'s caps, which
+    /// [`decode_score_info`] answers as a typed error and this module's
+    /// framing reader folds in here. not a decode failure for the file
+    /// either way: the header and frames are fine, and it is the play
+    /// configuration that reports this
     Malformed { raw: Vec<u8>, reason: String },
 }
 
@@ -435,9 +439,22 @@ fn decode_trailer(r: &mut Reader, version: u32) -> Result<OsrTrailer> {
             let raw = r
                 .take(usize::try_from(len).expect("a positive i32 always fits usize"), "score info")?
                 .to_vec();
-            match decode_score_info(&raw)? {
-                ScoreInfoDecode::Parsed(value) => ScoreInfoBlock::Present { raw, value },
-                ScoreInfoDecode::Malformed(reason) => ScoreInfoBlock::Malformed { raw, reason },
+            // this seam is where a cap breach stops being the file's
+            // problem: `decode_score_info` keeps returning the typed error
+            // at its own entry point, where the boundary tests assert the cap
+            // by name, and here it folds into the same malformed answer every
+            // other damage takes (the argument is in that module's "what a
+            // bad block is"). any other error still propagates -- there is
+            // none today, but the arm does not pretend the codec cannot grow
+            // one
+            match decode_score_info(&raw) {
+                Ok(ScoreInfoDecode::Parsed(value)) => ScoreInfoBlock::Present { raw, value },
+                Ok(ScoreInfoDecode::Malformed(reason)) => ScoreInfoBlock::Malformed { raw, reason },
+                Err(EngineError::ResourceLimit { cap, limit, actual }) => ScoreInfoBlock::Malformed {
+                    raw,
+                    reason: format!("score-info block exceeds {cap} (limit {limit}, actual {actual})"),
+                },
+                Err(other) => return Err(other),
             }
         } else {
             ScoreInfoBlock::Empty
@@ -1274,22 +1291,66 @@ mod tests {
         }
     }
 
+    /// a cap breach is a fact about the BLOCK, not about the file. the typed
+    /// [`EngineError::ResourceLimit`] stays at `decode_score_info`'s own entry
+    /// point, where `formats::score_info`'s boundary tests assert it by name;
+    /// this test is the file-level half of that split, and its name IS the
+    /// decision -- see that module's "what a bad block is" for why it was
+    /// taken this way
     #[test]
-    fn a_block_over_a_cap_is_a_typed_error_for_the_whole_decode() {
-        // the collection caps are the block's own (formats::score_info); this
-        // pins that the framing reader propagates one rather than folding it
-        // into a malformed answer
+    fn a_block_over_a_cap_is_malformed_for_the_file_rather_than_a_decode_failure() {
+        // the declared-size cap, which is where ordinary corruption lands: a
+        // garbage lzma header carries a garbage 8-byte declared size, over
+        // 4 MiB for all but a vanishing fraction of bit patterns
+        let mut oversized = present_block();
+        oversized[5..13].copy_from_slice(&(limits::MAX_SCORE_INFO_BYTES + 1).to_le_bytes());
+        let mut tail = framed(&oversized);
+        tail.extend([0xca, 0xfe]);
+        let file = decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &tail)).unwrap();
+        assert_eq!(file.actions.len(), 4);
+        assert_eq!(file.header.count_300, 285);
+        match &file.trailer.block {
+            ScoreInfoBlock::Malformed { raw, reason } => {
+                assert_eq!(raw, &oversized);
+                assert!(reason.contains("MAX_SCORE_INFO_BYTES"), "{reason}");
+                assert!(reason.contains(&limits::MAX_SCORE_INFO_BYTES.to_string()), "{reason}");
+            }
+            other => panic!("expected a malformed block, got {other:?}"),
+        }
+        assert_eq!(file.trailer.trailing, vec![0xca, 0xfe]);
+
+        // and a collection cap, charged after the decompression the size cap
+        // guards: the same answer for the file, named by its own cap
         let bomb = crate::formats::lzma::compress_lzma_alone(
             format!("{{\"pauses\": [{}]}}", vec!["1"; limits::MAX_SCORE_INFO_PAUSES + 1].join(",")).as_bytes(),
         )
         .unwrap();
-        match decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &framed(&bomb))) {
-            Err(EngineError::ResourceLimit {
-                cap: "MAX_SCORE_INFO_PAUSES",
-                ..
-            }) => {}
-            other => panic!("expected ResourceLimit, got {other:?}"),
+        let mut tail = framed(&bomb);
+        tail.extend([0xba, 0xbe]);
+        let file = decode_osr(&build_osr(30000001, PAYLOAD.as_bytes(), &tail)).unwrap();
+        assert_eq!(file.actions.len(), 4);
+        assert_eq!(file.header.count_300, 285);
+        match &file.trailer.block {
+            ScoreInfoBlock::Malformed { raw, reason } => {
+                assert_eq!(raw, &bomb);
+                assert!(reason.contains("MAX_SCORE_INFO_PAUSES"), "{reason}");
+            }
+            other => panic!("expected a malformed block, got {other:?}"),
         }
+        assert_eq!(file.trailer.trailing, vec![0xba, 0xbe]);
+    }
+
+    #[test]
+    fn a_carried_export_of_a_cap_breaching_file_is_byte_identical() {
+        // `raw` is retained on the malformed arm whichever way the block was
+        // refused, so a block this crate could not read still rides along
+        // exactly as framed: the app never rewrites bytes it could not read
+        let mut oversized = present_block();
+        oversized[5..13].copy_from_slice(&(limits::MAX_SCORE_INFO_BYTES + 1).to_le_bytes());
+        let original = build_osr(30000016, PAYLOAD.as_bytes(), &framed(&oversized));
+        let file = decode_osr(&original).unwrap();
+        assert!(matches!(file.trailer.block, ScoreInfoBlock::Malformed { .. }));
+        assert_eq!(encode_osr(&file, &full_opts()).unwrap(), original);
     }
 
     #[test]
