@@ -5,6 +5,7 @@
 import { eachSpanWhere, type Press } from "../engine/interpolation";
 import { isLeft, isRight } from "../engine/buttons";
 import type { FrameDto, JudgementEventDto, LoadedScene, RenderObject } from "./scene-types";
+import { simulated } from "./simulation";
 
 export interface HistogramBin {
 	/** bin centre in ms, negative = early */
@@ -65,7 +66,7 @@ export function aimTime(object: RenderObject): number | null {
  * and deriveScene's invariant test fails loudly if either call site drifts */
 export function judgedTime(object: RenderObject, kind: JudgementEventDto["kind"]): number | null {
 	if (kind.type === "circle") return kind.grade === "miss" ? null : (aimTime(object) ?? object.startTime);
-	if (kind.type === "sliderHead") return kind.hit ? (aimTime(object) ?? object.startTime) : null;
+	if (kind.type === "sliderHead") return kind.grade === "miss" ? null : (aimTime(object) ?? object.startTime);
 	// ticks, repeats, tails and spinner events carry no meaningful tap error:
 	// they are judged by proximity or spin count, not by a press time
 	return null;
@@ -326,7 +327,7 @@ export function medianFrameDelta(frames: readonly FrameDto[]): number {
 }
 
 export function analyseScene(scene: LoadedScene, presses: readonly Press[]): ReplayAnalysis {
-	const events = scene.simulation.status === "authoritative" ? scene.simulation.events : [];
+	const events = simulated(scene.simulation)?.events ?? [];
 	const errors = hitErrors(events, scene.renderPlan.objects);
 	const meanError = errors.length === 0 ? 0 : errors.reduce((a, b) => a + b, 0) / errors.length;
 	const variance = errors.length === 0 ? 0 : errors.reduce((a, b) => a + (b - meanError) ** 2, 0) / errors.length;

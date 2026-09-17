@@ -89,7 +89,13 @@ describe("hitErrors", () => {
 		const objects = [circleAt(1000), circleAt(2000)];
 		const events: JudgementEventDto[] = [
 			judgement(1000, 0, "miss"),
-			{ time: 2000, objectIndex: 1, kind: { type: "sliderTick", hit: true }, comboAfter: 1, accuracyAfter: 1 }
+			{
+				time: 2000,
+				objectIndex: 1,
+				kind: { type: "sliderTick", hit: true, nestedIndex: null },
+				comboAfter: 1,
+				accuracyAfter: 1
+			}
 		];
 		expect(hitErrors(events, objects)).toEqual([]);
 	});
@@ -125,7 +131,13 @@ describe("hitErrors", () => {
 			}
 		};
 		const events: JudgementEventDto[] = [
-			{ time: 1008, objectIndex: 0, kind: { type: "sliderHead", hit: true }, comboAfter: 1, accuracyAfter: 1 }
+			{
+				time: 1008,
+				objectIndex: 0,
+				kind: { type: "sliderHead", grade: "great" },
+				comboAfter: 1,
+				accuracyAfter: 1
+			}
 		];
 		expect(hitErrors(events, [slider])).toEqual([8]);
 	});
