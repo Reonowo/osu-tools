@@ -1139,6 +1139,40 @@ mod tests {
         ));
         assert!(matches!(outcome.scene.replay.score_info, crate::scene::ScoreInfoDto::Malformed { .. }));
         assert_eq!(outcome.session.configuration.provenance, ModProvenance::Unresolvable);
+
+        // and a block over a cap, which is where ORDINARY corruption lands: a
+        // garbage lzma header declares a garbage size. the reason names the
+        // cap instead of the reader, and every other outcome is identical --
+        // a cap breach is a fact about the block, never about the file
+        let mut oversized = match lazer_trailer(&[]).block {
+            engine::formats::osr::ScoreInfoBlock::Present { raw, .. } => raw,
+            other => panic!("expected a present block to damage, got {other:?}"),
+        };
+        oversized[5..13].copy_from_slice(&(engine::limits::MAX_SCORE_INFO_BYTES + 1).to_le_bytes());
+        let over_cap = engine::formats::osr::OsrTrailer {
+            block: engine::formats::osr::ScoreInfoBlock::Malformed {
+                // the encoder writes `raw` verbatim and the load's own decode
+                // is what classifies it, so this reason never reaches the wire
+                raw: oversized,
+                reason: "written verbatim".into(),
+            },
+            trailing: Vec::new(),
+        };
+        std::fs::write(&osr_path, osr_bytes_with_trailer(&md5, 0, None, 30000016, over_cap)).unwrap();
+        let outcome = load_with_osu_file(&osr_path, &osu_path, false).unwrap();
+        assert_eq!(outcome.scene.frames.len(), 3);
+        assert!(matches!(
+            &outcome.scene.simulation,
+            SimulationDto::NotSimulated {
+                reason: RefusalReason::UnreadableScoreInfo { reason }
+            } if reason.contains("MAX_SCORE_INFO_BYTES")
+        ));
+        assert!(matches!(
+            &outcome.scene.warnings[0],
+            Warning::ScoreInfoUnreadable { reason } if reason.contains("MAX_SCORE_INFO_BYTES")
+        ));
+        assert!(matches!(outcome.scene.replay.score_info, crate::scene::ScoreInfoDto::Malformed { .. }));
+        assert_eq!(outcome.session.configuration.provenance, ModProvenance::Unresolvable);
     }
 
     #[test]
