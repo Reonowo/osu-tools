@@ -11,10 +11,16 @@ export function warningText(w: LoadedSceneWarning): string {
 	switch (w.kind) {
 		case "audioMissing":
 			return "audio file missing — playing silently on the internal clock";
-		case "modsNotSimulated":
-			return `mods not simulated (${formatMods(w.mods)}) — judgements, combo, accuracy and score are hidden`;
+		case "modsNotSimulated": {
+			// a lazer file's mods are its block's acronyms (a lazer-only mod has
+			// no legacy bit at all); a stable file's are the bits the header holds
+			const mods = w.profile === "native" ? w.acronyms.join(" ") : formatMods(w.mods);
+			return `mods not simulated (${mods}) — judgements, combo, accuracy and score are hidden`;
+		}
 		case "beatmapMismatch":
 			return "beatmap doesn't match the replay (explicit override) — geometry may be wrong; judgements disabled";
+		case "scoreInfoUnreadable":
+			return `the replay's score-info block could not be read (${w.reason}) — its mods are unknown, so judgements, combo, accuracy and score are hidden`;
 	}
 }
 

@@ -152,9 +152,15 @@ describe("selectWarnings identity stability", () => {
 describe("warningText", () => {
 	test("each warning kind gets distinct, informative copy", () => {
 		expect(warningText({ kind: "audioMissing" })).toContain("audio file missing");
-		expect(warningText({ kind: "modsNotSimulated", mods: 8 | 64 })).toBe(
+		expect(warningText({ kind: "modsNotSimulated", mods: 8 | 64, acronyms: ["DT", "HD"], profile: "stable" })).toBe(
 			"mods not simulated (HD DT) — judgements, combo, accuracy and score are hidden"
 		);
+		// a lazer file names its block's acronyms, which the bitfield cannot
+		// spell (a lazer-only mod has no legacy bit)
+		expect(warningText({ kind: "modsNotSimulated", mods: 0, acronyms: ["BL", "DA"], profile: "native" })).toBe(
+			"mods not simulated (BL DA) — judgements, combo, accuracy and score are hidden"
+		);
+		expect(warningText({ kind: "scoreInfoUnreadable", reason: "not lzma" })).toContain("not lzma");
 		expect(warningText({ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" })).toContain(
 			"doesn't match the replay"
 		);
@@ -168,7 +174,7 @@ describe("warningList", () => {
 		// pass even if the code silently sorted by kind name
 		const warnings: LoadedSceneWarning[] = [
 			{ kind: "beatmapMismatch", expectedMd5: "a", actualMd5: "b" },
-			{ kind: "modsNotSimulated", mods: 8 },
+			{ kind: "modsNotSimulated", mods: 8, acronyms: ["HD"], profile: "stable" },
 			{ kind: "audioMissing" }
 		];
 		expect(warningList(warnings).map((b) => b.kind)).toEqual([
