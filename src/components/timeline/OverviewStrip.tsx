@@ -209,27 +209,31 @@ export function OverviewStrip() {
 					{tick.drop && <div className="absolute -left-[0.75px] -top-[1.5px] h-[3px] w-[3px] bg-inherit" />}
 				</div>
 			))}
-			{/* 5: the fail point, static per scene and delta: where the HP curve
+			{/* 5: progress rail, fill is rAF-driven. drawn BEFORE the fail point
+			rather than after it: `bg-border` is fully opaque, so as a later
+			sibling it painted over the very cap the mark exists to be read by */}
+			<div className="absolute inset-x-0 bottom-0 h-0.5 bg-border">
+				<div ref={fillRef} className="absolute inset-y-0 left-0 bg-primary" />
+			</div>
+			{/* 6: the fail point, static per scene and delta: where the HP curve
 			first reached zero, which is where stable would have ended the play.
-			a full-height hairline with a square cap at the BOTTOM edge -- the
-			mirror of the drop mark's top cap, so it reads as a different kind of
-			mark from a miss tick rather than a taller one. the red is the miss
-			tick's own literal above, not the destructive token: the two must
-			stay the same red whatever a theme does. the cap's own offset is
-			centred on THIS mark's 2px width ((3 - 2) / 2), where the drop mark's
-			0.75px centres it on a 1.5px tick */}
+			a full-height hairline with a square cap at the BOTTOM edge, so it
+			reads as a different kind of mark from a miss tick rather than a
+			taller one. the cap reads by WIDTH, not by overhang: the track is
+			overflow-hidden, so nothing outside its bottom edge survives, and
+			5px on this mark's 2px column is the only axis a cap sitting on that
+			edge has left -- do not "restore" a negative bottom offset. the
+			-1.5px left is that width centred on the column ((5 - 2) / 2). the
+			red is the miss tick's own literal above, not the destructive token:
+			the two must stay the same red whatever a theme does */}
 			{failPoint !== null && (
 				<div
 					className="pointer-events-none absolute inset-y-0 w-0.5 bg-[#ed1121]"
 					style={{ left: `${fractionFor(bounds, failPoint) * 100}%` }}
 				>
-					<div className="absolute -bottom-[1.5px] -left-[0.5px] h-[3px] w-[3px] bg-inherit" />
+					<div className="absolute bottom-0 -left-[1.5px] h-[3px] w-[5px] bg-inherit" />
 				</div>
 			)}
-			{/* 6: progress rail, fill is rAF-driven */}
-			<div className="absolute inset-x-0 bottom-0 h-0.5 bg-border">
-				<div ref={fillRef} className="absolute inset-y-0 left-0 bg-primary" />
-			</div>
 			{/* 7: zoom bracket, edit-mode only, rAF-driven (translated from the
 			track's left edge; the loop writes transform + a width that only
 			changes with the zoom). the always-mounted wrapper is what carries
