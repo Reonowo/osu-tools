@@ -6,7 +6,7 @@
 // from being visible on the real playfield.
 
 import { useEffect } from "react";
-import { AlertTriangle, Check, FolderOpen, Import } from "lucide-react";
+import { AlertTriangle, Check, FolderOpen, Import, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { rowLabel, skinRows, SOURCE_LABELS, fallbackNotice } from "@/skin/picker";
 import { useViewerStore } from "@/state/store";
@@ -23,6 +23,7 @@ export function SkinCategory({
 	onImportArchive: () => void;
 }) {
 	const skins = useViewerStore((s) => s.skins);
+	const skinsLoading = useViewerStore((s) => s.skinsLoading);
 	const active = useViewerStore((s) => s.skin);
 	const skinNotice = useViewerStore((s) => s.skinNotice);
 	const refreshSkins = useViewerStore((s) => s.refreshSkins);
@@ -58,6 +59,17 @@ export function SkinCategory({
 				</div>
 			)}
 
+			<div className="flex items-center gap-2">
+				<Button size="sm" variant="secondary" onClick={onBrowseFolder}>
+					<FolderOpen className="size-3.5" aria-hidden />
+					browse…
+				</Button>
+				<Button size="sm" variant="secondary" onClick={onImportArchive}>
+					<Import className="size-3.5" aria-hidden />
+					import .osk
+				</Button>
+			</div>
+
 			<div className="flex flex-col gap-1">
 				{rows.map((row) => (
 					<button
@@ -92,17 +104,12 @@ export function SkinCategory({
 						</span>
 					</button>
 				))}
-			</div>
-
-			<div className="flex items-center gap-2">
-				<Button size="sm" variant="secondary" onClick={onBrowseFolder}>
-					<FolderOpen className="size-3.5" aria-hidden />
-					browse…
-				</Button>
-				<Button size="sm" variant="secondary" onClick={onImportArchive}>
-					<Import className="size-3.5" aria-hidden />
-					import .osk
-				</Button>
+				{skinsLoading && (
+					<div className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-400">
+						<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />
+						loading skins…
+					</div>
+				)}
 			</div>
 		</div>
 	);
