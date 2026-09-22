@@ -291,6 +291,7 @@ export interface ViewerState {
 	/** what the picker lists. refreshed on demand rather than held live: a
 	 * stable install with 138 skins is a directory walk, not a subscription */
 	skins: SkinEntry[];
+	skinsLoading: boolean;
 	overlays: OverlaySettings;
 	editing: EditingSettings;
 	/** the raw per-effect toggles, master included -- consumers gate on
@@ -790,8 +791,13 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 		let skinListSeq = 0;
 		const publishSkins = async () => {
 			const seq = ++skinListSeq;
-			const rows = await deps.listSkins();
-			if (seq === skinListSeq) set({ skins: rows });
+			set({ skinsLoading: true });
+			try {
+				const rows = await deps.listSkins();
+				if (seq === skinListSeq) set({ skins: rows });
+			} finally {
+				if (seq === skinListSeq) set({ skinsLoading: false });
+			}
 		};
 
 		// every preference the user has touched, counted under `group.key`.
@@ -1013,6 +1019,7 @@ export function createViewerStore(deps: IpcDeps, hooks: StoreHooks = {}): StoreA
 			settings: null,
 			skin: null,
 			skins: [],
+			skinsLoading: false,
 			skinNotice: null,
 			overlays: DEFAULT_OVERLAYS,
 			editing: DEFAULT_EDITING,

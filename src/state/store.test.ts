@@ -3637,6 +3637,78 @@ describe("the active skin", () => {
 		await store.getState().refreshSkins();
 		expect(store.getState().skins).toHaveLength(1);
 	});
+
+	test("skinsLoading is true while a walk is in flight and false once it lands", async () => {
+		let release: (() => void) | null = null;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const store = createViewerStore(
+			deps({
+				listSkins: async () => {
+					await gate;
+					return [];
+				}
+			})
+		);
+		expect(store.getState().skinsLoading).toBe(false);
+
+		const walk = store.getState().refreshSkins();
+		expect(store.getState().skinsLoading).toBe(true);
+
+		release!();
+		await walk;
+		expect(store.getState().skinsLoading).toBe(false);
+	});
+
+	test("a superseded walk leaves the flag to the newer one", async () => {
+		let call = 0;
+		let releaseStale: (() => void) | null = null;
+		const staleGate = new Promise<void>((resolve) => {
+			releaseStale = resolve;
+		});
+		let releaseNewer: (() => void) | null = null;
+		const newerGate = new Promise<void>((resolve) => {
+			releaseNewer = resolve;
+		});
+		const store = createViewerStore(
+			deps({
+				listSkins: async () => {
+					call += 1;
+					if (call === 1) {
+						await staleGate;
+						return [];
+					}
+					await newerGate;
+					return [];
+				}
+			})
+		);
+
+		const stale = store.getState().refreshSkins();
+		const newer = store.getState().refreshSkins();
+		expect(store.getState().skinsLoading).toBe(true);
+
+		releaseStale!();
+		await stale;
+		expect(store.getState().skinsLoading).toBe(true);
+
+		releaseNewer!();
+		await newer;
+		expect(store.getState().skinsLoading).toBe(false);
+	});
+
+	test("a failed walk leaves skinsLoading false", async () => {
+		const store = createViewerStore(
+			deps({
+				listSkins: async () => {
+					throw { kind: "internal", message: "walk failed" };
+				}
+			})
+		);
+		await store.getState().refreshSkins();
+		expect(store.getState().skinsLoading).toBe(false);
+	});
 });
 
 describe("the persisted selection after a fallback", () => {
