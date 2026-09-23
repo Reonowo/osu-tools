@@ -51,6 +51,51 @@
 	--color-surface-card: var(--surface-card);
 	--color-surface-raised: var(--surface-raised);
 	--color-border-strong: var(--border-strong);
+
+	--color-foreground-bright: var(--foreground-bright);
+	--color-foreground-soft: var(--foreground-soft);
+	--color-foreground-dim: var(--foreground-dim);
+	--color-foreground-faint: var(--foreground-faint);
+	--color-foreground-ghost: var(--foreground-ghost);
+	--color-foreground-veil: var(--foreground-veil);
+	--color-foreground-pending: var(--foreground-pending);
+	--color-surface-sunken: var(--surface-sunken);
+	--color-surface-hover: var(--surface-hover);
+	--color-surface-chip: var(--surface-chip);
+	--color-border-faint: var(--border-faint);
+	--color-border-subtle: var(--border-subtle);
+	--color-primary-hover: var(--primary-hover);
+	--color-primary-wash-faint: var(--primary-wash-faint);
+	--color-primary-wash-subtle: var(--primary-wash-subtle);
+	--color-primary-wash-soft: var(--primary-wash-soft);
+	--color-primary-wash: var(--primary-wash);
+	--color-primary-wash-strong: var(--primary-wash-strong);
+	--color-primary-wash-max: var(--primary-wash-max);
+	--color-grade-great: var(--grade-great);
+	--color-grade-ok: var(--grade-ok);
+	--color-grade-meh: var(--grade-meh);
+	--color-grade-miss: var(--grade-miss);
+	--color-grade-ungraded: var(--grade-ungraded);
+	--color-grade-great-on: var(--grade-great-on);
+	--color-grade-ok-on: var(--grade-ok-on);
+	--color-grade-meh-on: var(--grade-meh-on);
+	--color-grade-miss-on: var(--grade-miss-on);
+	--color-grade-meh-band: var(--grade-meh-band);
+	--color-grade-ok-band: var(--grade-ok-band);
+	--color-grade-great-band: var(--grade-great-band);
+	--color-graph-velocity: var(--graph-velocity);
+	--color-hud-key: var(--hud-key);
+	--color-hud-rest: var(--hud-rest);
+	--color-lattice-on: var(--lattice-on);
+	--color-lattice-off: var(--lattice-off);
+	--color-lattice-unknown: var(--lattice-unknown);
+	--color-warning: var(--warning);
+	--color-warning-border: var(--warning-border);
+	--color-warning-wash: var(--warning-wash);
+	--color-danger-soft: var(--danger-soft);
+	--color-danger-detail: var(--danger-detail);
+	--color-hp-curve-wash: var(--hp-curve-wash);
+	--color-hp-curve-line: var(--hp-curve-line);
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);
 	--radius-lg: var(--radius);
@@ -312,6 +357,236 @@
 	);
 }
 
+/* the chrome colour/type/shape/spacing vocabulary (docs/adr/0011, ADR 0010's
+   naming rule). role-named and cited: a site references a token and never
+   writes a hex or a pixel, and lib/chrome-tokens.ts pins every value below
+   against the manifest and (for the grade/graph/lattice family) against
+   engine/osu-colours.ts's OsuColour.cs port.
+
+   `static` for the same reason the motion block above is: tailwind emits
+   only the theme variables something already uses, and this is a declared
+   VOCABULARY -- a token has to be in the stylesheet before the site that
+   will reference it exists.
+
+   two tokens holding the same number are two tokens on purpose (ADR 0011):
+   --grade-ungraded and --muted-foreground are both #8a8a93, --lattice-on
+   and --grade-great are both #66ccff, --spacing-lane-gutter and
+   --spacing-histogram are both 74px. see TODO.md's near-duplicate list.
+
+   spacing and sizing share tailwind's --spacing-* namespace (the mechanism
+   spike's finding): one declaration generates every p/m/gap/inset/w/h/size
+   form, including negatives. --space-* generates nothing and --size-*
+   generates only size-*, which is why the plan's split is carried as role
+   naming here rather than as two prefixes */
+@theme static {
+	--text-section-label: 9.5px;
+	--text-section-label--letter-spacing: 0.14em;
+	--text-mini-label: 9.5px;
+	--text-mini-label--letter-spacing: 0.08em;
+	--text-history-detail: 9.5px;
+	--text-history-detail--line-height: 14px;
+	--text-mini: 9.5px;
+	--text-micro: 9px;
+	--text-caption: 10.5px;
+	--text-caption--line-height: 1.55;
+	--text-caption-tight: 10.5px;
+	--text-caption-tight--line-height: 1.5;
+	--leading-caption-tight: 1.5;
+	--text-caption-plain: 10.5px;
+	--text-meta: 10px;
+	--text-meta-copy: 10px;
+	--text-meta-copy--line-height: 1.55;
+	--text-meta-note: 10px;
+	--text-meta-note--line-height: 1.5;
+	--text-kbd: 10px;
+	--text-kbd--line-height: 14px;
+	--text-menu-label: 10px;
+	--text-menu-label--letter-spacing: 0.08em;
+	--text-hud-label: 10px;
+	--text-hud-label--letter-spacing: 0.1em;
+	--text-row: 11px;
+	--text-wordmark: 11px;
+	--text-wordmark--letter-spacing: 0.1em;
+	--text-panel-title: 11px;
+	--text-panel-title--letter-spacing: 0.14em;
+	--text-lede: 11.5px;
+	--text-lede--line-height: 1.55;
+	--text-lede-loose: 11.5px;
+	--text-lede-loose--line-height: 1.6;
+	--text-lede-plain: 11.5px;
+	--text-title: 12px;
+	--text-value: 13px;
+	--text-display-sm: 13.5px;
+	--text-display: 15px;
+	--text-hud-key-count: 17px;
+	--text-percent-suffix: 17px;
+	--text-stat: 22px;
+	--text-accuracy: 30px;
+	--text-accuracy--letter-spacing: -0.02em;
+	--text-combo: 34px;
+	--text-combo--letter-spacing: -0.01em;
+	--text-button-sm: 0.8rem;
+	--text-tiny: 0.65rem;
+
+	--border-width-hairline: 1.5px;
+	--radius-mark-tip: 1.5px;
+	--radius-mark: 1px;
+	--radius-bar: 2px;
+	--radius-control: 5px;
+	--radius-segment: 7px;
+	--radius-card: 9px;
+	--radius-float: 10px;
+	--radius-dropzone: 14px;
+	--radius-control-sm: min(var(--radius-md), 10px);
+	--radius-control-md: min(var(--radius-md), 12px);
+	--shadow-float: 0 12px 24px -8px rgba(0, 0, 0, 0.6);
+	--shadow-mark-ring: 0 0 0 1px #ffffff66;
+	--blur-float: 8px;
+	--blur-hud: 6px;
+	--skew-brand: -11.3deg;
+	--skew-brand-inverse: 11.3deg;
+
+	--spacing-hairline: 1.5px;
+	--spacing-micro: 2px;
+	--spacing-inset: 3px;
+	--spacing-nudge: 3.5px;
+	--spacing-tight: 5px;
+	--spacing-stack: 7px;
+	--spacing-card: 9px;
+	--spacing-card-loose: 11px;
+	--spacing-mark-thin: 1.5px;
+	--spacing-mark: 2px;
+	--spacing-mark-dot: 3px;
+	--spacing-mark-cap: 5px;
+	--spacing-slider-drop-cap-offset: 0.75px;
+	--spacing-circle-marker-inset: 4px;
+	--spacing-dot: 5px;
+	--spacing-swatch: 7px;
+	--spacing-playhead-cap: 9px;
+	--spacing-playhead-line-offset: 1px;
+	--spacing-playhead-cap-offset: 4px;
+	--spacing-lane-hold: 13px;
+	--spacing-lane-key: 17px;
+	--spacing-lane-velocity: 34px;
+	--spacing-lane-gutter: 74px;
+	--spacing-histogram: 74px;
+	--spacing-strip: 26px;
+	--spacing-control: 26px;
+	--spacing-rail-indicator: 18px;
+	--spacing-rail-indicator-rest: 4px;
+	--spacing-rail-tile: 38px;
+	--spacing-rail: 46px;
+	--spacing-btn-jump: 22px;
+	--spacing-btn-tool: 26px;
+	--spacing-btn-flank: 30px;
+	--spacing-tile-grade: 42px;
+	--spacing-readout: 30px;
+	--spacing-slider-col: 110px;
+	--spacing-key-tile: 50px;
+	--spacing-time-col: 86px;
+	--spacing-nav-col: 160px;
+	--spacing-menu-w: 220px;
+	--spacing-open-menu-w: 340px;
+	--spacing-dropzone-w: 420px;
+	--spacing-dialog-export-w: 452px;
+	--spacing-dialog-video-w: 520px;
+	--spacing-dialog-max-w: calc(100% - 2rem);
+	--spacing-dialog-max-h: calc(100dvh - 2rem);
+	--spacing-dialog-tall-max-h: calc(100dvh - 4rem);
+	--spacing-dialog-taller-max-h: calc(100dvh - 5rem);
+	--spacing-browser-dialog-w: min(760px, calc(100vw - 4rem));
+	--spacing-browser-dialog-h: min(680px, calc(100dvh - 4rem));
+	--spacing-side-panel: 400px;
+	--spacing-switch-h: 18.4px;
+	--spacing-switch-w: 32px;
+	--spacing-switch-sm-h: 14px;
+	--spacing-switch-sm-w: 24px;
+	--spacing-chip: 19px;
+	--spacing-row-loose: 6px;
+	--spacing-zoom-readout: 52px;
+	--spacing-settings-frame: 26rem;
+	--spacing-keybind-capture: 7.5rem;
+	--spacing-history: 236px;
+	/* the tooltip arrow, rotated 45deg on the popup edge: half its own
+	   height back, then the 2px that sinks its near corner under the
+	   popup so the two read as one shape */
+	--spacing-arrow-centre: calc(-50% - var(--spacing-micro));
+	/* a tab trigger filling its list: the full height less the 1px the
+	   list's own inset leaves, so an active pill never overhangs it */
+	--spacing-tab-fill: calc(100% - 1px);
+}
+
+/* the repeated recipes (docs/adr/0011): a composite written more than once
+   becomes one utility, so a recipe is one site too. values inside are tokens
+   -- the only literals here are the one-off layout grids and the min() caps,
+   which are the vocabulary of a region of n=1 */
+@utility card {
+	@apply rounded-card border border-border bg-surface-card px-3 py-card;
+}
+@utility segmented {
+	@apply rounded-segment border border-border bg-surface-sunken p-0.5;
+}
+@utility warning-pill {
+	@apply border border-warning-border bg-warning-wash;
+}
+@utility row-hover {
+	@apply rounded-card hover:bg-surface-hover;
+}
+@utility nav-active {
+	@apply bg-primary-wash-strong! text-primary! border-transparent!;
+}
+@utility float-chrome {
+	@apply rounded-float border border-border bg-surface-panel/[.92] p-1 shadow-float backdrop-blur-float;
+}
+@utility shell-grid {
+	grid-template-rows: 48px minmax(0, 1fr) auto 26px;
+}
+@utility shell-grid-start {
+	grid-template-rows: 48px minmax(0, 1fr) 26px;
+}
+@utility start-grid {
+	grid-template-columns: minmax(0, 1fr) var(--spacing-side-panel);
+}
+@utility dialog-grid {
+	grid-template-rows: auto minmax(0, 1fr);
+}
+@utility max-w-dialog {
+	max-width: var(--spacing-dialog-max-w);
+}
+@utility max-h-dialog {
+	max-height: var(--spacing-dialog-max-h);
+}
+@utility max-h-dialog-tall {
+	max-height: var(--spacing-dialog-tall-max-h);
+}
+@utility max-h-dialog-taller {
+	max-height: var(--spacing-dialog-taller-max-h);
+}
+@utility frames-grid {
+	grid-template-columns: 40px 1fr 52px 52px 30px;
+}
+@utility keys-grid {
+	grid-template-columns: 34px 1fr 1fr 54px;
+}
+@utility dl-grid {
+	grid-template-columns: auto 1fr;
+}
+@utility stats-grid {
+	grid-template-columns: auto 1fr 1fr auto;
+}
+@utility dropzone {
+	@apply max-w-dropzone-w rounded-dropzone border-hairline border-dashed border-border-strong bg-surface-panel/60 px-8 py-11;
+}
+@utility edit-tier-shown {
+	grid-template-rows: 1fr;
+}
+@utility edit-tier-hidden {
+	grid-template-rows: 0fr;
+}
+@utility strip-offline-hatch {
+	background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.035) 0 3px, transparent 3px 6px);
+}
+
 :root {
 	--background: oklch(1 0 0);
 	--foreground: oklch(0.145 0 0);
@@ -353,6 +628,50 @@
 	--surface-card: oklch(1 0 0);
 	--surface-raised: oklch(0.97 0 0);
 	--border-strong: oklch(0.87 0 0);
+	--foreground-bright: #f4f4f5;
+	--foreground-soft: #a1a1aa;
+	--foreground-dim: #71717a;
+	--foreground-faint: #5a5a63;
+	--foreground-ghost: #3f3f46;
+	--foreground-veil: #27272a;
+	--foreground-pending: #52525b;
+	--surface-sunken: #131316;
+	--surface-hover: #16161a;
+	--surface-chip: #18181b;
+	--border-faint: #17171b;
+	--border-subtle: #101013;
+	--primary-hover: #ff87bc;
+	--primary-wash-faint: color-mix(in oklch, var(--primary) 3%, transparent);
+	--primary-wash-subtle: color-mix(in oklch, var(--primary) 5%, transparent);
+	--primary-wash-soft: color-mix(in oklch, var(--primary) 7%, transparent);
+	--primary-wash: color-mix(in oklch, var(--primary) 12%, transparent);
+	--primary-wash-strong: color-mix(in oklch, var(--primary) 13%, transparent);
+	--primary-wash-max: color-mix(in oklch, var(--primary) 16%, transparent);
+	--grade-great: #66ccff;
+	--grade-ok: #88b300;
+	--grade-meh: #ffcc22;
+	--grade-miss: #ed1121;
+	--grade-ungraded: #8a8a93;
+	--grade-great-on: #0a1218;
+	--grade-ok-on: #11170a;
+	--grade-meh-on: #1a1400;
+	--grade-miss-on: #1b0505;
+	--grade-meh-band: #ffcc2226;
+	--grade-ok-band: #88b30038;
+	--grade-great-band: #66ccff52;
+	--graph-velocity: #eb4791;
+	--hud-key: #99ddff;
+	--hud-rest: rgba(255, 255, 255, 0.92);
+	--lattice-on: #66ccff;
+	--lattice-off: #ffcc22;
+	--lattice-unknown: #71717a;
+	--warning: #fbbf24;
+	--warning-border: rgba(245, 158, 11, 0.35);
+	--warning-wash: rgba(69, 26, 3, 0.55);
+	--danger-soft: #ff8a90;
+	--danger-detail: #f1c9cc;
+	--hp-curve-wash: rgba(255, 255, 255, 0.06);
+	--hp-curve-line: rgba(255, 255, 255, 0.22);
 }
 
 .dark {
@@ -396,6 +715,50 @@
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--sidebar-border: oklch(1 0 0 / 10%);
 	--sidebar-ring: oklch(0.556 0 0);
+	--foreground-bright: #f4f4f5;
+	--foreground-soft: #a1a1aa;
+	--foreground-dim: #71717a;
+	--foreground-faint: #5a5a63;
+	--foreground-ghost: #3f3f46;
+	--foreground-veil: #27272a;
+	--foreground-pending: #52525b;
+	--surface-sunken: #131316;
+	--surface-hover: #16161a;
+	--surface-chip: #18181b;
+	--border-faint: #17171b;
+	--border-subtle: #101013;
+	--primary-hover: #ff87bc;
+	--primary-wash-faint: color-mix(in oklch, var(--primary) 3%, transparent);
+	--primary-wash-subtle: color-mix(in oklch, var(--primary) 5%, transparent);
+	--primary-wash-soft: color-mix(in oklch, var(--primary) 7%, transparent);
+	--primary-wash: color-mix(in oklch, var(--primary) 12%, transparent);
+	--primary-wash-strong: color-mix(in oklch, var(--primary) 13%, transparent);
+	--primary-wash-max: color-mix(in oklch, var(--primary) 16%, transparent);
+	--grade-great: #66ccff;
+	--grade-ok: #88b300;
+	--grade-meh: #ffcc22;
+	--grade-miss: #ed1121;
+	--grade-ungraded: #8a8a93;
+	--grade-great-on: #0a1218;
+	--grade-ok-on: #11170a;
+	--grade-meh-on: #1a1400;
+	--grade-miss-on: #1b0505;
+	--grade-meh-band: #ffcc2226;
+	--grade-ok-band: #88b30038;
+	--grade-great-band: #66ccff52;
+	--graph-velocity: #eb4791;
+	--hud-key: #99ddff;
+	--hud-rest: rgba(255, 255, 255, 0.92);
+	--lattice-on: #66ccff;
+	--lattice-off: #ffcc22;
+	--lattice-unknown: #71717a;
+	--warning: #fbbf24;
+	--warning-border: rgba(245, 158, 11, 0.35);
+	--warning-wash: rgba(69, 26, 3, 0.55);
+	--danger-soft: #ff8a90;
+	--danger-detail: #f1c9cc;
+	--hp-curve-wash: rgba(255, 255, 255, 0.06);
+	--hp-curve-line: rgba(255, 255, 255, 0.22);
 }
 
 @layer base {
@@ -792,11 +1155,11 @@
 		background: transparent;
 	}
 	::-webkit-scrollbar-thumb {
-		background: #27272a;
+		background: var(--foreground-veil);
 		border-radius: 4px;
 		border: 2px solid var(--surface-panel);
 	}
 	::-webkit-scrollbar-thumb:hover {
-		background: #3f3f46;
+		background: var(--foreground-ghost);
 	}
 }
