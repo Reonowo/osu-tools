@@ -138,7 +138,7 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogContent
-				className="flex h-[min(680px,calc(100dvh-4rem))] w-[min(760px,calc(100vw-4rem))] max-w-none flex-col gap-3 p-0 sm:max-w-none"
+				className="flex h-browser-dialog-h w-browser-dialog-w max-w-none flex-col gap-3 p-0 sm:max-w-none"
 				onKeyDown={onKeyDown}
 				// the search box, not the popup: typing is what this dialog is
 				// for, and a user who has to click into the field first has been
@@ -147,7 +147,7 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 			>
 				<DialogHeader className="px-4 pt-4">
 					<DialogTitle className="flex items-center gap-2">
-						<FolderSearch className="size-4 text-[#71717a]" />
+						<FolderSearch className="size-4 text-foreground-dim" />
 						browse local replays
 					</DialogTitle>
 				</DialogHeader>
@@ -165,7 +165,7 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 									setQuery(e.target.value);
 									setCursor(-1);
 								}}
-								className="h-8 flex-1 text-[12px]"
+								className="h-8 flex-1 text-title"
 							/>
 							<ToggleGroup
 								aria-label="replay source"
@@ -178,13 +178,13 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 									// motion group carries the same note)
 									if (chosen !== undefined) setSource(chosen as BrowserSourceFilter);
 								}}
-								className="h-8 shrink-0 rounded-[7px] border border-border bg-[#131316] p-0.5"
+								className="h-8 shrink-0 segmented"
 							>
 								{SOURCE_FILTERS.map(({ value, label }) => (
 									<ToggleGroupItem
 										key={value}
 										value={value}
-										className="h-full rounded-[5px] px-2 text-[10.5px] text-[#71717a] aria-pressed:bg-primary aria-pressed:font-bold aria-pressed:text-primary-foreground"
+										className="h-full rounded-control px-2 text-caption-plain text-foreground-dim aria-pressed:bg-primary aria-pressed:font-bold aria-pressed:text-primary-foreground"
 									>
 										{label}
 									</ToggleGroupItem>
@@ -198,11 +198,11 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 							question that has not been asked is how an empty list reads
 							as an answer */}
 							{listing === null ? (
-								<p className="px-2.5 py-6 text-center text-[11px] text-[#71717a]">
+								<p className="px-2.5 py-6 text-center text-row text-foreground-dim">
 									reading your replays…
 								</p>
 							) : rows.length === 0 ? (
-								<p className="px-2.5 py-6 text-center text-[11px] text-[#71717a]">
+								<p className="px-2.5 py-6 text-center text-row text-foreground-dim">
 									{(listing?.rows.length ?? 0) === 0
 										? "no replays found in your osu! install"
 										: "nothing matches that search"}
@@ -234,7 +234,7 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 							)}
 						</div>
 
-						<div className="flex flex-col gap-1 border-t border-border bg-muted/40 px-4 py-2 font-mono text-[10px] text-[#71717a]">
+						<div className="flex flex-col gap-1 border-t border-border bg-muted/40 px-4 py-2 font-mono text-meta text-foreground-dim">
 							{error !== null && (
 								<span className="text-destructive">{describeIpcError(error).title}</span>
 							)}
@@ -256,14 +256,14 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 function NoInstall({ searched, onOpenSettings }: { searched: string[]; onOpenSettings: () => void }) {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-			<HardDrive className="size-7 text-[#71717a]" />
-			<p className="text-[13px] font-medium text-[#e4e4e7]">no osu! stable install found</p>
-			<p className="text-[11.5px] leading-[1.55] text-[#71717a]">
+			<HardDrive className="size-7 text-foreground-dim" />
+			<p className="text-value font-medium text-foreground">no osu! stable install found</p>
+			<p className="text-lede text-foreground-dim">
 				this browser lists the plays your osu! client records and the replays in its Replays folder, so it needs
 				to know where that install is.
 			</p>
 			{searched.length > 0 && (
-				<div className="max-w-full font-mono text-[10px] text-[#5a5a63]">
+				<div className="max-w-full font-mono text-meta text-foreground-faint">
 					looked in:
 					{searched.map((path) => (
 						<div key={path} className="truncate">
@@ -299,39 +299,39 @@ function BrowserRowButton({
 			type="button"
 			onClick={() => onOpen(row)}
 			className={cn(
-				"flex h-full w-full flex-col justify-center gap-1 rounded-[9px] border border-transparent px-2.5 text-left hover:bg-[#16161a]",
-				focused && "border-border-strong bg-[#16161a]",
+				"flex h-full w-full flex-col justify-center gap-1 rounded-card border border-transparent px-2.5 text-left hover:bg-surface-hover",
+				focused && "border-border-strong bg-surface-hover",
 				// a play whose beatmap has left the library still opens -- the
 				// picker is one dialog away -- so it is greyed, never disabled
 				!row.titled && "opacity-60"
 			)}
 		>
 			<div className="flex min-w-0 items-center gap-1.5">
-				<span className="truncate text-[12px] font-medium text-[#e4e4e7]">
+				<span className="truncate text-title font-medium text-foreground">
 					{rowTitle(row)}
-					{difficulty !== null && <span className="text-[#71717a]"> [{difficulty}]</span>}
+					{difficulty !== null && <span className="text-foreground-dim"> [{difficulty}]</span>}
 				</span>
 				{loaded && (
-					<Badge variant="outline" className="h-4 shrink-0 px-1.5 text-[9px]">
+					<Badge variant="outline" className="h-4 shrink-0 px-1.5 text-micro">
 						open
 					</Badge>
 				)}
 				{row.mods !== 0 && (
-					<Badge variant="secondary" className="h-4 shrink-0 px-1.5 font-mono text-[9px]">
+					<Badge variant="secondary" className="h-4 shrink-0 px-1.5 font-mono text-micro">
 						{formatMods(row.mods)}
 					</Badge>
 				)}
 				{row.lazerWritten && (
-					<Badge variant="outline" className="h-4 shrink-0 px-1.5 text-[9px]">
+					<Badge variant="outline" className="h-4 shrink-0 px-1.5 text-micro">
 						lazer
 					</Badge>
 				)}
 			</div>
-			<div className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-[#71717a]">
+			<div className="flex min-w-0 items-center gap-1.5 font-mono text-meta text-foreground-dim">
 				<span className="truncate">
 					{row.playerName ?? "unknown"} · {formatAccuracy(row.accuracy)} · {row.maxCombo}x · {row.date}
 				</span>
-				<span className="ml-auto shrink-0 text-[9px] text-[#5a5a63]">
+				<span className="ml-auto shrink-0 text-micro text-foreground-faint">
 					{row.source === "localPlay" ? "local play" : "Replays"}
 				</span>
 			</div>
