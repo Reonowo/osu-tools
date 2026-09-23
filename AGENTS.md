@@ -65,6 +65,7 @@ Panels live in `components/panels/`; the editing panels' controls are gated per 
 - Commit messages are scope-prefixed lowercase: `viewer/settings: replace the display length slider with a number field`, `engine/formats: ...`.
 - rustfmt `max_width = 110`.
 - `fixtures/path/slider_path.json` intentionally contains the JSON string literals `"Infinity"` and `"NaN"` in float positions; readers must accept them.
+- A site references a token and never writes a hex or a pixel. Every colour and measurement the chrome draws is a role-named token in `src/index.css`'s `@theme` blocks (`docs/adr/0011`), cited in `src/lib/chrome-tokens.ts` and pinned by `src/lib/chrome-tokens.test.ts`; a raw hex, rgb/rgba or value-arbitrary utility (`text-[10.5px]`, `rounded-[9px]`, `-[#fff]`, …) in chrome `src/` outside `engine/`, `skin/`, `renderer/`, `assets/` and the manifest itself fails `bun test src`. Two tokens holding the same number are two tokens on purpose — collapse one only as a deliberate, eyes-on change (`TODO.md`'s near-duplicate list).
 
 ## Agent skills
 
