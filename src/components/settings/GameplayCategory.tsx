@@ -100,7 +100,7 @@ export function GameplayCategory() {
 									// shrink-0 keeps the track from collapsing to its
 									// thumb inside the flex row (Transport.tsx's volume
 									// slider carries the same note)
-									className="w-[110px] shrink-0"
+									className="w-slider-col shrink-0"
 									aria-label="background dim"
 									min={BACKGROUND_DIM_MIN}
 									max={BACKGROUND_DIM_MAX}
@@ -114,7 +114,7 @@ export function GameplayCategory() {
 								overlays are drawn above it and stay at full brightness
 							</TooltipContent>
 						</Tooltip>
-						<span className="w-[30px] text-right font-mono text-[10.5px] text-[#71717a] tabular-nums">
+						<span className="w-readout text-right font-mono text-caption-plain text-foreground-dim tabular-nums">
 							{effects.backgroundDim}%
 						</span>
 					</span>

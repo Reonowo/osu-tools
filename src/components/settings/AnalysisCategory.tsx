@@ -174,13 +174,13 @@ export function AnalysisCategory({
 									const chosen = next[0];
 									if (chosen !== undefined) setOverlay("playfieldGrid", Number(chosen));
 								}}
-								className="h-[26px] rounded-[7px] border border-border bg-[#131316] p-0.5"
+								className="h-control segmented"
 							>
 								{PLAYFIELD_GRID_SPACINGS.map((spacing) => (
 									<ToggleGroupItem
 										key={spacing}
 										value={String(spacing)}
-										className="h-full rounded-[5px] px-2 text-[10.5px] text-[#71717a] aria-pressed:bg-primary aria-pressed:font-bold aria-pressed:text-primary-foreground"
+										className="h-full rounded-control px-2 text-caption-plain text-foreground-dim aria-pressed:bg-primary aria-pressed:font-bold aria-pressed:text-primary-foreground"
 									>
 										{spacing === 0 ? "off" : spacing}
 									</ToggleGroupItem>

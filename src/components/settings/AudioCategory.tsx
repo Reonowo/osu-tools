@@ -104,7 +104,7 @@ function VolumeRow({
 						<Slider
 							// shrink-0 keeps the track from collapsing to its thumb
 							// inside the flex row (Transport.tsx carries the same note)
-							className="w-[110px] shrink-0"
+							className="w-slider-col shrink-0"
 							aria-label={label}
 							min={VOLUME_MIN}
 							max={VOLUME_MAX}
@@ -116,7 +116,7 @@ function VolumeRow({
 					</TooltipTrigger>
 					<TooltipContent side="left">{description}</TooltipContent>
 				</Tooltip>
-				<span className="w-[30px] text-right font-mono text-[10.5px] text-[#71717a] tabular-nums">
+				<span className="w-readout text-right font-mono text-caption-plain text-foreground-dim tabular-nums">
 					{value}%
 				</span>
 			</span>
@@ -184,7 +184,7 @@ export function AudioCategory({
 							<TooltipTrigger render={<span />}>
 								<Slider
 									// shrink-0 for the reason VolumeRow above carries
-									className="w-[110px] shrink-0"
+									className="w-slider-col shrink-0"
 									aria-label="positional hitsounds"
 									min={0}
 									max={100}
@@ -200,7 +200,7 @@ export function AudioCategory({
 								everything; osu!'s own default is 20%
 							</TooltipContent>
 						</Tooltip>
-						<span className="w-[30px] text-right font-mono text-[10.5px] text-[#71717a] tabular-nums">
+						<span className="w-readout text-right font-mono text-caption-plain text-foreground-dim tabular-nums">
 							{Math.round(gameplay.positionalHitsoundLevel * 100)}%
 						</span>
 					</span>

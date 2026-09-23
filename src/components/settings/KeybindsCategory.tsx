@@ -39,7 +39,7 @@ interface ArmedSlot {
 const SLOT_LABELS = ["primary", "alternate"];
 
 const SLOT_CLASS =
-	"h-7 min-w-[7.5rem] rounded-md border border-border bg-zinc-800/60 px-2 text-xs text-[#e4e4e7] " +
+	"h-7 min-w-keybind-capture rounded-md border border-border bg-zinc-800/60 px-2 text-xs text-foreground " +
 	"hover:border-primary/40 focus-visible:border-primary focus-visible:outline-none disabled:opacity-50";
 
 /** what a slot shows: the key, or the reason it shows no key */
@@ -79,7 +79,7 @@ function KeybindSlot({
 				onBlur={() => armed && onCancel()}
 				className={cn(
 					SLOT_CLASS,
-					armed && "border-primary bg-primary/[.13] text-primary",
+					armed && "border-primary bg-primary-wash-strong text-primary",
 					binding === undefined && !armed && "text-zinc-500 italic"
 				)}
 			>
@@ -93,7 +93,7 @@ function KeybindSlot({
 				aria-label={`clear ${row.label} ${SLOT_LABELS[slot] ?? "binding"}`}
 				disabled={locked || binding === undefined}
 				onClick={onClear}
-				className="rounded p-1 text-zinc-500 hover:text-[#e4e4e7] disabled:invisible"
+				className="rounded p-1 text-zinc-500 hover:text-foreground disabled:invisible"
 			>
 				<Trash2 aria-hidden className="size-3.5" />
 			</button>
@@ -125,7 +125,7 @@ function KeybindRow({
 			<div className="min-w-0">
 				<div className={row.locked !== null ? "text-zinc-500" : undefined}>{row.label}</div>
 				{row.locked !== null && <div className="mt-0.5 text-xs text-zinc-500">locked — {row.locked}</div>}
-				{notice !== null && <div className="mt-0.5 text-xs text-[#ffcc22]">{notice}</div>}
+				{notice !== null && <div className="mt-0.5 text-xs text-grade-meh">{notice}</div>}
 			</div>
 			<div className="flex shrink-0 items-center gap-1.5">
 				{Array.from({ length: MAX_BINDING_SLOTS }, (_, slot) => (
@@ -148,7 +148,7 @@ function KeybindRow({
 							aria-label={`revert ${row.label} to its default`}
 							disabled={!row.overridden}
 							onClick={onRevert}
-							className="rounded p-1 text-primary hover:text-[#e4e4e7] disabled:invisible"
+							className="rounded p-1 text-primary hover:text-foreground disabled:invisible"
 						>
 							<RotateCcw aria-hidden className="size-3.5" />
 						</button>
@@ -217,7 +217,7 @@ function ReadOnlyRow({ row }: { row: EffectiveKeybind }) {
 	return (
 		<div className="flex items-baseline justify-between gap-3 py-0.5 text-sm">
 			<span className={row.bindings.length === 0 ? "text-zinc-500" : undefined}>{row.label}</span>
-			<span className="shrink-0 font-mono text-xs text-[#a1a1aa]">
+			<span className="shrink-0 font-mono text-xs text-foreground-soft">
 				{row.bindings.length === 0 ? (
 					<span className="text-zinc-600 italic">unbound</span>
 				) : (

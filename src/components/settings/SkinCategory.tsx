@@ -99,7 +99,7 @@ export function SkinCategory({
 								<span className="block truncate text-xs text-amber-400">{row.refusal}</span>
 							)}
 						</span>
-						<span className="shrink-0 rounded bg-zinc-700/60 px-1.5 py-0.5 text-[0.65rem] text-zinc-300">
+						<span className="shrink-0 rounded bg-zinc-700/60 px-1.5 py-0.5 text-tiny text-zinc-300">
 							{SOURCE_LABELS[row.source]}
 						</span>
 					</button>

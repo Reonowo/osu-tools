@@ -77,7 +77,7 @@ export function GeneralCategory({
 		// an explicit minmax(0,1fr) column rather than the implicit auto one: an
 		// auto track can never be narrower than its content's min-content width,
 		// so a truncating row would widen this grid instead of clipping inside it
-		<div className="grid grid-cols-[minmax(0,1fr)] gap-4">
+		<div className="grid grid-cols-1 gap-4">
 			<section className="space-y-2">
 				<SectionLabel>osu! install</SectionLabel>
 				<div className="flex items-center gap-2 text-sm">
@@ -123,13 +123,13 @@ export function GeneralCategory({
 										setInterface("motion", motionPreference(chosen as MotionChoice));
 									}
 								}}
-								className="h-[26px] rounded-[7px] border border-border bg-[#131316] p-0.5"
+								className="h-control segmented"
 							>
 								{MOTION_STATES.map(({ value, label }) => (
 									<ToggleGroupItem
 										key={value}
 										value={value}
-										className="h-full rounded-[5px] px-2 text-[10.5px] text-[#71717a] aria-pressed:bg-primary aria-pressed:font-bold aria-pressed:text-primary-foreground"
+										className="h-full rounded-control px-2 text-caption-plain text-foreground-dim aria-pressed:bg-primary aria-pressed:font-bold aria-pressed:text-primary-foreground"
 									>
 										{label}
 									</ToggleGroupItem>
@@ -186,7 +186,8 @@ function ResolvedInstall({ status }: { status: StableStatus | null }) {
 	return (
 		<>
 			<Row label="resolved">
-				{status.root} <span className="text-[#5a5a63]">({status.fromOverride ? "set here" : "detected"})</span>
+				{status.root}{" "}
+				<span className="text-foreground-faint">({status.fromOverride ? "set here" : "detected"})</span>
 			</Row>
 			<Row label="songs">{status.songsDir}</Row>
 		</>

@@ -26,7 +26,7 @@ import { SkinCategory } from "./SkinCategory";
 // gives, so only the sizing and the active colours need cancelling.
 //
 // flex-none and h-8 are plain same-scope cancels of TabsTrigger's
-// unconditional flex-1 and h-[calc(100%-1px)], which cn() drops for us.
+// unconditional flex-1 and h-tab-fill, which cn() drops for us.
 // the active/inactive colours are not: TabsTrigger's base carries
 // dark:data-active:{bg,text,border} and dark:text-muted-foreground, which sit
 // in a different tailwind-merge modifier scope than these plain utilities and
@@ -39,8 +39,8 @@ import { SkinCategory } from "./SkinCategory";
 // row, not the shell's -- a transition is gated by the surface it happens in,
 // and the nav column lives inside a dialog (lib/motion.ts)
 const NAV_ITEM_BASE = "chrome-indicator-colour h-8 flex-none gap-2 px-2";
-const NAV_ITEM_ACTIVE = "bg-primary/[.13]! text-primary! border-transparent!";
-const NAV_ITEM_INACTIVE = "text-[#71717a]!";
+const NAV_ITEM_ACTIVE = "nav-active";
+const NAV_ITEM_INACTIVE = "text-foreground-dim!";
 
 export function SettingsDialog({
 	category,
@@ -134,7 +134,7 @@ export function SettingsDialog({
 
 	return (
 		<Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-			<DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] sm:max-w-2xl">
+			<DialogContent className="max-h-dialog dialog-grid sm:max-w-2xl">
 				<DialogHeader>
 					{/* the accessible name for the whole dialog, so it stays "settings"
 					    whichever category is showing -- the primitive already announces
@@ -157,7 +157,7 @@ export function SettingsDialog({
 				>
 					{/* the nav is a sibling of the scroll viewport, never inside it, so
 					    no scroll state can move it */}
-					<TabsList className="w-[160px] shrink-0 gap-0.5 bg-transparent p-0">
+					<TabsList className="w-nav-col shrink-0 gap-0.5 bg-transparent p-0">
 						{SETTINGS_CATEGORIES.map(({ id, label, Icon }) => (
 							<TabsTrigger
 								key={id}
@@ -187,7 +187,7 @@ export function SettingsDialog({
 					    past this box, and without the clip that gap becomes a
 					    scrollbar. one shared viewport, so every category opens at its
 					    top rather than wherever it was last left */}
-					<div className="h-[26rem] max-h-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
+					<div className="h-settings-frame max-h-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
 						{/* keyed on the category so the fade restarts on every switch;
 						the wrapper is inside the scroll viewport so the frame itself
 						never moves, which is the whole point of fading the body */}
