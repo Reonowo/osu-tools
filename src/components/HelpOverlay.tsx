@@ -21,7 +21,7 @@ export function HelpOverlay() {
 
 	return (
 		<Dialog open={open} onOpenChange={setHelpOpen}>
-			<DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] sm:max-w-lg">
+			<DialogContent className="max-h-dialog dialog-grid sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle>keybinds</DialogTitle>
 					<DialogDescription>
