@@ -58,10 +58,10 @@ export function OpenMenu() {
 					render={
 						<PopoverTrigger
 							render={
-								<Button size="sm" variant="ghost" className="gap-1 pr-1.5 text-[#a1a1aa]">
+								<Button size="sm" variant="ghost" className="gap-1 pr-1.5 text-foreground-soft">
 									<FolderOpen />
 									open
-									<ChevronDown className="size-3 text-[#71717a]" />
+									<ChevronDown className="size-3 text-foreground-dim" />
 								</Button>
 							}
 						/>
@@ -76,7 +76,7 @@ export function OpenMenu() {
 			start screen's 400px aside and are rendered here verbatim. the popup's
 			own cap is the backstop -- the list's cap below is what actually
 			scrolls, and this keeps the whole thing inside a short window */}
-			<PopoverContent align="start" className="max-h-[calc(100dvh-5rem)] w-[340px] gap-1.5 p-1.5">
+			<PopoverContent align="start" className="max-h-dialog-taller w-open-menu-w gap-1.5 p-1.5">
 				{/* first, and the first focusable row, so Ctrl+O then Enter reaches
 				the OS file picker. disabled while a load is in flight, mirroring
 				the start screen's browse button */}
@@ -87,9 +87,9 @@ export function OpenMenu() {
 						setOpen(false);
 						void pickReplay();
 					}}
-					className="flex w-full shrink-0 items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[12px] font-medium text-[#e4e4e7] hover:bg-[#16161a] disabled:cursor-not-allowed disabled:opacity-50"
+					className="flex w-full shrink-0 items-center gap-2 rounded-card px-2.5 py-2 text-left text-title font-medium text-foreground hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
 				>
-					<FolderOpen className="size-3.5 text-[#71717a]" />
+					<FolderOpen className="size-3.5 text-foreground-dim" />
 					{loading ? "loading…" : "browse…"}
 				</button>
 
@@ -102,30 +102,30 @@ export function OpenMenu() {
 						setOpen(false);
 						setBrowserOpen(true);
 					}}
-					className="flex w-full shrink-0 items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[12px] font-medium text-[#e4e4e7] hover:bg-[#16161a]"
+					className="flex w-full shrink-0 items-center gap-2 rounded-card px-2.5 py-2 text-left text-title font-medium text-foreground hover:bg-surface-hover"
 				>
-					<FolderSearch className="size-3.5 text-[#71717a]" />
+					<FolderSearch className="size-3.5 text-foreground-dim" />
 					browse local replays
-					<span className="ml-auto font-mono text-[10px] text-[#5a5a63]">
+					<span className="ml-auto font-mono text-meta text-foreground-faint">
 						{keybindSuffix(keybinds, "replayBrowser").trim()}
 					</span>
 				</button>
 
 				<Separator className="shrink-0" />
 
-				<div className="shrink-0 px-2.5 text-[10px] font-semibold tracking-[.08em] text-[#71717a] uppercase">
+				<div className="shrink-0 px-2.5 text-menu-label font-semibold text-foreground-dim uppercase">
 					recent
 				</div>
 				{recents.length === 0 ? (
 					// in the start screen's voice: a fact, not a failure
-					<p className="px-2.5 py-2 text-center text-[11px] text-[#71717a]">
+					<p className="px-2.5 py-2 text-center text-row text-foreground-dim">
 						nothing else opened yet — browse for one
 					</p>
 				) : (
 					// ~4 rows visible, so a longer history reads as scrollable rather
 					// than as the whole list. the cap is what keeps twelve entries
 					// from producing a popover taller than the window
-					<ScrollArea className="min-h-0 max-h-[236px]">
+					<ScrollArea className="min-h-0 max-h-history">
 						<div className="flex flex-col">
 							{recents.map((entry) => (
 								<RecentEntry key={entry.osrPath} entry={entry} nowMs={nowMs} onOpen={openAndClose} />

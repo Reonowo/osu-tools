@@ -40,7 +40,7 @@ export function AppShell({
 	return (
 		<div
 			data-motion-row="shell"
-			className="shell-load-fade grid h-screen w-screen grid-rows-[48px_minmax(0,1fr)_auto_26px] overflow-hidden bg-surface-viewport font-sans text-[#e4e4e7]"
+			className="shell-load-fade grid h-screen w-screen shell-grid overflow-hidden bg-surface-viewport font-sans text-foreground"
 		>
 			<TopBar
 				onOpenSettings={onOpenSettings}

@@ -16,9 +16,9 @@ import { useViewerStore } from "@/state/store";
 
 export function PanelHeader({ title, trailing }: { title: string; trailing?: ReactNode }) {
 	return (
-		<div className="flex items-center justify-between border-b border-border px-3.5 pt-[11px] pb-2.5">
-			<h2 className="text-[11px] font-semibold tracking-[.14em] text-[#a1a1aa] uppercase">{title}</h2>
-			{trailing != null && <span className="font-mono text-[9.5px] text-[#8a8a93]">{trailing}</span>}
+		<div className="flex items-center justify-between border-b border-border px-3.5 pt-card-loose pb-2.5">
+			<h2 className="text-panel-title font-semibold text-foreground-soft uppercase">{title}</h2>
+			{trailing != null && <span className="font-mono text-mini text-muted-foreground">{trailing}</span>}
 		</div>
 	);
 }

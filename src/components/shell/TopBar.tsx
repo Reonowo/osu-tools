@@ -18,18 +18,18 @@ import { useViewerStore, type ViewerMode } from "@/state/store";
 
 // osu!'s own logotype slant, reused for the identity tile and every mod chip;
 // glyphs inside get the mirrored skew so their text stays upright
-const LOGO_SKEW = "skew-x-[-11.3deg]";
-const LOGO_COUNTER_SKEW = "skew-x-[11.3deg]";
+const LOGO_SKEW = "skew-x-brand";
+const LOGO_COUNTER_SKEW = "skew-x-brand-inverse";
 
 // the "R" tile + wordmark, shared verbatim with StartScreen's header so the
 // skew constants above stay defined in exactly one place
 export function Identity() {
 	return (
 		<div className="flex shrink-0 items-center gap-1.5">
-			<div className={`flex size-[22px] ${LOGO_SKEW} items-center justify-center rounded-[5px] bg-primary`}>
+			<div className={`flex size-btn-jump ${LOGO_SKEW} items-center justify-center rounded-control bg-primary`}>
 				<span className={`${LOGO_COUNTER_SKEW} text-xs font-bold text-primary-foreground`}>R</span>
 			</div>
-			<span className="text-[11px] font-semibold uppercase tracking-[.1em] text-[#71717a]">replay viewer</span>
+			<span className="text-wordmark font-semibold uppercase text-foreground-dim">replay viewer</span>
 		</div>
 	);
 }
@@ -69,7 +69,7 @@ function ExportMenu({
 				/>
 				<TooltipContent>write the current document to a .osr, or render it to a video</TooltipContent>
 			</Tooltip>
-			<PopoverContent align="end" className="w-[220px] gap-0.5 p-1.5">
+			<PopoverContent align="end" className="w-menu-w gap-0.5 p-1.5">
 				{entries.map((entry) => {
 					const row = (
 						<button
@@ -80,12 +80,12 @@ function ExportMenu({
 								setOpen(false);
 								onOpen[entry.id]();
 							}}
-							className="flex w-full items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[12px] font-medium text-[#e4e4e7] hover:bg-[#16161a] disabled:cursor-not-allowed disabled:opacity-50"
+							className="flex w-full items-center gap-2 rounded-card px-2.5 py-2 text-left text-title font-medium text-foreground hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{entry.id === "replay" ? (
-								<FileDown className="size-3.5 text-[#71717a]" />
+								<FileDown className="size-3.5 text-foreground-dim" />
 							) : (
-								<Clapperboard className="size-3.5 text-[#71717a]" />
+								<Clapperboard className="size-3.5 text-foreground-dim" />
 							)}
 							{entry.label}
 						</button>
@@ -152,20 +152,23 @@ export function TopBar({
 
 			{/* beatmap/player -- select-text: metadata is a copy opt-in (index.css) */}
 			<div className="flex min-w-0 flex-col gap-px select-text">
-				<div className="truncate text-[13.5px] font-semibold text-[#f4f4f5]">
-					{title} <span className="text-[11.5px] font-medium text-[#ff87bc]">[{version}]</span>
+				<div className="truncate text-display-sm font-semibold text-foreground-bright">
+					{title} <span className="text-lede-plain font-medium text-primary-hover">[{version}]</span>
 				</div>
-				<div className="truncate text-[10.5px] text-[#71717a]">
-					{artist} <span className="text-[#3f3f46]">·</span> {playerName}{" "}
-					<span className="text-[#3f3f46]">·</span> <span className="tabular-nums">{duration}</span>
+				<div className="truncate text-caption-plain text-foreground-dim">
+					{artist} <span className="text-foreground-ghost">·</span> {playerName}{" "}
+					<span className="text-foreground-ghost">·</span> <span className="tabular-nums">{duration}</span>
 				</div>
 			</div>
 
 			{/* mod chips */}
 			<div className="ml-3 flex shrink-0 items-center gap-1">
 				{modChips.map((chip) => (
-					<div key={chip} className={`flex h-[19px] ${LOGO_SKEW} items-center rounded bg-[#1c1c20] px-1.5`}>
-						<span className={`${LOGO_COUNTER_SKEW} text-[9.5px] font-bold tracking-[.08em] text-[#a1a1aa]`}>
+					<div
+						key={chip}
+						className={`flex h-chip ${LOGO_SKEW} items-center rounded bg-surface-raised px-1.5`}
+					>
+						<span className={`${LOGO_COUNTER_SKEW} text-mini-label font-bold text-foreground-soft`}>
 							{chip}
 						</span>
 					</div>
@@ -183,7 +186,7 @@ export function TopBar({
 						const nextMode = next[0] as ViewerMode | undefined;
 						if (nextMode) setMode(nextMode);
 					}}
-					className="h-7 rounded-lg border border-border bg-[#131316] p-0.5"
+					className="h-7 rounded-lg border border-border bg-surface-sunken p-0.5"
 				>
 					{/* chrome-indicator-colour: the highlight fades across rather than
 					flipping, so the toggle moves like the panel slide it triggers.
@@ -192,14 +195,14 @@ export function TopBar({
 					<ToggleGroupItem
 						value="watch"
 						data-motion-row="shell"
-						className="chrome-indicator-colour h-6 rounded-md px-[11px] text-[11.5px] font-semibold text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+						className="chrome-indicator-colour h-6 rounded-md px-card-loose text-lede-plain font-semibold text-foreground-dim aria-pressed:bg-primary aria-pressed:text-primary-foreground"
 					>
 						watch
 					</ToggleGroupItem>
 					<ToggleGroupItem
 						value="edit"
 						data-motion-row="shell"
-						className="chrome-indicator-colour h-6 rounded-md px-[11px] text-[11.5px] font-semibold text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+						className="chrome-indicator-colour h-6 rounded-md px-card-loose text-lede-plain font-semibold text-foreground-dim aria-pressed:bg-primary aria-pressed:text-primary-foreground"
 					>
 						edit
 					</ToggleGroupItem>
@@ -260,7 +263,7 @@ export function TopBar({
 				{editor?.dirty === true && (
 					<Tooltip>
 						<TooltipTrigger render={<span />}>
-							<span className="rounded-full border border-primary/40 bg-primary/[.13] px-2 py-0.5 text-[10px] text-primary">
+							<span className="rounded-full border border-primary/40 bg-primary-wash-strong px-2 py-0.5 text-meta text-primary">
 								unsaved edits
 							</span>
 						</TooltipTrigger>

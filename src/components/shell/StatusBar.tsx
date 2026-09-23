@@ -18,7 +18,7 @@ import { useViewerStore } from "@/state/store";
 // separators the shell draws as literal text (TopBar's "·" between
 // beatmap/player/duration) rather than the ui/separator.tsx rule
 function RunSeparator() {
-	return <span className="mx-2 text-[#27272a]">│</span>;
+	return <span className="mx-2 text-foreground-veil">│</span>;
 }
 
 export function StatusBar() {
@@ -72,7 +72,7 @@ export function StatusBar() {
 
 	const leftRun: ReactNode[] = [
 		<span className="inline-flex items-center gap-1.5">
-			<span className={`size-[5px] rounded-full ${authoritative ? "bg-[#88b300]" : "bg-[#ffcc22]"}`} />
+			<span className={`size-dot rounded-full ${authoritative ? "bg-grade-ok" : "bg-grade-meh"}`} />
 			{simulationLabel}
 		</span>,
 		<span>{modsLabel.toLowerCase()}</span>,
@@ -92,7 +92,7 @@ export function StatusBar() {
 	if (warnings.length > 0) {
 		leftRun.push(
 			<Popover>
-				<PopoverTrigger className="inline-flex h-[18px] items-center gap-1 rounded-[5px] border border-[rgba(245,158,11,.35)] bg-[rgba(69,26,3,.55)] px-[7px] text-[10px] text-[#fbbf24]">
+				<PopoverTrigger className="inline-flex h-rail-indicator items-center gap-1 rounded-control warning-pill px-stack text-meta text-warning">
 					<AlertTriangle className="size-3" />
 					{warnings.length} warning{warnings.length === 1 ? "" : "s"}
 				</PopoverTrigger>
@@ -106,8 +106,8 @@ export function StatusBar() {
 					className="w-auto max-w-md border border-border bg-popover select-text"
 				>
 					{warningList(warnings).map((warning) => (
-						<div key={warning.kind} className="flex items-start gap-2 text-xs text-[#e4e4e7]">
-							<AlertTriangle className="size-3 shrink-0 text-[#fbbf24]" />
+						<div key={warning.kind} className="flex items-start gap-2 text-xs text-foreground">
+							<AlertTriangle className="size-3 shrink-0 text-warning" />
 							{warning.text}
 						</div>
 					))}
@@ -117,7 +117,7 @@ export function StatusBar() {
 	}
 
 	return (
-		<footer className="flex min-w-0 items-center border-t border-border bg-surface-rail px-2.5 font-mono text-[10.5px] text-[#8a8a93]">
+		<footer className="flex min-w-0 items-center border-t border-border bg-surface-rail px-2.5 font-mono text-caption-plain text-muted-foreground">
 			{leftRun.map((segment, index) => (
 				<Fragment key={index}>
 					{index > 0 && <RunSeparator />}
@@ -130,7 +130,7 @@ export function StatusBar() {
 					<>
 						{/* the frame selection's count -- cyan, the editor-state accent,
 						so a 300-frame marquee reads at a glance */}
-						<span className="text-[#66ccff]">
+						<span className="text-grade-great">
 							{selectedFrames} frame{selectedFrames === 1 ? "" : "s"} selected
 						</span>
 						<RunSeparator />

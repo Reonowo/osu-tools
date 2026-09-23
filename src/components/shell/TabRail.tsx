@@ -31,41 +31,41 @@ export const PANEL_TABS: { id: PanelTab; label: string; Icon: LucideIcon }[] = [
 // instead of sitting at 38px, since flex-basis governs a column flex
 // item's main-axis size over its own height.
 //
-// w-[38px]! and justify-center! need the importance flag for a different
+// w-rail-tile! and justify-center! need the importance flag for a different
 // reason: once orientation="vertical" reaches TabsTrigger (see the Tabs
 // block below), its base classes also carry group-data-vertical/tabs:w-full
 // and group-data-vertical/tabs:justify-start. those live in a *different*
-// tailwind-merge modifier scope than our plain w-[38px]/justify-center, so
+// tailwind-merge modifier scope than our plain w-rail-tile/justify-center, so
 // cn() cannot drop them, and in the compiled stylesheet both happen to land
 // after our plain versions at equal (zero, via base-ui's :where() wrapper)
 // specificity -- so they win the cascade unless ours are marked important.
-// h-[38px] doesn't need the same treatment: it only has to beat
-// TabsTrigger's *unconditional* h-[calc(100%-1px)], which is the ordinary
+// h-rail-tile doesn't need the same treatment: it only has to beat
+// TabsTrigger's *unconditional* h-tab-fill, which is the ordinary
 // same-scope cn() cancel flex-none also relies on
 const RAIL_CONTROL_BASE =
-	"relative flex h-[38px] w-[38px]! items-center justify-center! rounded-lg transition-colors flex-none";
-// bg-primary/[.13]!, text-primary! and border-transparent! also need the
+	"relative flex h-rail-tile w-rail-tile! items-center justify-center! rounded-lg transition-colors flex-none";
+// bg-primary-wash-strong!, text-primary! and border-transparent! also need the
 // importance flag, for a third reason distinct from the two above:
 // TabsTrigger's base string carries dark:data-active:bg-input/30,
 // dark:data-active:text-foreground, dark:data-active:border-input, and
 // data-active:bg-background -- unprefixed and un-vertical-scoped, so those
 // sit in a *different* tailwind-merge modifier scope than our plain
-// bg-primary/[.13]/text-primary and cn() cannot drop them. in the compiled
+// bg-primary-wash-strong/text-primary and cn() cannot drop them. in the compiled
 // stylesheet the base rule's `:is(.dark *)` wrapper gives it higher
 // specificity than our override too, so without `!` the active trigger
-// renders the base's grey/bordered look instead of pink. text-[#71717a]!
+// renders the base's grey/bordered look instead of pink. text-foreground-dim!
 // needs it for the matching reason on the inactive side (dark:text-muted-foreground)
-const RAIL_CONTROL_ACTIVE = "bg-primary/[.13]! text-primary! border-transparent!";
-const RAIL_CONTROL_INACTIVE = "text-[#71717a]!";
+const RAIL_CONTROL_ACTIVE = "nav-active";
+const RAIL_CONTROL_INACTIVE = "text-foreground-dim!";
 // lazer's own SidebarIconButton indicator: it stays mounted in BOTH states and
 // moves between them -- 4px and faded, 18px and shown -- rather than appearing
 // and disappearing, which is what makes a rapid pair of clicks reverse from
 // wherever the bar has got to. centred by translate rather than by top/bottom
 // insets now that the height is the thing that animates
 const RAIL_INDICATOR =
-	"shell-rail-indicator pointer-events-none absolute top-1/2 -left-1.5 w-0.5 -translate-y-1/2 rounded-[1px] bg-primary";
-const RAIL_INDICATOR_ACTIVE = "h-[18px] opacity-100";
-const RAIL_INDICATOR_INACTIVE = "h-[4px] opacity-0";
+	"shell-rail-indicator pointer-events-none absolute top-1/2 -left-1.5 w-0.5 -translate-y-1/2 rounded-mark bg-primary";
+const RAIL_INDICATOR_ACTIVE = "h-rail-indicator opacity-100";
+const RAIL_INDICATOR_INACTIVE = "h-rail-indicator-rest opacity-0";
 
 /** what a rail-tab click means. base-ui's Tab guards its own click handling
  * on !active, so for the selected tab this handler is the only thing that
@@ -120,7 +120,7 @@ export function TabRail() {
 	const panelTab = useViewerStore((s) => s.panelTab);
 
 	return (
-		<nav className="flex w-[46px] shrink-0 flex-col items-center gap-0.5 border-l border-border bg-surface-rail py-1.5">
+		<nav className="flex w-rail shrink-0 flex-col items-center gap-0.5 border-l border-border bg-surface-rail py-1.5">
 			{/* data-shadcn: the plan expected Tabs to drive both the rail and the
 			panel it switches, but Tabs.Root only threads context through its own
 			react subtree -- the aside lives in a sibling grid cell, not inside
@@ -144,7 +144,7 @@ export function TabRail() {
 					flattens it into being a direct flex child of nav's column too,
 					so it gets the same explicit pin as everything else here rather
 					than relying on the browser's implicit flex-grow:0 default */}
-					<div aria-hidden="true" className="my-[5px] h-px w-[22px] flex-none bg-border" />
+					<div aria-hidden="true" className="my-tight h-px w-btn-jump flex-none bg-border" />
 					{PANEL_TABS.slice(2).map((tab) => (
 						<RailTrigger key={tab.id} {...tab} />
 					))}
