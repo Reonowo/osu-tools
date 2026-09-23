@@ -24,7 +24,7 @@
 //! md5, and the browser's footer says which file failed and why. one broken
 //! file never empties the browser.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -365,14 +365,88 @@ fn read_local_plays(install: &StableInstall) -> (Vec<BrowserRow>, BrowserSourceS
             lazer_written: row.version >= FIRST_LAZER_VERSION,
         });
     }
+    let (rows, overwritten) = one_row_per_file(rows);
     (
         rows,
         BrowserSourceStatus::Read {
             count: 0,
-            unreadable: missing,
+            unreadable: missing + overwritten,
             truncated: false,
         },
     )
+}
+
+/// keeps one local play per `Data/r` file, and returns how many of the rows
+/// it dropped are plays whose replay is gone.
+///
+/// stable names that file by the beatmap and the play's timestamp alone, so
+/// two leaderboard rows can name the same one: a replay imported with a
+/// timestamp another row already carries -- an edited export of a play keeps
+/// the original's -- overwrites that play's file. the file holds one replay,
+/// so the row kept is the one whose play the file's own header carries, or
+/// the first when the header cannot say. the rest open to a play that is not
+/// theirs, and listing them twice under one path is also a duplicate
+/// identity the frontend keys its rows by
+fn one_row_per_file(rows: Vec<BrowserRow>) -> (Vec<BrowserRow>, usize) {
+    let mut claimants: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        claimants.entry(row.path.clone()).or_default().push(index);
+    }
+    let mut kept = vec![true; rows.len()];
+    let mut overwritten = 0usize;
+    for (path, indices) in claimants.iter().filter(|(_, indices)| indices.len() > 1) {
+        let in_file = read_osr_header(Path::new(path)).ok();
+        // min_by_key keeps the first of equals, so a header that cannot say
+        // leaves the first claimant
+        let winner = indices
+            .iter()
+            .copied()
+            .min_by_key(|&index| distance_from_file(&rows[index], in_file.as_ref()))
+            .unwrap_or(indices[0]);
+        for &index in indices.iter().filter(|&&index| index != winner) {
+            kept[index] = false;
+            // a second record of the very play the file holds is a duplicate,
+            // not a play whose replay is gone
+            if !same_play(&rows[index], &rows[winner]) {
+                overwritten += 1;
+            }
+        }
+    }
+    let rows = rows
+        .into_iter()
+        .zip(kept)
+        .filter_map(|(row, kept)| kept.then_some(row))
+        .collect();
+    (rows, overwritten)
+}
+
+/// how far a claimant is from the play its file holds, least for the one it
+/// holds. the replay hash decides, and the score, mods and combo only break
+/// its ties: the hash alone cannot decide between this app's own edited
+/// exports of one play, which all carry one, because
+/// `engine::score::replay_hash` covers only the player and the timestamp. a
+/// header whose hash no claimant carries leaves them all equally far
+fn distance_from_file(row: &BrowserRow, in_file: Option<&OsrHeader>) -> u8 {
+    match in_file {
+        Some(header) if header.replay_md5.is_some() && row.replay_md5 == header.replay_md5 => {
+            let plays_match =
+                (row.score, row.mods, row.max_combo) == (header.total_score, header.mods, header.max_combo);
+            if plays_match {
+                0
+            } else {
+                1
+            }
+        }
+        _ => 2,
+    }
+}
+
+/// whether two leaderboard rows record one play: one replay hash, and the
+/// score, mods and combo that hash cannot vouch for on its own
+fn same_play(a: &BrowserRow, b: &BrowserRow) -> bool {
+    a.replay_md5.is_some()
+        && a.replay_md5 == b.replay_md5
+        && (a.score, a.mods, a.max_combo) == (b.score, b.mods, b.max_combo)
 }
 
 /// the install's own `Replays` folder: top-level `.osr` files, each read
@@ -856,6 +930,170 @@ mod tests {
             1,
             "a hashless row is kept"
         );
+    }
+
+    /// an edited export imported into stable keeps the original play's
+    /// timestamp, so its leaderboard row names the original's `Data/r` file
+    /// and the import overwrites it. the real install here carries exactly
+    /// this pair; listed twice under one path, the dialog's row keys collided
+    /// and a filter change left a stale row drawn over the first one
+    #[test]
+    fn two_local_plays_naming_one_file_list_once_as_the_play_it_holds() {
+        let root = tempfile::tempdir().unwrap();
+        let map_md5 = fake_install(root.path(), "1 fixture", "map.osu", b"the map contents");
+        let ticks = 638_000_000_000_000_000i64;
+        // the file holds the SECOND claimant, so keeping the first row the
+        // database lists would be wrong
+        let file = write_data_r_file(
+            root.path(),
+            &map_md5,
+            ticks,
+            &osr_bytes_with(&map_md5, 0, None, |h| h.replay_md5 = Some("imported".into())),
+        );
+        write_scores_db(
+            &root.path().join("scores.db"),
+            &[
+                ScoreRow::new(&map_md5, ticks).replay_md5("original"),
+                ScoreRow::new(&map_md5, ticks).replay_md5("imported"),
+            ],
+        );
+        // an F2 export of the original, which was deduped against a local
+        // play that no longer exists and is now the only copy of that play
+        let export = write_replays_file(
+            root.path(),
+            "export.osr",
+            &osr_bytes_with(&map_md5, 0, None, |h| {
+                h.replay_md5 = Some("original".into());
+                h.timestamp_ticks = ticks;
+            }),
+        );
+
+        let listing = assemble(&install_at(root.path()), &ListingCache::default());
+        assert_eq!(listing.rows.len(), 2, "{listing:#?}");
+        let local: Vec<&BrowserRow> = listing
+            .rows
+            .iter()
+            .filter(|r| r.source == ReplaySource::LocalPlay)
+            .collect();
+        assert_eq!(local.len(), 1, "one row per file");
+        assert_eq!(local[0].path, file.display().to_string());
+        assert_eq!(
+            local[0].replay_md5.as_deref(),
+            Some("imported"),
+            "the play the file holds"
+        );
+        let folder: Vec<&BrowserRow> = listing
+            .rows
+            .iter()
+            .filter(|r| r.source == ReplaySource::ReplaysFolder)
+            .collect();
+        assert_eq!(folder.len(), 1);
+        assert_eq!(folder[0].path, export.display().to_string());
+        assert_eq!(folder[0].replay_md5.as_deref(), Some("original"));
+        match listing.local_plays {
+            BrowserSourceStatus::Read {
+                count, unreadable, ..
+            } => {
+                assert_eq!(count, 1);
+                assert_eq!(unreadable, 1, "the overwritten play has no replay file left");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// two edited exports of one play carry one replay hash, since this
+    /// app's hash is the player and the timestamp alone, so the hash cannot
+    /// say which of them the file holds and the rest of the header does
+    #[test]
+    fn claimants_sharing_a_replay_hash_are_told_apart_by_the_play_itself() {
+        let root = tempfile::tempdir().unwrap();
+        let map_md5 = fake_install(root.path(), "1 fixture", "map.osu", b"the map contents");
+        let ticks = 638_000_000_000_000_000i64;
+        // the file holds the SECOND claimant, the one with hidden
+        write_data_r_file(
+            root.path(),
+            &map_md5,
+            ticks,
+            &osr_bytes_with(&map_md5, 8, None, |h| h.replay_md5 = Some("edited".into())),
+        );
+        write_scores_db(
+            &root.path().join("scores.db"),
+            &[
+                ScoreRow::new(&map_md5, ticks).replay_md5("edited"),
+                ScoreRow::new(&map_md5, ticks).replay_md5("edited").mods(8),
+            ],
+        );
+
+        let listing = assemble(&install_at(root.path()), &ListingCache::default());
+        assert_eq!(listing.rows.len(), 1, "{listing:#?}");
+        assert_eq!(listing.rows[0].mods, 8, "the play the file holds");
+        match listing.local_plays {
+            BrowserSourceStatus::Read { unreadable, .. } => {
+                assert_eq!(unreadable, 1, "the other edit was overwritten")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// the score, mods and combo only break a hash tie: a file holding a
+    /// replay no claimant records keeps the first claimant, however closely
+    /// another one's numbers happen to line up
+    #[test]
+    fn a_header_no_claimant_hash_matches_keeps_the_first_claimant() {
+        let root = tempfile::tempdir().unwrap();
+        let map_md5 = fake_install(root.path(), "1 fixture", "map.osu", b"the map contents");
+        let ticks = 638_000_000_000_000_000i64;
+        write_data_r_file(
+            root.path(),
+            &map_md5,
+            ticks,
+            &osr_bytes_with(&map_md5, 8, None, |h| h.replay_md5 = Some("neither".into())),
+        );
+        write_scores_db(
+            &root.path().join("scores.db"),
+            &[
+                ScoreRow::new(&map_md5, ticks).replay_md5("first"),
+                ScoreRow::new(&map_md5, ticks).replay_md5("second").mods(8),
+            ],
+        );
+
+        let listing = assemble(&install_at(root.path()), &ListingCache::default());
+        assert_eq!(listing.rows.len(), 1, "{listing:#?}");
+        assert_eq!(listing.rows[0].replay_md5.as_deref(), Some("first"));
+    }
+
+    /// a leaderboard row recorded twice names its file twice, and the file
+    /// holds both: dropping the repeat loses no replay, so nothing is counted
+    #[test]
+    fn a_play_recorded_twice_is_not_counted_as_a_lost_replay() {
+        let root = tempfile::tempdir().unwrap();
+        let map_md5 = fake_install(root.path(), "1 fixture", "map.osu", b"the map contents");
+        let ticks = 638_000_000_000_000_000i64;
+        write_data_r_file(
+            root.path(),
+            &map_md5,
+            ticks,
+            &osr_bytes_with(&map_md5, 0, None, |h| h.replay_md5 = Some("same".into())),
+        );
+        write_scores_db(
+            &root.path().join("scores.db"),
+            &[
+                ScoreRow::new(&map_md5, ticks).replay_md5("same"),
+                ScoreRow::new(&map_md5, ticks).replay_md5("same"),
+            ],
+        );
+
+        let listing = assemble(&install_at(root.path()), &ListingCache::default());
+        assert_eq!(listing.rows.len(), 1, "{listing:#?}");
+        match listing.local_plays {
+            BrowserSourceStatus::Read {
+                count, unreadable, ..
+            } => {
+                assert_eq!(count, 1);
+                assert_eq!(unreadable, 0, "a duplicate record, not a missing file");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// each source fails on its own, and the other keeps listing. this is
