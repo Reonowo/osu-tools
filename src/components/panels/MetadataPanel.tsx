@@ -16,15 +16,15 @@ import { SectionLabel } from "./SectionLabel";
 function LockedRow({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {
 	const Icon = warning ? TriangleAlert : Check;
 	return (
-		<div className="flex items-center justify-between gap-2 text-[11px]">
-			<span className="flex items-center gap-1.5 text-[#8a8a93]">
+		<div className="flex items-center justify-between gap-2 text-row">
+			<span className="flex items-center gap-1.5 text-muted-foreground">
 				<Icon
-					className={warning ? "size-3 shrink-0 text-[#ffcc22]" : "size-3 shrink-0 text-[#88b300]"}
+					className={warning ? "size-3 shrink-0 text-grade-meh" : "size-3 shrink-0 text-grade-ok"}
 					aria-hidden
 				/>
 				{label}
 			</span>
-			<span className="text-right text-[#e4e4e7] tabular-nums">{value}</span>
+			<span className="text-right text-foreground tabular-nums">{value}</span>
 		</div>
 	);
 }
@@ -103,7 +103,7 @@ export function MetadataPanel() {
 				data-native-wheel=""
 				className="flex min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto overflow-x-hidden p-3.5"
 			>
-				<label className="block text-[10px] text-[#8a8a93]">
+				<label className="block text-meta text-muted-foreground">
 					player name
 					<Input
 						value={nameDraft}
@@ -116,7 +116,7 @@ export function MetadataPanel() {
 					/>
 				</label>
 
-				<label className="block text-[10px] text-[#8a8a93]">
+				<label className="block text-meta text-muted-foreground">
 					played
 					<Input
 						type="datetime-local"
@@ -133,7 +133,7 @@ export function MetadataPanel() {
 
 				<div>
 					<SectionLabel>mods</SectionLabel>
-					<div className="mt-[7px] flex flex-wrap gap-1.5">
+					<div className="mt-stack flex flex-wrap gap-1.5">
 						{modRows.length === 0 && scene.configuration.provenance !== "unresolvable" && (
 							<Badge variant="secondary">none</Badge>
 						)}
@@ -141,19 +141,17 @@ export function MetadataPanel() {
 							<Badge key={mod.acronym} variant="secondary" title={mod.settings.join(", ") || undefined}>
 								{mod.acronym}
 								{mod.settings.length > 0 && (
-									<span className="ml-1 text-[#ffcc22]">· {mod.settings.join(", ")}</span>
+									<span className="ml-1 text-grade-meh">· {mod.settings.join(", ")}</span>
 								)}
 							</Badge>
 						))}
 					</div>
-					{provenance !== null && (
-						<p className="mt-[7px] text-[10.5px] leading-[1.55] text-[#8a8a93]">{provenance}</p>
-					)}
+					{provenance !== null && <p className="mt-stack text-caption text-muted-foreground">{provenance}</p>}
 				</div>
 
-				<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+				<div className="card">
 					<SectionLabel>regenerated on export</SectionLabel>
-					<div className="mt-2 flex flex-col gap-[7px]">
+					<div className="mt-2 flex flex-col gap-stack">
 						<LockedRow label="300" value={replay.count300.toLocaleString()} />
 						<LockedRow label="100" value={replay.count100.toLocaleString()} />
 						<LockedRow label="50" value={replay.count50.toLocaleString()} />
@@ -166,7 +164,7 @@ export function MetadataPanel() {
 					</div>
 				</div>
 
-				<p className="text-[10.5px] leading-[1.55] text-[#8a8a93]">
+				<p className="text-caption text-muted-foreground">
 					these fields are derived from the simulated judgement timeline and regenerate on export; only the
 					player name and timestamp above are directly editable. a frame-edited export regenerates the life
 					bar graph from the re-simulated play; a metadata-only one carries the source's own over untouched.

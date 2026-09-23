@@ -9,7 +9,7 @@ import { Lock } from "lucide-react";
 
 export function InertNotice({ children }: { children: ReactNode }) {
 	return (
-		<div className="flex items-start gap-2 rounded-[9px] border border-dashed border-border bg-surface-card/60 px-3 py-2.5 text-[10.5px] leading-[1.55] text-[#71717a]">
+		<div className="flex items-start gap-2 rounded-card border border-dashed border-border bg-surface-card/60 px-3 py-2.5 text-caption text-foreground-dim">
 			<Lock className="mt-px size-3 shrink-0" aria-hidden />
 			<p>{children}</p>
 		</div>

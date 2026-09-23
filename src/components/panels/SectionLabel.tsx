@@ -4,7 +4,12 @@
 // copies were byte-for-byte identical
 
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
-export function SectionLabel({ children }: { children: ReactNode }) {
-	return <div className="text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">{children}</div>;
+export function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
+	return (
+		<div className={cn("text-section-label font-semibold text-muted-foreground uppercase", className)}>
+			{children}
+		</div>
+	);
 }

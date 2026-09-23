@@ -95,7 +95,7 @@ export function HistoryPanelBody({
 					revert all
 				</Button>
 
-				<p className="text-[10.5px] leading-[1.55] text-[#8a8a93]">
+				<p className="text-caption text-muted-foreground">
 					undoing back to baseline clears the dirty marker, so export re-emits the original unparsed trailing
 					bytes verbatim. revert all restores the baseline directly, as one more undoable step.
 				</p>
@@ -130,8 +130,8 @@ function HistoryNode({
 			<span
 				className={
 					state === "current"
-						? "mt-[3px] size-[7px] shrink-0 rounded-full bg-primary"
-						: "mt-[3px] size-[7px] shrink-0 rounded-full border border-[#71717a]"
+						? "mt-inset size-swatch shrink-0 rounded-full bg-primary"
+						: "mt-inset size-swatch shrink-0 rounded-full border border-foreground-dim"
 				}
 			/>
 			<div>
@@ -142,13 +142,13 @@ function HistoryNode({
 				<div
 					className={
 						state === "current"
-							? "text-[11px] leading-4 text-[#e4e4e7]"
-							: "text-[11px] leading-4 text-[#a1a1aa]"
+							? "text-row leading-4 text-foreground"
+							: "text-row leading-4 text-foreground-soft"
 					}
 				>
 					{label}
 				</div>
-				<div className="mt-0.5 font-mono text-[9.5px] leading-[14px] text-[#8a8a93]">{detail}</div>
+				<div className="mt-0.5 font-mono text-history-detail text-muted-foreground">{detail}</div>
 			</div>
 		</div>
 	);

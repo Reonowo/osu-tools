@@ -38,7 +38,7 @@ function signedMs(value: number): string {
 
 function StatCard({ label, children }: { label: string; children: ReactNode }) {
 	return (
-		<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+		<div className="card">
 			<SectionLabel>{label}</SectionLabel>
 			{children}
 		</div>
@@ -48,8 +48,8 @@ function StatCard({ label, children }: { label: string; children: ReactNode }) {
 function StatRow({ label, value }: { label: string; value: string }) {
 	return (
 		<div className="contents">
-			<dt className="text-[#8a8a93]">{label}</dt>
-			<dd className="text-right text-[#e4e4e7] tabular-nums">{value}</dd>
+			<dt className="text-muted-foreground">{label}</dt>
+			<dd className="text-right text-foreground tabular-nums">{value}</dd>
 		</div>
 	);
 }
@@ -58,7 +58,7 @@ function StatRow({ label, value }: { label: string; value: string }) {
 // letting either render a zero that would misrepresent the play
 function TimingEmptyState({ reason }: { reason: string }) {
 	return (
-		<div className="rounded-[9px] border border-border bg-surface-card px-3 py-7 text-center text-[11px] text-[#8a8a93]">
+		<div className="rounded-card border border-border bg-surface-card px-3 py-7 text-center text-row text-muted-foreground">
 			{reason}
 		</div>
 	);
@@ -89,7 +89,7 @@ function Histogram({
 			two cannot drift apart -- tailwind cannot generate a class from a
 			runtime value, hence the inline gridTemplateColumns */}
 			<div
-				className="mt-[7px] grid h-[74px] items-end gap-[2px]"
+				className="mt-stack grid h-histogram items-end gap-micro"
 				style={{ gridTemplateColumns: `repeat(${HISTOGRAM_BINS}, minmax(0, 1fr))` }}
 			>
 				{histogram.map((bin) => {
@@ -99,16 +99,16 @@ function Histogram({
 					return (
 						<div
 							key={bin.centre}
-							className="rounded-t-[1.5px]"
+							className="rounded-t-mark-tip"
 							style={{
 								height: `${Math.max(2, share * 72)}px`,
-								backgroundColor: insideGreat ? "#66ccff" : "#88b300"
+								backgroundColor: insideGreat ? "var(--grade-great)" : "var(--grade-ok)"
 							}}
 						/>
 					);
 				})}
 			</div>
-			<div className="mt-1 flex justify-between font-mono text-[9px] text-[#8a8a93]">
+			<div className="mt-1 flex justify-between font-mono text-micro text-muted-foreground">
 				<span>
 					{MINUS}
 					{ERROR_WINDOW_MS}ms
@@ -116,7 +116,7 @@ function Histogram({
 				<span>0</span>
 				<span>+{ERROR_WINDOW_MS}ms</span>
 			</div>
-			<div className="mt-1.5 text-[11px] text-[#a1a1aa] tabular-nums">
+			<div className="mt-1.5 text-row text-foreground-soft tabular-nums">
 				early {Math.round(earlyFraction * 100)}% · late {Math.round(lateFraction * 100)}% · σ{" "}
 				{stdDev.toFixed(1)}ms
 			</div>
@@ -140,8 +140,8 @@ function HpSection({ hp, report }: { hp: DerivedHp; report: IntegrityReport | nu
 	return (
 		<div>
 			<SectionLabel>hp</SectionLabel>
-			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
-				<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[7px] text-[11px]">
+			<div className="mt-stack card">
+				<dl className="grid dl-grid gap-x-3 gap-y-stack text-row">
 					<StatRow label="lowest HP" value={lowest} />
 					<StatRow
 						label="fail point"
@@ -151,7 +151,7 @@ function HpSection({ hp, report }: { hp: DerivedHp; report: IntegrityReport | nu
 						)}
 					/>
 				</dl>
-				<div className="mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] text-[#8a8a93]">
+				<div className="mt-2.5 border-t border-border pt-2 text-caption-tight text-muted-foreground">
 					{headerFailNote(report)}
 				</div>
 			</div>
@@ -180,46 +180,44 @@ function IntegritySection({
 	return (
 		<div>
 			<SectionLabel>integrity</SectionLabel>
-			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+			<div className="mt-stack card">
 				{incomplete && (
-					<p className="mb-2.5 border-b border-border pb-2 text-[10.5px] leading-[1.55] text-[#fbbf24]">
+					<p className="mb-2.5 border-b border-border pb-2 text-caption text-warning">
 						{incompletenessNote(incompleteness)}
 					</p>
 				)}
-				<div className="grid grid-cols-[auto_1fr_1fr_auto] items-center gap-x-3 gap-y-[6px] text-[11px]">
+				<div className="grid stats-grid items-center gap-x-3 gap-y-row-loose text-row">
 					<span />
 					{/* the reference column is named for where the values came from.
 					    stable's are all the header's. a native report's are mostly the
 					    block's, but maxCombo and totalScore are read off the header
 					    (the block carries neither), so "file" is the one title true of
 					    every row rather than trading one mislabel for another */}
-					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">
+					<span className="text-right text-mini-label uppercase text-muted-foreground">
 						{report.profile === "native" ? "file" : "header"}
 					</span>
-					<span className="text-right text-[9.5px] uppercase tracking-[0.08em] text-[#8a8a93]">
-						simulated
-					</span>
+					<span className="text-right text-mini-label uppercase text-muted-foreground">simulated</span>
 					<span />
 					{report.rows.map((row) => {
 						const verdict = rowVerdict(row, incompleteness);
 						return (
 							<div key={row.field} className="contents">
-								<span className="text-[#8a8a93]">{integrityRowLabel(row.field)}</span>
+								<span className="text-muted-foreground">{integrityRowLabel(row.field)}</span>
 								<span
 									className={`text-right tabular-nums ${
-										verdict === "differs" ? "text-destructive" : "text-[#e4e4e7]"
+										verdict === "differs" ? "text-destructive" : "text-foreground"
 									}`}
 								>
 									{integrityRowValue(row.field, row.header)}
 								</span>
-								<span className="text-right tabular-nums text-[#e4e4e7]">
+								<span className="text-right tabular-nums text-foreground">
 									{integrityRowValue(row.field, row.simulated)}
 								</span>
 								{verdict === "match" ? (
-									<Check className="size-3 shrink-0 text-[#88b300]" aria-label="matches" />
+									<Check className="size-3 shrink-0 text-grade-ok" aria-label="matches" />
 								) : verdict === "expected" ? (
 									<Minus
-										className="size-3 shrink-0 text-[#8a8a93]"
+										className="size-3 shrink-0 text-muted-foreground"
 										aria-label="differs (play ended early)"
 									/>
 								) : (
@@ -231,9 +229,7 @@ function IntegritySection({
 				</div>
 				{report.crossCheck !== null && (
 					<div
-						className={`mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] tabular-nums ${
-							consistent ? "text-[#8a8a93]" : "text-destructive"
-						}`}
+						className={`mt-2.5 border-t border-border pt-2 text-caption-tight tabular-nums ${consistent ? "text-muted-foreground" : "text-destructive"}`}
 					>
 						{describeCrossCheck(report.crossCheck)}
 					</div>
@@ -244,17 +240,13 @@ function IntegritySection({
 				    make that answer unreachable. it takes the separator when the
 				    cross-check line above is not there to carry one */}
 				<div
-					className={`text-[10.5px] text-[#8a8a93] tabular-nums ${
-						report.crossCheck === null ? "mt-2.5 border-t border-border pt-2" : "mt-1"
-					}`}
+					className={`text-caption-plain text-muted-foreground tabular-nums ${report.crossCheck === null ? "mt-2.5 border-t border-border pt-2" : "mt-1"}`}
 				>
 					{lifeBarGraphNote(report.lifeBarGraph)}
 				</div>
 				{report.block != null && (
 					<div
-						className={`mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.5] tabular-nums ${
-							report.block.rankMatch ? "text-[#8a8a93]" : "text-destructive"
-						}`}
+						className={`mt-2.5 border-t border-border pt-2 text-caption-tight tabular-nums ${report.block.rankMatch ? "text-muted-foreground" : "text-destructive"}`}
 					>
 						{blockNote(report.block)}
 					</div>
@@ -272,26 +264,26 @@ function OffLatticeSection({ lattice, summary }: { lattice: Lattice | null; summ
 	return (
 		<div>
 			<SectionLabel>input lattice</SectionLabel>
-			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[9px] text-[11px]">
+			<div className="mt-stack card text-row">
 				{lattice === null || summary === null ? (
-					<p className="text-[#8a8a93]">
+					<p className="text-muted-foreground">
 						no lattice inferred — the coordinates fit no known fullscreen quantisation (windowed play), so
 						off-lattice analysis is unavailable
 					</p>
 				) : summary.runCount === 0 ? (
-					<p className="text-[#8a8a93]">
+					<p className="text-muted-foreground">
 						every frame sits on the {formatLatticeStep(lattice)} lattice — no interpolated or synthesized
 						input detected
 					</p>
 				) : (
 					<>
-						<div className="text-[#e4e4e7] tabular-nums">
+						<div className="text-foreground tabular-nums">
 							{summary.runCount.toLocaleString()} off-lattice {summary.runCount === 1 ? "run" : "runs"} ·{" "}
 							{summary.offLatticeFrames.toLocaleString()}{" "}
 							{summary.offLatticeFrames === 1 ? "frame" : "frames"} off the {formatLatticeStep(lattice)}{" "}
 							lattice
 						</div>
-						<div className="mt-1.5 flex flex-col gap-[3px] font-mono text-[10px] text-[#a1a1aa]">
+						<div className="mt-1.5 flex flex-col gap-inset font-mono text-meta text-foreground-soft">
 							{summary.longestRuns.map((run) => (
 								<div key={run.startIndex} className="tabular-nums">
 									frames {run.startIndex.toLocaleString()}–{run.endIndex.toLocaleString()} ·{" "}
@@ -301,7 +293,7 @@ function OffLatticeSection({ lattice, summary }: { lattice: Lattice | null; summ
 							))}
 						</div>
 						{summary.runCount > summary.longestRuns.length && (
-							<div className="mt-1 text-[10px] text-[#8a8a93]">
+							<div className="mt-1 text-meta text-muted-foreground">
 								showing the {summary.longestRuns.length} longest of {summary.runCount.toLocaleString()}{" "}
 								runs
 							</div>
@@ -343,17 +335,21 @@ function VelocityChart({
 	return (
 		<div>
 			<SectionLabel>cursor velocity</SectionLabel>
-			<div className="mt-[7px] rounded-[9px] border border-border bg-surface-card p-2">
+			<div className="mt-stack rounded-card border border-border bg-surface-card p-2">
 				<svg viewBox="0 0 600 40" preserveAspectRatio="none" className="h-10 w-full">
 					{points !== null && (
 						<>
-							<polygon points={`0,40 ${points} 600,40`} fill="#eb4791" fillOpacity={0.14} />
-							<polyline points={points} fill="none" stroke="#eb4791" strokeWidth={1.6} />
+							<polygon
+								points={`0,40 ${points} 600,40`}
+								className="fill-graph-velocity"
+								fillOpacity={0.14}
+							/>
+							<polyline points={points} fill="none" className="stroke-graph-velocity" strokeWidth={1.6} />
 						</>
 					)}
 				</svg>
 			</div>
-			<div className="mt-1.5 text-[11px] text-[#a1a1aa] tabular-nums">
+			<div className="mt-1.5 text-row text-foreground-soft tabular-nums">
 				avg {Math.round(meanVelocity)} px/s · peak {Math.round(peakVelocity)}
 			</div>
 		</div>
@@ -409,7 +405,7 @@ export function AnalysisPanel() {
 							<Tooltip>
 								<TooltipTrigger render={<div />}>
 									<StatCard label="unstable rate">
-										<div className="text-[22px] font-bold tabular-nums text-[#f4f4f5]">
+										<div className="text-stat font-bold tabular-nums text-foreground-bright">
 											{analysis.unstableRate.toFixed(2)}
 										</div>
 									</StatCard>
@@ -423,11 +419,11 @@ export function AnalysisPanel() {
 								<TooltipTrigger render={<div />}>
 									<StatCard label="mean error">
 										<div
-											className="text-[22px] font-bold tabular-nums"
-											style={{ color: "#66ccff" }}
+											className="text-stat font-bold tabular-nums"
+											style={{ color: "var(--grade-great)" }}
 										>
 											{signedMs(analysis.meanError)}
-											<span className="text-[12px] text-[#8a8a93]">ms</span>
+											<span className="text-title text-muted-foreground">ms</span>
 										</div>
 									</StatCard>
 								</TooltipTrigger>
@@ -462,7 +458,7 @@ export function AnalysisPanel() {
 					meanVelocity={analysis.meanVelocity}
 				/>
 
-				<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[7px] text-[11px]">
+				<dl className="grid dl-grid gap-x-3 gap-y-stack text-row">
 					<StatRow label="peak tap rate" value={`${Math.round(analysis.peakTapBpm)} bpm`} />
 					<StatRow label="mean hold" value={`${Math.round(analysis.meanHoldMs)}ms`} />
 					<StatRow label="frames" value={analysis.frameCount.toLocaleString()} />

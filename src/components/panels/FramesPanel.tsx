@@ -79,15 +79,15 @@ export function FrameRow({
 			// keyboard-visible focus -- stepping frames while walking the rows
 			// is what the rows are for
 			data-shortcut-passthrough=""
-			className="grid w-full grid-cols-[40px_1fr_52px_52px_30px] items-center gap-1.5 px-[9px] py-[3px] text-left font-mono text-[10px] text-[#e4e4e7] data-[state=center]:bg-primary/[.07] data-[state=offlattice]:bg-[#ffcc22]/[.05]"
+			className="grid w-full frames-grid items-center gap-1.5 px-card py-inset text-left font-mono text-meta text-foreground data-[state=center]:bg-primary-wash-soft data-[state=offlattice]:bg-grade-meh/[.05]"
 		>
 			{/* fixed child order -- the rAF loop below indexes into el.children
 			rather than re-querying by attribute every frame */}
-			<span className="text-[#8a8a93]" />
-			<span className="text-[#a1a1aa]" />
-			<span className="text-right tabular-nums data-[off=true]:text-[#ffcc22]" />
-			<span className="text-right tabular-nums data-[off=true]:text-[#ffcc22]" />
-			<span className="text-right text-[#8a8a93]" />
+			<span className="text-muted-foreground" />
+			<span className="text-foreground-soft" />
+			<span className="text-right tabular-nums data-[off=true]:text-grade-meh" />
+			<span className="text-right tabular-nums data-[off=true]:text-grade-meh" />
+			<span className="text-right text-muted-foreground" />
 		</button>
 	);
 }
@@ -262,8 +262,8 @@ export function FramesPanel() {
 			>
 				<div>
 					<SectionLabel>frames near playhead</SectionLabel>
-					<div className="mt-[7px] overflow-hidden rounded-[9px] border border-border">
-						<div className="grid grid-cols-[40px_1fr_52px_52px_30px] gap-1.5 border-b border-border bg-surface-panel px-[9px] py-[5px] font-mono text-[10px] text-[#8a8a93]">
+					<div className="mt-stack overflow-hidden rounded-card border border-border">
+						<div className="grid frames-grid gap-1.5 border-b border-border bg-surface-panel px-card py-tight font-mono text-meta text-muted-foreground">
 							<span>#</span>
 							<span>time</span>
 							<span className="text-right">x</span>
@@ -282,7 +282,7 @@ export function FramesPanel() {
 							))}
 						</div>
 					</div>
-					<p className="mt-1.5 text-[10px] leading-[1.5] text-[#8a8a93]">
+					<p className="mt-1.5 text-meta-note text-muted-foreground">
 						{lattice !== null ? (
 							<>
 								off-lattice values are highlighted. this replay's inferred lattice is{" "}
@@ -294,7 +294,7 @@ export function FramesPanel() {
 					</p>
 				</div>
 
-				<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+				<div className="card">
 					<SectionLabel>operations</SectionLabel>
 					<div className="mt-2 flex gap-1.5">
 						<Tooltip>
@@ -356,7 +356,7 @@ export function FramesPanel() {
 							</TooltipContent>
 						</Tooltip>
 					</div>
-					<label className="mt-2.5 block text-[10px] text-[#8a8a93]">
+					<label className="mt-2.5 block text-meta text-muted-foreground">
 						strength {smoothStrength}
 						<Slider
 							disabled={!canFrameEdit}
@@ -368,7 +368,7 @@ export function FramesPanel() {
 						/>
 					</label>
 					<div className="mt-2.5 grid grid-cols-2 gap-1.5">
-						<label className="block text-[10px] text-[#8a8a93]">
+						<label className="block text-meta text-muted-foreground">
 							Δx
 							<Input
 								ref={dxInputRef}
@@ -383,10 +383,10 @@ export function FramesPanel() {
 								// unprefixed text-base -- overriding only the unprefixed class
 								// leaves md:text-sm undefeated (same trap task 10 hit twice), so
 								// the md: scope needs its own override to actually win >=768px
-								className="mt-1 h-7 text-[11px] md:text-[11px]"
+								className="mt-1 h-7 text-row md:text-row"
 							/>
 						</label>
-						<label className="block text-[10px] text-[#8a8a93]">
+						<label className="block text-meta text-muted-foreground">
 							Δy
 							<Input
 								disabled={!canFrameEdit}
@@ -400,13 +400,13 @@ export function FramesPanel() {
 								// unprefixed text-base -- overriding only the unprefixed class
 								// leaves md:text-sm undefeated (same trap task 10 hit twice), so
 								// the md: scope needs its own override to actually win >=768px
-								className="mt-1 h-7 text-[11px] md:text-[11px]"
+								className="mt-1 h-7 text-row md:text-row"
 							/>
 						</label>
 						<Tooltip>
 							<TooltipTrigger
 								render={
-									<label className="block text-[10px] text-[#8a8a93]">
+									<label className="block text-meta text-muted-foreground">
 										feather ms
 										<Input
 											disabled={!canFrameEdit}
@@ -422,7 +422,7 @@ export function FramesPanel() {
 												if (e.target.value.trim() !== "") setFeatherMs(Number(e.target.value));
 											}}
 											onBlur={() => setFeatherDraft(String(viewerStore.getState().featherMs))}
-											className="mt-1 h-7 text-[11px] md:text-[11px]"
+											className="mt-1 h-7 text-row md:text-row"
 										/>
 									</label>
 								}

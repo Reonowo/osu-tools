@@ -83,13 +83,13 @@ function PressRow({
 			onClick={onActivate}
 			onDoubleClick={onSeek}
 			disabled={disabled}
-			className="grid w-full grid-cols-[34px_1fr_1fr_54px] items-center gap-1.5 px-[9px] py-[3px] text-left font-mono text-[10px] text-[#e4e4e7] data-[state=center]:bg-primary/[.07] data-[state=selected]:bg-primary/[.16]"
+			className="grid w-full keys-grid items-center gap-1.5 px-card py-inset text-left font-mono text-meta text-foreground data-[state=center]:bg-primary-wash-soft data-[state=selected]:bg-primary-wash-max"
 		>
 			{/* fixed child order -- the loop indexes into el.children */}
-			<span className="text-[#8a8a93]" />
-			<span className="text-[#a1a1aa]" />
-			<span className="text-[#a1a1aa]" />
-			<span className="text-right tabular-nums text-[#8a8a93]" />
+			<span className="text-muted-foreground" />
+			<span className="text-foreground-soft" />
+			<span className="text-foreground-soft" />
+			<span className="text-right tabular-nums text-muted-foreground" />
 		</button>
 	);
 }
@@ -326,7 +326,7 @@ export function KeypressPanel() {
 		const realized = selectedRun === null ? null : edge === "start" ? selectedRun.startTime : selectedRun.endTime;
 		return (
 			<div className="mt-2">
-				<span className="text-[10px] text-[#8a8a93]">
+				<span className="text-meta text-muted-foreground">
 					{edge}
 					{selectedRun !== null && edge === "end" && selectedRun.open ? " (open press)" : ""}
 					{realized !== null ? ` — ${formatTime(realized)}` : ""}
@@ -356,7 +356,7 @@ export function KeypressPanel() {
 						// Input's own base carries a *separate* md:text-sm alongside its
 						// unprefixed text-base, so the md: scope needs its own override
 						// (FramesPanel's trap)
-						className="h-7 text-[11px] md:text-[11px]"
+						className="h-7 text-row md:text-row"
 					/>
 					<Button
 						variant="outline"
@@ -454,7 +454,7 @@ export function KeypressPanel() {
 
 				<div>
 					<SectionLabel>key filters</SectionLabel>
-					<div className="mt-[7px] grid grid-cols-4 gap-1.5">
+					<div className="mt-stack grid grid-cols-4 gap-1.5">
 						{/* disabled tiles need a wrapping span for their tooltip
 						(ToolPalette.tsx's pattern) -- and these are the tiles whose
 						meaning most needs explaining */}
@@ -469,10 +469,10 @@ export function KeypressPanel() {
 											size="sm"
 											data-armed={armed ? "" : undefined}
 											onClick={() => setArmedKey(armed ? null : key.label)}
-											className="h-auto w-full flex-col gap-0.5 py-1.5 data-[armed]:border-primary/70 data-[armed]:bg-primary/[.12] data-[armed]:text-primary"
+											className="h-auto w-full flex-col gap-0.5 py-1.5 data-[armed]:border-primary/70 data-[armed]:bg-primary-wash data-[armed]:text-primary"
 										>
-											<span className="text-[11px] font-semibold">{key.label}</span>
-											<span className="text-[10px] tabular-nums text-[#8a8a93]">
+											<span className="text-row font-semibold">{key.label}</span>
+											<span className="text-meta tabular-nums text-muted-foreground">
 												{derived.edges[key.edgesKey].length}
 											</span>
 										</Button>
@@ -494,8 +494,8 @@ export function KeypressPanel() {
 					<SectionLabel>
 						{armedFilter === null ? "presses near playhead" : `${armedFilter} presses near playhead`}
 					</SectionLabel>
-					<div className="mt-[7px] overflow-hidden rounded-[9px] border border-border">
-						<div className="grid grid-cols-[34px_1fr_1fr_54px] gap-1.5 border-b border-border bg-surface-panel px-[9px] py-[5px] font-mono text-[10px] text-[#8a8a93]">
+					<div className="mt-stack overflow-hidden rounded-card border border-border">
+						<div className="grid keys-grid gap-1.5 border-b border-border bg-surface-panel px-card py-tight font-mono text-meta text-muted-foreground">
 							<span>key</span>
 							<span>down</span>
 							<span>up</span>
@@ -516,7 +516,7 @@ export function KeypressPanel() {
 						</div>
 					</div>
 					{canPressEdit && (
-						<p className="mt-1.5 text-[10px] leading-[1.5] text-[#8a8a93]">
+						<p className="mt-1.5 text-meta-note text-muted-foreground">
 							click a row to select its press — selecting never moves the playhead. double-click to jump
 							there. a row's displayed release can outlive its press; the fields below show the run the
 							model actually rewrites.
@@ -524,7 +524,7 @@ export function KeypressPanel() {
 					)}
 				</div>
 
-				<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+				<div className="card">
 					<SectionLabel>operations</SectionLabel>
 					{operations}
 				</div>

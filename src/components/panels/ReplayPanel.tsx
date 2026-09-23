@@ -8,7 +8,9 @@
 // simulation to follow and sit grouped under the file-header caption
 
 import { PanelHeader } from "@/components/shell/SidePanel";
+import { SectionLabel } from "@/components/panels/SectionLabel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { GRADE_COLOUR, GRADE_ON_COLOUR } from "@/engine/osu-colours";
 import type { RankGrade, ReplayStat } from "@/lib/derive";
 import { ticksToUnixMs } from "@/lib/format";
 import {
@@ -23,21 +25,20 @@ import { useViewerStore } from "@/state/store";
 // osu!'s own logotype slant (see TopBar.tsx), reused for the grade tile so
 // it reads as part of the same visual language; the counter-skew keeps the
 // letter upright inside it
-const TILE_SKEW = "skew-x-[-11.3deg]";
-const TILE_COUNTER_SKEW = "skew-x-[11.3deg]";
+const TILE_SKEW = "skew-x-brand";
+const TILE_COUNTER_SKEW = "skew-x-brand-inverse";
 
-// osucolour.cs's Blue/Green/Yellow/Red, also used by the judgement bar below
-// and by renderer/drawables/judgement-tracks.ts's GRADE_COLOURS -- kept as a
-// separate literal table here since that module's values are pixi tint
-// numbers, not css colours
+// osucolour.cs's Blue/Green/Yellow/Red (engine/osu-colours.ts), also used by
+// the judgement bar below; renderer/drawables/judgement-tracks.ts keeps its
+// own pixi-tint table since those values are tints, not css colours
 const GRADE_TILE_COLOURS: Record<RankGrade, { fill: string; text: string }> = {
-	SS: { fill: "#66ccff", text: "#0a1218" },
-	S: { fill: "#66ccff", text: "#0a1218" },
-	A: { fill: "#88b300", text: "#11170a" },
-	B: { fill: "#ffcc22", text: "#1a1400" },
-	C: { fill: "#ffcc22", text: "#1a1400" },
-	D: { fill: "#ed1121", text: "#1b0505" },
-	F: { fill: "#ed1121", text: "#1b0505" }
+	SS: { fill: GRADE_COLOUR.great, text: GRADE_ON_COLOUR.great },
+	S: { fill: GRADE_COLOUR.great, text: GRADE_ON_COLOUR.great },
+	A: { fill: GRADE_COLOUR.ok, text: GRADE_ON_COLOUR.ok },
+	B: { fill: GRADE_COLOUR.meh, text: GRADE_ON_COLOUR.meh },
+	C: { fill: GRADE_COLOUR.meh, text: GRADE_ON_COLOUR.meh },
+	D: { fill: GRADE_COLOUR.miss, text: GRADE_ON_COLOUR.miss },
+	F: { fill: GRADE_COLOUR.miss, text: GRADE_ON_COLOUR.miss }
 };
 
 // the four-letter tiles are the app's most compressed readout; each carries
@@ -55,7 +56,7 @@ const DIFFICULTY_TILES = [
 function WasLabel({ stat, suffix = "" }: { stat: ReplayStat; suffix?: string }) {
 	if (stat.value === stat.header) return null;
 	return (
-		<span className="text-[10px] text-[#71717a] tabular-nums">
+		<span className="text-meta text-foreground-dim tabular-nums">
 			was {stat.header.toLocaleString()}
 			{suffix}
 		</span>
@@ -72,10 +73,10 @@ export function ReplayPanel() {
 	const accuracyDrifted = stats.accuracy.value !== stats.accuracy.header || stats.grade.value !== stats.grade.header;
 
 	const judgementSegments = [
-		{ label: "300", stat: stats.count300, colour: "#66ccff" },
-		{ label: "100", stat: stats.count100, colour: "#88b300" },
-		{ label: "50", stat: stats.count50, colour: "#ffcc22" },
-		{ label: "miss", stat: stats.countMiss, colour: "#ed1121" }
+		{ label: "300", stat: stats.count300, colour: GRADE_COLOUR.great },
+		{ label: "100", stat: stats.count100, colour: GRADE_COLOUR.ok },
+		{ label: "50", stat: stats.count50, colour: GRADE_COLOUR.meh },
+		{ label: "miss", stat: stats.countMiss, colour: GRADE_COLOUR.miss }
 	];
 	const judged = judgementSegments.reduce((sum, segment) => sum + segment.stat.value, 0);
 
@@ -104,7 +105,7 @@ export function ReplayPanel() {
 				naming the profile it ran under, so the stats below are never read
 				as the play's own */}
 				{statsLabel !== null && (
-					<div className="rounded-[7px] border border-[#ffcc2240] bg-[#ffcc220f] px-2.5 py-1.5 text-[10.5px] text-[#ffcc22]">
+					<div className="rounded-segment border border-grade-meh/[.251] bg-grade-meh/[.059] px-2.5 py-1.5 text-caption-plain text-grade-meh">
 						simulated {statsLabel}
 					</div>
 				)}
@@ -113,21 +114,19 @@ export function ReplayPanel() {
 				the header readout visible once an edit drifts it */}
 				<div className="flex items-center justify-between">
 					<div>
-						<div className="text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
-							accuracy
-						</div>
-						<div className="text-[30px] font-bold tracking-[-.02em] text-[#f4f4f5] tabular-nums select-text">
+						<SectionLabel>accuracy</SectionLabel>
+						<div className="text-accuracy font-bold text-foreground-bright tabular-nums select-text">
 							{(stats.accuracy.value * 100).toFixed(2)}
-							<span className="text-[17px] text-[#71717a]">%</span>
+							<span className="text-percent-suffix text-foreground-dim">%</span>
 						</div>
 						{accuracyDrifted && (
-							<div className="text-[10.5px] text-[#71717a] tabular-nums select-text">
+							<div className="text-caption-plain text-foreground-dim tabular-nums select-text">
 								was {(stats.accuracy.header * 100).toFixed(2)}% · {stats.grade.header}
 							</div>
 						)}
 					</div>
 					<div
-						className={`flex size-[42px] ${TILE_SKEW} items-center justify-center rounded-lg`}
+						className={`flex size-tile-grade ${TILE_SKEW} items-center justify-center rounded-lg`}
 						style={{ backgroundColor: tile.fill }}
 					>
 						<span className={`${TILE_COUNTER_SKEW} text-lg font-black`} style={{ color: tile.text }}>
@@ -138,7 +137,7 @@ export function ReplayPanel() {
 
 				{/* judgement bar + legend, live counts */}
 				<div>
-					<div className="flex h-[7px] gap-px rounded bg-[#18181b]">
+					<div className="flex h-swatch gap-px rounded bg-surface-chip">
 						{judgementSegments.map((segment) => (
 							<div
 								key={segment.label}
@@ -150,17 +149,17 @@ export function ReplayPanel() {
 							/>
 						))}
 					</div>
-					<div className="mt-[7px] grid grid-cols-2 gap-x-3.5 gap-y-[5px]">
+					<div className="mt-stack grid grid-cols-2 gap-x-3.5 gap-y-tight">
 						{judgementSegments.map((segment) => (
-							<div key={segment.label} className="flex items-center gap-1.5 text-[11px]">
+							<div key={segment.label} className="flex items-center gap-1.5 text-row">
 								<span
-									className="size-[7px] shrink-0 rounded-[2px]"
+									className="size-swatch shrink-0 rounded-bar"
 									style={{ backgroundColor: segment.colour }}
 								/>
-								<span className="text-[#a1a1aa]">{segment.label}</span>
+								<span className="text-foreground-soft">{segment.label}</span>
 								<span className="ml-auto flex items-baseline gap-1.5 select-text">
 									<WasLabel stat={segment.stat} />
-									<span className="text-[#e4e4e7] tabular-nums">
+									<span className="text-foreground tabular-nums">
 										{segment.stat.value.toLocaleString()}
 									</span>
 								</span>
@@ -171,21 +170,19 @@ export function ReplayPanel() {
 					the four tiles, in lazer's own order, the block's own count as the
 					frozen "was" wherever it differs */}
 					{native !== null && native.length > 0 && (
-						<div className="mt-[7px] border-t border-border pt-[7px]">
-							<div className="mb-[5px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
-								native results
-							</div>
-							<div className="grid grid-cols-2 gap-x-3.5 gap-y-[5px]">
+						<div className="mt-stack border-t border-border pt-stack">
+							<SectionLabel className="mb-tight">native results</SectionLabel>
+							<div className="grid grid-cols-2 gap-x-3.5 gap-y-tight">
 								{native.map((entry) => (
-									<div key={entry.result} className="flex items-center gap-1.5 text-[11px]">
-										<span className="text-[#a1a1aa]">{resultLabel(entry.result)}</span>
+									<div key={entry.result} className="flex items-center gap-1.5 text-row">
+										<span className="text-foreground-soft">{resultLabel(entry.result)}</span>
 										<span className="ml-auto flex items-baseline gap-1.5 select-text">
 											{entry.recorded !== null && entry.recorded !== entry.count && (
-												<span className="text-[10px] text-[#8a8a93] tabular-nums">
+												<span className="text-meta text-muted-foreground tabular-nums">
 													was {entry.recorded.toLocaleString()}
 												</span>
 											)}
-											<span className="text-[#e4e4e7] tabular-nums">
+											<span className="text-foreground tabular-nums">
 												{entry.count.toLocaleString()}
 											</span>
 										</span>
@@ -197,18 +194,18 @@ export function ReplayPanel() {
 					{/* max combo and the score ride with the simulated stats, not the header
 					card: the simulation recounts one and re-folds the other on every
 					edit */}
-					<div className="mt-[7px] flex items-center gap-1.5 text-[11px]">
-						<span className="text-[#a1a1aa]">max combo</span>
+					<div className="mt-stack flex items-center gap-1.5 text-row">
+						<span className="text-foreground-soft">max combo</span>
 						<span className="ml-auto flex items-baseline gap-1.5 select-text">
 							<WasLabel stat={stats.maxCombo} suffix="x" />
-							<span className="text-[#e4e4e7] tabular-nums">{stats.maxCombo.value}x</span>
+							<span className="text-foreground tabular-nums">{stats.maxCombo.value}x</span>
 						</span>
 					</div>
-					<div className="mt-[5px] flex items-center gap-1.5 text-[11px]">
-						<span className="text-[#a1a1aa]">score</span>
+					<div className="mt-tight flex items-center gap-1.5 text-row">
+						<span className="text-foreground-soft">score</span>
 						<span className="ml-auto flex items-baseline gap-1.5 select-text">
 							<WasLabel stat={stats.totalScore} />
-							<span className="text-[#e4e4e7] tabular-nums">
+							<span className="text-foreground tabular-nums">
 								{stats.totalScore.value.toLocaleString()}
 							</span>
 						</span>
@@ -221,54 +218,48 @@ export function ReplayPanel() {
 				TODO.md records -- so they are grouped under this caption rather than
 				mixed into the live rows above */}
 				<div>
-					<div className="mb-[5px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
-						recorded in file
-					</div>
-					<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[7px] rounded-[9px] border border-border bg-surface-card px-3 py-[11px] text-[11px]">
+					<SectionLabel className="mb-tight">recorded in file</SectionLabel>
+					<dl className="grid dl-grid gap-x-3 gap-y-stack rounded-card border border-border bg-surface-card px-3 py-card-loose text-row">
 						<div className="contents">
-							<dt className="text-[#8a8a93]">geki / katu</dt>
-							<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
+							<dt className="text-muted-foreground">geki / katu</dt>
+							<dd className="text-right text-foreground tabular-nums select-text">
 								{stats.countGeki} / {stats.countKatsu}
 							</dd>
 						</div>
 						<div className="contents">
-							<dt className="text-[#8a8a93]">perfect</dt>
-							<dd className="text-right text-[#e4e4e7] select-text">{replay.perfect ? "yes" : "no"}</dd>
+							<dt className="text-muted-foreground">perfect</dt>
+							<dd className="text-right text-foreground select-text">{replay.perfect ? "yes" : "no"}</dd>
 						</div>
 						<div className="contents">
-							<dt className="text-[#8a8a93]">played</dt>
-							<dd className="text-right text-[#e4e4e7] tabular-nums select-text">{playedText}</dd>
+							<dt className="text-muted-foreground">played</dt>
+							<dd className="text-right text-foreground tabular-nums select-text">{playedText}</dd>
 						</div>
 					</dl>
 					{/* the file's own score-info block, kept apart from the header
 					fields above it and from the simulated stats: what lazer wrote,
 					or the stated reason there is nothing to show */}
-					<div className="mt-2 rounded-[9px] border border-border bg-surface-card px-3 py-[9px] text-[11px]">
-						<div className="mb-[5px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
-							score-info block
-						</div>
+					<div className="mt-2 card text-row">
+						<SectionLabel className="mb-tight">score-info block</SectionLabel>
 						{recorded.kind !== "present" ? (
-							<p className="leading-[1.5] text-[#8a8a93]">{recorded.note}</p>
+							<p className="leading-caption-tight text-muted-foreground">{recorded.note}</p>
 						) : (
 							<>
-								<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[5px]">
+								<dl className="grid dl-grid gap-x-3 gap-y-tight">
 									{recorded.rows.map((row) => (
 										<div key={row.label} className="contents">
-											<dt className="text-[#8a8a93]">{row.label}</dt>
-											<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
+											<dt className="text-muted-foreground">{row.label}</dt>
+											<dd className="text-right text-foreground tabular-nums select-text">
 												{row.value}
 											</dd>
 										</div>
 									))}
 								</dl>
-								<div className="mt-[7px] text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
-									statistics
-								</div>
-								<dl className="mt-[3px] grid grid-cols-[auto_1fr] gap-x-3 gap-y-[3px]">
+								<SectionLabel className="mt-stack">statistics</SectionLabel>
+								<dl className="mt-inset grid dl-grid gap-x-3 gap-y-inset">
 									{recorded.statistics.map((entry) => (
 										<div key={entry.result} className="contents">
-											<dt className="text-[#8a8a93]">{resultLabel(entry.result)}</dt>
-											<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
+											<dt className="text-muted-foreground">{resultLabel(entry.result)}</dt>
+											<dd className="text-right text-foreground tabular-nums select-text">
 												{entry.count.toLocaleString()}
 												{(() => {
 													const max = recorded.maximumStatistics.find(
@@ -293,11 +284,9 @@ export function ReplayPanel() {
 							{/* a div, not a span: the tile itself is a block, and the
 							wrapper is what the grid lays out */}
 							<TooltipTrigger render={<div />}>
-								<div className="rounded-[7px] border border-border bg-surface-card px-1.5 py-[7px] text-center">
-									<div className="text-[9.5px] font-semibold tracking-[.14em] text-[#8a8a93] uppercase">
-										{label}
-									</div>
-									<div className="text-[13px] font-semibold text-[#f4f4f5] tabular-nums select-text">
+								<div className="rounded-segment border border-border bg-surface-card px-1.5 py-stack text-center">
+									<SectionLabel>{label}</SectionLabel>
+									<div className="text-value font-semibold text-foreground-bright tabular-nums select-text">
 										{beatmap[key].toFixed(1)}
 									</div>
 								</div>
@@ -306,18 +295,18 @@ export function ReplayPanel() {
 						</Tooltip>
 					))}
 				</div>
-				<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[7px] text-[11px]">
+				<dl className="grid dl-grid gap-x-3 gap-y-stack text-row">
 					<div className="contents">
-						<dt className="text-[#8a8a93]">objects</dt>
-						<dd className="text-right text-[#e4e4e7] tabular-nums select-text">
+						<dt className="text-muted-foreground">objects</dt>
+						<dd className="text-right text-foreground tabular-nums select-text">
 							{renderPlan.objects.length}
 						</dd>
 					</div>
 					<div className="contents">
-						<dt className="text-[#8a8a93]">md5</dt>
+						<dt className="text-muted-foreground">md5</dt>
 						{/* the full hash in the dom, clipped by css rather than cut in
 						the string: copying must yield the whole value */}
-						<dd className="truncate text-right font-mono text-[#e4e4e7] select-text">{beatmap.md5}</dd>
+						<dd className="truncate text-right font-mono text-foreground select-text">{beatmap.md5}</dd>
 					</div>
 				</dl>
 			</div>
