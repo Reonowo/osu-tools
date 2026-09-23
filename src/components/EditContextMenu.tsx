@@ -173,7 +173,7 @@ export function EditContextMenu({
 						<>
 							<span>{item.label}</span>
 							{item.hint !== null && (
-								<span className="font-mono text-[10px] text-[#8a8a93]">{item.hint}</span>
+								<span className="font-mono text-meta text-muted-foreground">{item.hint}</span>
 							)}
 						</>
 					);
