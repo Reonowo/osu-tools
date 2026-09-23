@@ -37,20 +37,20 @@ const isToolId = (value: string): value is ToolId => TOOL_IDS.some((id) => id ==
 // separate group), so min-w-0/p-0 clear the rest -- otherwise the button
 // renders 32px wide with an off-centre icon instead of a 28px square
 const ITEM_CLASS =
-	"size-7 min-w-0 justify-center rounded-lg p-0 text-[#71717a] aria-pressed:border aria-pressed:border-primary/40 aria-pressed:bg-primary/[.16] aria-pressed:text-primary";
+	"size-7 min-w-0 justify-center rounded-lg p-0 text-foreground-dim aria-pressed:border aria-pressed:border-primary/40 aria-pressed:bg-primary-wash-max aria-pressed:text-primary";
 
 // the same 28px-square geometry as ITEM_CLASS, minus its aria-pressed:*
 // selected-tool styling -- the snap tile's aria-pressed genuinely tracks
 // snapToLattice (unlike the disabled tool tiles above, where aria-pressed
 // never fires), so reusing ITEM_CLASS here would have aria-pressed:text-primary
-// (two classes' worth of specificity) beat the plain text-[#66ccff] tint
+// (two classes' worth of specificity) beat the plain text-grade-great tint
 // below (one class) and paint the tile the tool-selected pink instead of the
 // preference cyan
 // the disabled: pair is the toggle variant's, spelled out here because a plain
 // button carries none of it -- without them a blocked snap tile would look
 // exactly like an available one
 const PREFERENCE_TILE_CLASS =
-	"size-7 min-w-0 justify-center rounded-lg p-0 text-[#71717a] disabled:pointer-events-none disabled:opacity-50";
+	"size-7 min-w-0 justify-center rounded-lg p-0 text-foreground-dim disabled:pointer-events-none disabled:opacity-50";
 
 /** the key rides with the label rather than instead of it, so an unavailable
  * tool still teaches its binding: the blocked reason follows both. the key is
@@ -112,10 +112,7 @@ export function ToolPalette() {
 		HERE rather than on the wrapper so an exiting palette -- inert, and so
 		skipped by hit testing -- lets a click through to the playfield instead
 		of the walk finding a marker on a box that is on its way out */
-		<div
-			data-viewport-chrome=""
-			className="flex flex-col gap-1 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]"
-		>
+		<div data-viewport-chrome="" className="flex flex-col gap-1 float-chrome">
 			<ToggleGroup
 				orientation="vertical"
 				value={[tool]}
@@ -166,7 +163,7 @@ export function ToolPalette() {
 						// two routes to one persisted setting disagree
 						disabled={blocked !== null}
 						onClick={() => setEditing("snapToLattice", !snapToLattice)}
-						className={cn(PREFERENCE_TILE_CLASS, "flex items-center", snapToLattice && "text-[#66ccff]")}
+						className={cn(PREFERENCE_TILE_CLASS, "flex items-center", snapToLattice && "text-grade-great")}
 					>
 						<Magnet aria-hidden className="size-4" />
 					</button>
@@ -182,9 +179,9 @@ export function ToolPalette() {
 	);
 }
 
-const LATTICE_UNKNOWN = "#71717a";
-const LATTICE_ON = "#66ccff";
-const LATTICE_OFF = "#ffcc22";
+const LATTICE_UNKNOWN = "var(--lattice-unknown)";
+const LATTICE_ON = "var(--lattice-on)";
+const LATTICE_OFF = "var(--lattice-off)";
 
 export function CoordinateReadout() {
 	const scene = useViewerStore((s) => s.scene);
@@ -237,23 +234,23 @@ export function CoordinateReadout() {
 		/* positioned by Viewport's slide wrapper, as the palette is */
 		<div
 			data-viewport-chrome=""
-			className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-panel/90 px-2.5 py-[5px] font-mono text-[10px] text-[#71717a] backdrop-blur-[8px]"
+			className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-panel/90 px-2.5 py-tight font-mono text-meta text-foreground-dim backdrop-blur-float"
 		>
 			<span>
 				x{" "}
-				<span ref={xRef} className="text-[#e4e4e7] tabular-nums">
+				<span ref={xRef} className="text-foreground tabular-nums">
 					0.0
 				</span>
 			</span>
 			<span>
 				y{" "}
-				<span ref={yRef} className="text-[#e4e4e7] tabular-nums">
+				<span ref={yRef} className="text-foreground tabular-nums">
 					0.0
 				</span>
 			</span>
 			<span>
 				frame{" "}
-				<span ref={frameRef} className="text-[#e4e4e7] tabular-nums">
+				<span ref={frameRef} className="text-foreground tabular-nums">
 					0
 				</span>
 			</span>

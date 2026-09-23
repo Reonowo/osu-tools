@@ -25,7 +25,7 @@ export function ZoomControls({ onStep }: { onStep: (direction: 1 | -1) => void }
 	return (
 		<div
 			data-viewport-chrome=""
-			className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-[10px] border border-border bg-surface-panel/[.92] p-1 shadow-[0_12px_24px_-8px_rgba(0,0,0,.6)] backdrop-blur-[8px]"
+			className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-0.5 float-chrome"
 		>
 			<Tooltip>
 				<TooltipTrigger
@@ -45,7 +45,7 @@ export function ZoomControls({ onStep }: { onStep: (direction: 1 | -1) => void }
 							size="sm"
 							variant="ghost"
 							onClick={resetViewport}
-							className="min-w-[52px] px-2 font-mono text-[11px] tabular-nums text-[#a1a1aa]"
+							className="min-w-zoom-readout px-2 font-mono text-row tabular-nums text-foreground-soft"
 						>
 							{Math.round(zoom * 100)}%
 						</Button>

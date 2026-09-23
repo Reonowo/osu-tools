@@ -24,6 +24,8 @@ import { scoreAt } from "@/lib/score";
 import { countAtOrBefore, statsAt } from "@/lib/timeline";
 import { useShellPresence } from "@/lib/use-presence";
 import { cn } from "@/lib/utils";
+import { fromHex } from "@/engine/color";
+import { OSU_COLOUR } from "@/engine/osu-colours";
 import { playbackClock } from "@/playback/instance";
 import { useViewerStore } from "@/state/store";
 import { simulated } from "@/lib/simulation";
@@ -35,13 +37,15 @@ const KEYS = PHYSICAL_BUTTONS;
 // the severity ticks' own miss red, as channels because the combo counter
 // mixes toward it rather than swapping to it. ONE declaration for both
 // readouts that use it -- the HP bar's danger fill and the combo break --
-// so "this is bad" cannot start reading two different reds
-const MISS_RED_RGB = [237, 17, 33];
-const REST_WHITE_RGB = [255, 255, 255];
+// so "this is bad" cannot start reading two different reds. channels are
+// OSU_COLOUR.red (osucolour.cs), parsed here rather than retyped
+const RED = fromHex(OSU_COLOUR.red);
+const MISS_RED_RGB = [Math.round(RED.r * 255), Math.round(RED.g * 255), Math.round(RED.b * 255)] as const;
+const REST_WHITE_RGB = [255, 255, 255] as const;
 
 // the HP bar's danger threshold and the two colours either side of it
 const HP_LOW_FRACTION = 0.2;
-const HP_FILL = "rgba(255,255,255,.92)";
+const HP_FILL = "var(--hud-rest)";
 const HP_FILL_LOW = `rgb(${MISS_RED_RGB.join(",")})`;
 
 /** the digits' colour at a flash strength; the empty string at rest, which
@@ -61,7 +65,7 @@ function KeyTile({ label, setRef }: { label: string; setRef: (el: HTMLDivElement
 		<div
 			ref={setRef}
 			data-state=""
-			className="group w-[50px] rounded-[5px] border border-white/5 bg-[#0c0c0f]/[.72] px-[5px] pt-[5px] pb-1 backdrop-blur-[6px]"
+			className="group w-key-tile rounded-control border border-white/5 bg-surface-bar/[.72] px-tight pt-tight pb-1 backdrop-blur-hud"
 		>
 			{/* fixed child order -- the loop below indexes into el.children rather
 			than re-querying by attribute every frame.
@@ -71,12 +75,12 @@ function KeyTile({ label, setRef }: { label: string; setRef: (el: HTMLDivElement
 			(docs/adr/0009 draws that boundary; index.css keeps it) */}
 			<div
 				data-hud-motion
-				className="h-[3px] rounded-full bg-white opacity-50 transition-all duration-100 group-data-[state=held]:translate-y-px group-data-[state=held]:opacity-100"
+				className="h-mark-dot rounded-full bg-white opacity-50 transition-all duration-100 group-data-[state=held]:translate-y-px group-data-[state=held]:opacity-100"
 			/>
-			<div className="mt-1.5 text-[13px] leading-none font-bold text-[#99ddff] group-data-[state=held]:text-white group-data-[state=zero]:text-[#8a8a93]">
+			<div className="mt-1.5 text-value leading-none font-bold text-hud-key group-data-[state=held]:text-white group-data-[state=zero]:text-muted-foreground">
 				{label}
 			</div>
-			<div className="text-[17px] leading-tight font-bold tabular-nums text-zinc-100 group-data-[state=zero]:text-[#8a8a93]">
+			<div className="text-hud-key-count leading-tight font-bold tabular-nums text-foreground-bright group-data-[state=zero]:text-muted-foreground">
 				0
 			</div>
 		</div>
@@ -279,12 +283,12 @@ export function WatchHud() {
 							<div
 								ref={hpFillRef}
 								className="h-full w-full rounded-full"
-								style={{ backgroundColor: HP_FILL }}
+								style={{ backgroundColor: "var(--hud-rest)" }}
 							/>
 						</div>
 						<div
 							ref={hpReadoutRef}
-							className="text-[10px] font-semibold tracking-[.1em] text-white/40 uppercase tabular-nums"
+							className="text-hud-label font-semibold text-white/40 uppercase tabular-nums"
 						>
 							100%
 						</div>
@@ -295,17 +299,17 @@ export function WatchHud() {
 				<div
 					ref={comboBoxRef}
 					style={{ transformOrigin: "bottom left" }}
-					className="pointer-events-none absolute bottom-4 left-4 text-[34px] font-bold tracking-[-.01em] text-white/[.92] tabular-nums"
+					className="pointer-events-none absolute bottom-4 left-4 text-combo font-bold text-white/[.92] tabular-nums"
 				>
 					<span ref={comboRef}>0</span>
-					<span className="text-[22px] text-white/60">x</span>
+					<span className="text-stat text-white/60">x</span>
 				</div>
 			)}
 			<div className="pointer-events-none absolute top-3.5 right-4 text-right">
 				{authoritative && (
 					<>
 						{accuracyVisible && (
-							<div ref={accuracyRef} className="text-[22px] font-semibold text-white/90 tabular-nums">
+							<div ref={accuracyRef} className="text-stat font-semibold text-white/90 tabular-nums">
 								100.00%
 							</div>
 						)}
@@ -319,7 +323,7 @@ export function WatchHud() {
 						{scoreActive && (
 							<div
 								ref={scoreRef}
-								className="text-[10px] font-semibold tracking-[.1em] text-white/40 uppercase tabular-nums"
+								className="text-hud-label font-semibold text-white/40 uppercase tabular-nums"
 							>
 								0
 							</div>
@@ -336,7 +340,7 @@ export function WatchHud() {
 				data-motion-row="shell"
 				onTransitionEnd={keyMount.onTransitionEnd}
 				className={cn(
-					"shell-hud-mount pointer-events-none absolute top-1/2 right-4 flex -translate-y-1/2 flex-col gap-[3px]",
+					"shell-hud-mount pointer-events-none absolute top-1/2 right-4 flex -translate-y-1/2 flex-col gap-inset",
 					keyActive ? "opacity-100" : "opacity-0"
 				)}
 			>
