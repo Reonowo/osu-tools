@@ -214,6 +214,9 @@ export function ReplayBrowser({ onOpenSettings }: { onOpenSettings: () => void }
 										if (row === undefined) return null;
 										return (
 											<div
+												// unique because browser.rs keeps one row per file; a
+												// repeated key leaves a stale row drawn over the list
+												// when a filter reshapes it
 												key={row.path}
 												className="absolute top-0 left-0 w-full"
 												style={{
