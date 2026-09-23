@@ -27,28 +27,28 @@ export function VideoConsentSection({
 
 	return (
 		<>
-			<div className="space-y-2 rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+			<div className="space-y-2 card">
 				<SectionLabel>one-time download</SectionLabel>
-				<p className="text-[11.5px] leading-[1.6] text-[#a1a1aa]">
+				<p className="text-lede-loose text-foreground-soft">
 					video export renders through{" "}
-					<span className="font-semibold text-[#e4e4e7]">
+					<span className="font-semibold text-foreground">
 						{metadata.name} {metadata.version}
 					</span>
 					, a {formatDownloadSize(metadata.downloadBytes)} download from {metadata.source}. it installs into
 					this app's own data folder and runs only when you export.
 				</p>
-				<p className="flex items-start gap-1.5 text-[10.5px] leading-[1.55] text-[#8a8a93]">
-					<ShieldCheck className="mt-px size-3 shrink-0 text-[#88b300]" aria-hidden />
+				<p className="flex items-start gap-1.5 text-caption text-muted-foreground">
+					<ShieldCheck className="mt-px size-3 shrink-0 text-grade-ok" aria-hidden />
 					the download is verified against a checksum pinned in this app before anything is unpacked
 				</p>
 			</div>
 
-			<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
-				<p className="text-[10.5px] leading-[1.55] text-[#8a8a93]">{metadata.notice}</p>
+			<div className="card">
+				<p className="text-caption text-muted-foreground">{metadata.notice}</p>
 				<button
 					type="button"
 					onClick={() => setLicensesOpen((v) => !v)}
-					className="mt-1.5 flex items-center gap-1 text-[10.5px] font-medium text-[#a1a1aa] hover:text-[#e4e4e7]"
+					className="mt-1.5 flex items-center gap-1 text-caption-plain font-medium text-foreground-soft hover:text-foreground"
 				>
 					{licensesOpen ? (
 						<ChevronDown className="size-3" aria-hidden />
@@ -61,12 +61,12 @@ export function VideoConsentSection({
 					<div className="mt-2 space-y-2">
 						{metadata.licenses.map((license) => (
 							<div key={license.name}>
-								<div className="text-[10.5px] font-semibold text-[#a1a1aa]">{license.name}</div>
+								<div className="text-caption-plain font-semibold text-foreground-soft">
+									{license.name}
+								</div>
 								{/* select-text: license text is a copy opt-in like the
 								other diagnostic surfaces */}
-								<p className="select-text text-[10px] leading-[1.55] text-[#71717a]">
-									{license.detail}
-								</p>
+								<p className="select-text text-meta-copy text-foreground-dim">{license.detail}</p>
 							</div>
 						))}
 					</div>

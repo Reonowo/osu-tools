@@ -144,7 +144,7 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 				onOpenChange(next);
 			}}
 		>
-			<DialogContent className="sm:max-w-[452px]">
+			<DialogContent className="sm:max-w-dialog-export-w">
 				<DialogHeader>
 					<DialogTitle>export replay</DialogTitle>
 					<DialogDescription>
@@ -154,44 +154,41 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 
 				{phase.step === "done" ? (
 					<>
-						<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+						<div className="card">
 							<SectionLabel>
 								{phase.result.regenerated === null ? "written" : "regenerated fields"}
 							</SectionLabel>
 							{phase.result.regenerated === null ? (
-								<p className="mt-2 text-[11px] text-[#a1a1aa]">
+								<p className="mt-2 text-row text-foreground-soft">
 									{outcomeCopy(pathKind, phase.result.bytes)}
 								</p>
 							) : (
-								<div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-[7px]">
+								<div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-stack">
 									{regeneratedSummaryRows(phase.result.regenerated).map(({ label, value }) => (
-										<span
-											key={label}
-											className="flex items-center justify-between gap-2 text-[11px]"
-										>
-											<span className="flex items-center gap-1.5 text-[#8a8a93]">
-												<Check className="size-3 shrink-0 text-[#88b300]" aria-hidden />
+										<span key={label} className="flex items-center justify-between gap-2 text-row">
+											<span className="flex items-center gap-1.5 text-muted-foreground">
+												<Check className="size-3 shrink-0 text-grade-ok" aria-hidden />
 												{label}
 											</span>
-											<span className="tabular-nums text-[#e4e4e7]">{value}</span>
+											<span className="tabular-nums text-foreground">{value}</span>
 										</span>
 									))}
 								</div>
 							)}
 							{phase.result.regenerated !== null && truncationNote(phase.result.regenerated) !== null && (
-								<p className="mt-2.5 border-t border-border pt-2 text-[10.5px] leading-[1.55] text-[#fbbf24]">
+								<p className="mt-2.5 border-t border-border pt-2 text-caption text-warning">
 									{truncationNote(phase.result.regenerated)}
 								</p>
 							)}
 						</div>
-						<p className="break-all text-[10.5px] text-[#8a8a93]">{phase.result.path}</p>
+						<p className="break-all text-caption-plain text-muted-foreground">{phase.result.path}</p>
 						<DialogFooter>
 							<Button onClick={() => onOpenChange(false)}>close</Button>
 						</DialogFooter>
 					</>
 				) : phase.step === "confirmOverwrite" ? (
 					<>
-						<div className="flex items-start gap-2 rounded-[9px] border border-[rgba(245,158,11,.35)] bg-[rgba(69,26,3,.55)] px-3 py-2.5 text-[10.5px] leading-[1.55] text-[#fbbf24]">
+						<div className="flex items-start gap-2 rounded-card warning-pill px-3 py-2.5 text-caption text-warning">
 							<TriangleAlert className="mt-px size-3 shrink-0" aria-hidden />
 							<p className="break-all">{destination} already exists. replace it?</p>
 						</div>
@@ -224,7 +221,7 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 							(() => {
 								const { title, detail } = describeIpcError(error);
 								return (
-									<div className="flex items-start gap-2 rounded-[9px] border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-[10.5px] leading-[1.55] text-destructive">
+									<div className="flex items-start gap-2 rounded-card border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-caption text-destructive">
 										<TriangleAlert className="mt-px size-3 shrink-0" aria-hidden />
 										<p>
 											{title}: {detail}

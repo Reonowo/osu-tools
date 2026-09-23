@@ -214,7 +214,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 				onOpenChange(next);
 			}}
 		>
-			<DialogContent className="max-h-[calc(100dvh-4rem)] overflow-y-auto sm:max-w-[520px]">
+			<DialogContent className="max-h-dialog-tall overflow-y-auto sm:max-w-dialog-video-w">
 				<DialogHeader>
 					<DialogTitle>export video</DialogTitle>
 					<DialogDescription>
@@ -225,7 +225,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 				</DialogHeader>
 
 				{phase.step === "loading" ? (
-					<p className="flex items-center gap-2 text-[11.5px] text-[#8a8a93]">
+					<p className="flex items-center gap-2 text-lede-plain text-muted-foreground">
 						<Loader2 className="size-3.5 animate-spin" aria-hidden /> checking the renderer…
 					</p>
 				) : phase.step === "unavailable" ? (
@@ -279,14 +279,14 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 					</>
 				) : phase.step === "done" ? (
 					<>
-						<div className="rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+						<div className="card">
 							<SectionLabel>written</SectionLabel>
-							<p className="mt-2 flex items-center gap-1.5 text-[11px] text-[#a1a1aa]">
-								<Check className="size-3 shrink-0 text-[#88b300]" aria-hidden />
+							<p className="mt-2 flex items-center gap-1.5 text-row text-foreground-soft">
+								<Check className="size-3 shrink-0 text-grade-ok" aria-hidden />
 								{phase.result.bytes.toLocaleString()} bytes rendered
 							</p>
 						</div>
-						<p className="break-all text-[10.5px] text-[#8a8a93]">{phase.result.path}</p>
+						<p className="break-all text-caption-plain text-muted-foreground">{phase.result.path}</p>
 						<DialogFooter>
 							<Button variant="secondary" onClick={() => void revealItemInDir(phase.result.path)}>
 								show in folder
@@ -296,7 +296,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 					</>
 				) : phase.step === "exporting" ? (
 					<>
-						<div className="space-y-2 rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+						<div className="space-y-2 card">
 							{EXPORT_STAGES.map((stage) => {
 								const currentIndex =
 									progress === null
@@ -308,16 +308,10 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 								return (
 									<div
 										key={stage}
-										className={`flex items-center gap-2 text-[11.5px] ${
-											state === "active"
-												? "text-[#e4e4e7]"
-												: state === "done"
-													? "text-[#8a8a93]"
-													: "text-[#52525b]"
-										}`}
+										className={`flex items-center gap-2 text-lede-plain ${state === "active" ? "text-foreground" : state === "done" ? "text-muted-foreground" : "text-foreground-pending"}`}
 									>
 										{state === "done" ? (
-											<Check className="size-3 shrink-0 text-[#88b300]" aria-hidden />
+											<Check className="size-3 shrink-0 text-grade-ok" aria-hidden />
 										) : state === "active" ? (
 											<Loader2 className="size-3 shrink-0 animate-spin" aria-hidden />
 										) : (
@@ -325,7 +319,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 										)}
 										{stageLabel(stage)}
 										{stage === "rendering" && progress?.stage === "rendering" && (
-											<span className="ml-auto font-mono text-[10.5px] tabular-nums text-[#a1a1aa]">
+											<span className="ml-auto font-mono text-caption-plain tabular-nums text-foreground-soft">
 												{renderProgressLine(progress)}
 											</span>
 										)}
@@ -352,7 +346,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 					scene !== null &&
 					status !== null && (
 						<>
-							<div className="space-y-2.5 rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+							<div className="space-y-2.5 card">
 								<SectionLabel>video</SectionLabel>
 								<PrefRow label="resolution">
 									<ToggleGroup
@@ -362,7 +356,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 											if (resolution !== undefined)
 												void saveVideoPrefs({ ...video, resolution }, rendererOptions);
 										}}
-										className="h-6 rounded-lg border border-border bg-[#131316] p-0.5"
+										className="h-6 rounded-lg border border-border bg-surface-sunken p-0.5"
 									>
 										{RESOLUTIONS.map((preset) => (
 											<ToggleGroupItem key={preset} value={preset} className={PRESET_ITEM}>
@@ -379,7 +373,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 											if (fps === 30 || fps === 60)
 												void saveVideoPrefs({ ...video, fps }, rendererOptions);
 										}}
-										className="h-6 rounded-lg border border-border bg-[#131316] p-0.5"
+										className="h-6 rounded-lg border border-border bg-surface-sunken p-0.5"
 									>
 										<ToggleGroupItem value="30" className={PRESET_ITEM}>
 											30
@@ -403,7 +397,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 													if (encoder !== undefined)
 														void saveVideoPrefs({ ...video, encoder }, rendererOptions);
 												}}
-												className="h-6 rounded-lg border border-border bg-[#131316] p-0.5"
+												className="h-6 rounded-lg border border-border bg-surface-sunken p-0.5"
 											>
 												{DANSER_ENCODER_CHOICES.map((choice) => (
 													<ToggleGroupItem
@@ -451,7 +445,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 											if (skinPolicy !== undefined)
 												void saveVideoPrefs({ ...video, skinPolicy }, rendererOptions);
 										}}
-										className="h-6 rounded-lg border border-border bg-[#131316] p-0.5"
+										className="h-6 rounded-lg border border-border bg-surface-sunken p-0.5"
 									>
 										<ToggleGroupItem value="followApp" className={PRESET_ITEM}>
 											app skin
@@ -461,13 +455,13 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 										</ToggleGroupItem>
 									</ToggleGroup>
 								</PrefRow>
-								<p className="text-[10.5px] text-[#8a8a93]">
+								<p className="text-caption-plain text-muted-foreground">
 									{videoSkinStatement(video.skinPolicy, skin, status.metadata.name)}
 								</p>
 							</div>
 
 							{backendId === DANSER_BACKEND_ID && (
-								<div className="space-y-2 rounded-[9px] border border-border bg-surface-card px-3 py-[9px]">
+								<div className="space-y-2 card">
 									<SectionLabel>{status.metadata.name} options</SectionLabel>
 									{DANSER_TOGGLES.map((toggle) => (
 										<ToggleRow
@@ -499,7 +493,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 												{DANSER_BACKGROUND_DIM.label}
 												<span className="flex items-center gap-2">
 													<Slider
-														className="w-[110px] shrink-0"
+														className="w-slider-col shrink-0"
 														aria-label={DANSER_BACKGROUND_DIM.label}
 														min={0}
 														max={100}
@@ -518,7 +512,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 															);
 														}}
 													/>
-													<span className="w-[30px] text-right font-mono text-[10.5px] text-[#71717a] tabular-nums">
+													<span className="w-readout text-right font-mono text-caption-plain text-foreground-dim tabular-nums">
 														{dimPercent}%
 													</span>
 												</span>
@@ -545,7 +539,7 @@ export function VideoExportDialog({ open, onOpenChange }: { open: boolean; onOpe
 }
 
 const PRESET_ITEM =
-	"h-5 rounded-md px-2 text-[10.5px] font-semibold text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground";
+	"h-5 rounded-md px-2 text-caption-plain font-semibold text-foreground-dim aria-pressed:bg-primary aria-pressed:text-primary-foreground";
 
 function PrefRow({ label, children }: { label: string; children: React.ReactNode }) {
 	return (
@@ -560,15 +554,17 @@ function ProgressBar({ label, percent }: { label: string | null; percent: number
 	return (
 		<div className="space-y-1.5">
 			{label !== null && (
-				<p className="flex items-center gap-2 text-[11.5px] text-[#a1a1aa]">
+				<p className="flex items-center gap-2 text-lede-plain text-foreground-soft">
 					<Loader2 className="size-3 animate-spin" aria-hidden />
 					{label}
 					{percent !== null && (
-						<span className="ml-auto font-mono text-[10.5px] tabular-nums">{Math.round(percent)}%</span>
+						<span className="ml-auto font-mono text-caption-plain tabular-nums">
+							{Math.round(percent)}%
+						</span>
 					)}
 				</p>
 			)}
-			<div className="h-1.5 overflow-hidden rounded-full bg-[#1c1c20]">
+			<div className="h-1.5 overflow-hidden rounded-full bg-surface-raised">
 				<div
 					className="h-full rounded-full bg-primary transition-[width] duration-200"
 					style={{ width: `${Math.max(0, Math.min(100, percent ?? 0))}%` }}
@@ -591,12 +587,12 @@ function ProgressBar({ label, percent }: { label: string | null; percent: number
 function ErrorPanel({ error, logPath }: { error: IpcError; logPath: string | null }) {
 	const { title, detail } = describeIpcError(error);
 	return (
-		<div className="space-y-2 rounded-[9px] border border-destructive/40 bg-destructive/10 px-3 py-2.5">
-			<p className="flex items-start gap-2 text-[10.5px] font-semibold text-[#ff8a90]">
+		<div className="space-y-2 rounded-card border border-destructive/40 bg-destructive/10 px-3 py-2.5">
+			<p className="flex items-start gap-2 text-caption-plain font-semibold text-danger-soft">
 				<TriangleAlert className="mt-px size-3 shrink-0" aria-hidden />
 				{title}
 			</p>
-			<p className="max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-[1.55] text-[#f1c9cc]">
+			<p className="max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-all font-mono text-meta-copy text-danger-detail">
 				{detail}
 			</p>
 			{logPath !== null && (
