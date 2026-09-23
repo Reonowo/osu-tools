@@ -23,12 +23,12 @@ export function RecentEntry({
 		<button
 			type="button"
 			onClick={() => onOpen(entry.osrPath)}
-			className="flex w-full flex-col gap-1 rounded-[9px] border border-transparent px-2.5 py-[9px] text-left hover:bg-[#16161a]"
+			className="flex w-full flex-col gap-1 rounded-card border border-transparent px-2.5 py-card text-left hover:bg-surface-hover"
 		>
-			<div className="truncate text-[12px] font-medium text-[#e4e4e7]">
-				{entry.title} <span className="text-[#71717a]">[{entry.version}]</span>
+			<div className="truncate text-title font-medium text-foreground">
+				{entry.title} <span className="text-foreground-dim">[{entry.version}]</span>
 			</div>
-			<div className="truncate font-mono text-[10px] text-[#71717a]">
+			<div className="truncate font-mono text-meta text-foreground-dim">
 				{entry.playerName ?? "unknown"} · {formatAccuracy(entry.accuracy)} · {entry.maxCombo}x ·{" "}
 				{formatRelativeTime(entry.openedAtMs, nowMs)}
 			</div>

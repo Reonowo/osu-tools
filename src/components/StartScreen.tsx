@@ -41,7 +41,7 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 	const footer = footerCopy(stableStatus);
 
 	return (
-		<div className="grid h-screen w-screen grid-rows-[48px_minmax(0,1fr)_26px] overflow-hidden bg-surface-viewport font-sans text-[#e4e4e7]">
+		<div className="grid h-screen w-screen shell-grid-start overflow-hidden bg-surface-viewport font-sans text-foreground">
 			<header className="flex min-w-0 items-center border-b border-border bg-surface-bar px-2 pl-2.5">
 				<Identity />
 				<Tooltip>
@@ -66,19 +66,19 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 				</Tooltip>
 			</header>
 
-			<div className="grid min-h-0 grid-cols-[minmax(0,1fr)_400px]">
+			<div className="grid min-h-0 start-grid">
 				<div className="flex min-h-0 items-center justify-center">
-					<div className="ease-out-quint flex w-full max-w-[420px] flex-col items-center gap-3 rounded-[14px] border-[1.5px] border-dashed border-border-strong bg-surface-panel/60 px-8 py-11 text-center transition-all duration-300 hover:border-primary/50 hover:bg-primary/[.03]">
-						<FileUp className="size-[30px] text-[#71717a]" />
-						<p className="text-[15px] font-semibold text-[#f4f4f5]">drop a replay to open it</p>
-						<p className="text-[11.5px] leading-[1.55] text-[#71717a]">
+					<div className="ease-out-quint flex w-full dropzone flex-col items-center gap-3 text-center transition-all duration-300 hover:border-primary/50 hover:bg-primary-wash-faint">
+						<FileUp className="size-btn-flank text-foreground-dim" />
+						<p className="text-display font-semibold text-foreground-bright">drop a replay to open it</p>
+						<p className="text-lede text-foreground-dim">
 							drop a <span className="font-mono">.osr</span> file anywhere in this window. its beatmap is
 							found through your osu! stable install, and you'll be asked for it if it can't be.
 						</p>
 						<Button
 							onClick={() => void pickReplay()}
 							disabled={loading}
-							className="mt-2 h-[34px] rounded-[9px] bg-primary px-4 text-primary-foreground"
+							className="mt-2 h-lane-velocity rounded-card bg-primary px-4 text-primary-foreground"
 						>
 							{loading ? "loading…" : "browse for a replay"}
 						</Button>
@@ -93,7 +93,7 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 								<button
 									type="button"
 									onClick={() => void clearRecents()}
-									className="hover:text-[#e4e4e7]"
+									className="hover:text-foreground"
 								>
 									clear
 								</button>
@@ -102,7 +102,9 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 					/>
 					<div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5">
 						{recents.length === 0 ? (
-							<p className="px-2.5 py-3 text-center text-[11px] text-[#71717a]">no replays opened yet</p>
+							<p className="px-2.5 py-3 text-center text-row text-foreground-dim">
+								no replays opened yet
+							</p>
 						) : (
 							// the whole list here, unlike the open menu's: nothing is
 							// loaded, so no row can mean "you are already here"
@@ -121,27 +123,29 @@ export function StartScreen({ onOpenSettings }: { onOpenSettings: (category?: Se
 						<button
 							type="button"
 							onClick={() => setBrowserOpen(true)}
-							className="mt-1 flex w-full flex-col gap-1 rounded-[9px] border border-dashed border-border px-2.5 py-[9px] text-left hover:border-border-strong hover:bg-[#16161a]"
+							className="mt-1 flex w-full flex-col gap-1 rounded-card border border-dashed border-border px-2.5 py-card text-left hover:border-border-strong hover:bg-surface-hover"
 						>
 							<span className="flex items-center gap-1.5">
-								<FolderSearch className="size-3.5 text-[#71717a]" />
-								<span className="text-[11px] text-[#e4e4e7]">browse local replays</span>
-								<span className="ml-auto font-mono text-[10px] text-[#5a5a63]">
+								<FolderSearch className="size-3.5 text-foreground-dim" />
+								<span className="text-row text-foreground">browse local replays</span>
+								<span className="ml-auto font-mono text-meta text-foreground-faint">
 									{keybindSuffix(keybinds, "replayBrowser").trim()}
 								</span>
 							</span>
-							<span className="text-[10px] text-[#8a8a93]">from scores.db and the Replays folder</span>
+							<span className="text-meta text-muted-foreground">
+								from scores.db and the Replays folder
+							</span>
 						</button>
 					</div>
 				</aside>
 			</div>
 
-			<footer className="flex min-w-0 items-center gap-1.5 border-t border-border bg-surface-rail px-2.5 font-mono text-[10.5px] text-[#8a8a93]">
+			<footer className="flex min-w-0 items-center gap-1.5 border-t border-border bg-surface-rail px-2.5 font-mono text-caption-plain text-muted-foreground">
 				<span
-					className={`size-[5px] shrink-0 rounded-full ${footer.found ? "bg-[#88b300]" : "bg-[#8a8a93]"}`}
+					className={`size-dot shrink-0 rounded-full ${footer.found ? "bg-grade-ok" : "bg-muted-foreground"}`}
 				/>
 				<span>osu! stable {footer.state}</span>
-				<span className="text-[#3f3f46]">·</span>
+				<span className="text-foreground-ghost">·</span>
 				<span className="truncate">{footer.detail}</span>
 			</footer>
 		</div>
