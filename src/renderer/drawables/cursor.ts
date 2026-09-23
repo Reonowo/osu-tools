@@ -24,6 +24,7 @@ import {
 	NON_PLAYFIELD_SCALE_ADJUST
 } from "@/skin/legacy/constants";
 import type { CursorPieces } from "@/skin/pieces";
+import { CURSOR_FILL, CURSOR_RING_BOTTOM, CURSOR_RING_TOP } from "@/skin/argon/constants";
 import { darken, fromHex, toNumber } from "../../engine/color";
 import { out, outElasticHalf, outQuad } from "../../engine/easing";
 import { cursorStateAt } from "../../engine/interpolation";
@@ -208,15 +209,15 @@ class ArgonCursorPiece implements CursorPiece {
 				const s = size / CURSOR_SIZE;
 				const radius = CURSOR_SIZE / 2;
 				// fill disc: fc618f darkened x0.625 at 0.4 alpha, spans the full ring (argoncursor.cs:37-42)
-				const fill = darken(fromHex("FC618F"), 0.6);
+				const fill = darken(fromHex(CURSOR_FILL), 0.6);
 				c.fillStyle = `rgba(${Math.round(fill.r * 255)}, ${Math.round(fill.g * 255)}, ${Math.round(fill.b * 255)}, 0.4)`;
 				c.beginPath();
 				c.arc(size / 2, size / 2, radius * s - 1, 0, Math.PI * 2);
 				c.fill();
 				// outer ring: 6px border, vertical gradient fc618f -> bb1a41 (argoncursor.cs:33-34)
 				const gradient = c.createLinearGradient(0, 0, 0, size);
-				gradient.addColorStop(0, "#FC618F");
-				gradient.addColorStop(1, "#BB1A41");
+				gradient.addColorStop(0, CURSOR_RING_TOP);
+				gradient.addColorStop(1, CURSOR_RING_BOTTOM);
 				c.strokeStyle = gradient;
 				c.lineWidth = RING_BORDER_OUTER * s;
 				c.beginPath();
@@ -240,7 +241,7 @@ class ArgonCursorPiece implements CursorPiece {
 		this.glow = new Sprite(ctx.textures.glowTexture(DOT_GLOW_SIZE, DOT_SIZE / 2 / (DOT_GLOW_SIZE / 2)));
 		this.glow.anchor.set(0.5);
 		this.glow.width = this.glow.height = DOT_GLOW_SIZE;
-		this.glow.tint = toNumber(fromHex("ABFFFF"));
+		this.glow.tint = toNumber(fromHex("ABFFFF")); // argoncursor.cs glow tint
 		this.glow.alpha = 100 / 255; // argoncursor.cs:74 -- Color4(171, 255, 255, 100), a byte alpha
 		this.glow.blendMode = "add"; // compositedrawable.drawnode.cs:142 -- EdgeEffectType.Glow blends additively
 		const dot = new Sprite(ctx.textures.circleTexture(DOT_SIZE));

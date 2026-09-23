@@ -16,6 +16,7 @@ import { Container, Sprite } from "pixi.js";
 import { FOLLOW_POINT_PREEMPT, FOLLOW_POINT_SPACING, PREEMPT_MIN } from "../../engine/game-constants";
 import { SkinSprite } from "../skin-sprite";
 import { fromHex, toNumber } from "../../engine/color";
+import { CURSOR_RING_TOP } from "@/skin/argon/constants";
 import { out } from "../../engine/easing";
 import { trackValueAt, tween, type Track } from "../../engine/transforms";
 import type { RenderObject } from "../../lib/scene-types";
@@ -78,7 +79,7 @@ export function generateFollowPoints(objects: RenderObject[], globalScale: numbe
 	return specs;
 }
 
-const CHEVRON_TOP = fromHex("FC618F");
+const CHEVRON_TOP = fromHex(CURSOR_RING_TOP);
 /** the square the double chevron is drawn on, in osu!px: the glyph itself
  * spans ~45% of it, which lands argonfollowpoint.cs's 8px chevron with room
  * for its round caps */

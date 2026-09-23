@@ -6,6 +6,12 @@
 
 import { OBJECT_RADIUS } from "@/engine/game-constants";
 
+/** argoncursor.cs:33-34 -- the ring gradient's two stops */
+export const CURSOR_RING_TOP = "#FC618F";
+export const CURSOR_RING_BOTTOM = "#BB1A41";
+/** argoncursor.cs:37-42 -- the fill disc's base, darkened at draw time */
+export const CURSOR_FILL = "FC618F";
+
 // argonmaincirclepiece.cs:27-34
 export const BORDER_THICKNESS = OBJECT_RADIUS * 2 * (2 / 58);
 export const GRADIENT_THICKNESS = BORDER_THICKNESS * 2.5;

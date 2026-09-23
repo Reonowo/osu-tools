@@ -9,6 +9,7 @@
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import { previewedPathPoints, snapshotIsEmpty, type PlayfieldPoint, type PreviewSnapshot } from "../../editor/preview";
 import { isLeft, isRight } from "../../engine/buttons";
+import { OSU_COLOUR } from "../../engine/osu-colours";
 import { cursorStateAt, type Press } from "../../engine/interpolation";
 import type { FrameDto } from "../../lib/scene-types";
 import { countAtOrBefore } from "../../lib/timeline";
@@ -66,7 +67,7 @@ function markerTexture(ctx: RenderContext, kind: string): Texture {
 		const s = size / MARKER_REFERENCE_CANVAS;
 		const half = size / 2;
 		const arc = (side: "left" | "right", inner: number, outer: number) => {
-			c.fillStyle = "#ffcc22";
+			c.fillStyle = OSU_COLOUR.yellow;
 			c.beginPath();
 			const from = side === "left" ? Math.PI / 2 : -Math.PI / 2;
 			c.arc(half, half, outer * s, from, from + Math.PI);
@@ -77,12 +78,12 @@ function markerTexture(ctx: RenderContext, kind: string): Texture {
 			// clickmarker.cs:27-77 -- 16px marker box, so the reference canvas'
 			// half (16) stands in for its full radius. centre dot: Size(0.125)
 			// additive gray5
-			c.fillStyle = "#555";
+			c.fillStyle = OSU_COLOUR.gray5;
 			c.beginPath();
 			c.arc(half, half, 2 * s, 0, Math.PI * 2);
 			c.fill();
 			// white ring: circularcontainer border, 2.2px thickness
-			c.strokeStyle = "#fff";
+			c.strokeStyle = "#ffffff";
 			c.lineWidth = 4.4 * s;
 			c.beginPath();
 			c.arc(half, half, 13.8 * s, 0, Math.PI * 2);
@@ -92,7 +93,7 @@ function markerTexture(ctx: RenderContext, kind: string): Texture {
 			arc(kind === "click-left" ? "left" : "right", 12.464, 15.2);
 		} else {
 			const held = kind !== "frame-none";
-			c.fillStyle = held ? "#444" : "#eb4791";
+			c.fillStyle = held ? OSU_COLOUR.gray4 : OSU_COLOUR.pink2;
 			c.beginPath();
 			c.arc(half, half, half - 2 * s, 0, Math.PI * 2);
 			c.fill();
