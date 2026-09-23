@@ -42,7 +42,7 @@ function ContextMenuItem({ className, ...props }: ContextMenuPrimitive.Item.Prop
 		<ContextMenuPrimitive.Item
 			data-slot="context-menu-item"
 			className={cn(
-				"flex cursor-default items-center justify-between gap-6 rounded-[5px] px-2 py-1.5 text-[11.5px] text-[#e4e4e7] outline-hidden select-none data-highlighted:bg-primary/[.12] data-highlighted:text-foreground data-[disabled]:text-[#8a8a93]",
+				"flex cursor-default items-center justify-between gap-6 rounded-control px-2 py-1.5 text-lede-plain text-foreground outline-hidden select-none data-highlighted:bg-primary-wash data-highlighted:text-foreground data-[disabled]:text-muted-foreground",
 				className
 			)}
 			{...props}

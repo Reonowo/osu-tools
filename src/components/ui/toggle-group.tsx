@@ -49,7 +49,7 @@ function ToggleGroup({
 				// (matches the slider/separator/scroll-area fix), so the bare
 				// data-vertical: variant shadcn ships here never matched anything --
 				// this is the first caller (ToolPalette) that actually needs vertical
-				"group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-lg data-[size=sm]:rounded-[min(var(--radius-md),10px)] data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch",
+				"group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-lg data-[size=sm]:rounded-control-sm data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch",
 				className
 			)}
 			{...props}
