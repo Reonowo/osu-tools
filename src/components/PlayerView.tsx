@@ -6,6 +6,7 @@ import { audioExtendedBounds } from "@/lib/timeline";
 import { audioGraph } from "@/playback/audio-graph";
 import { htmlAudioAdapter } from "@/playback/clock";
 import { buildHitsoundPlan } from "@/playback/hitsound-plan";
+import { openMusicSource, type MusicSource } from "@/playback/music-source";
 import {
 	bundledSampleUrlSet,
 	hitsoundScheduler,
@@ -43,6 +44,62 @@ const editChromeSources: EditChromeSources = {
  * is skipped rather than scheduled silently (skinnablesound.cs) */
 function hitsoundsAudible(state: ViewerState): boolean {
 	return state.volume > 0 && state.audio.hitsoundVolume > 0;
+}
+
+/** build the scene's music element over a settled source and hand it to the
+ * clock and the graph. returns the teardown, which also frees the source */
+function attachSceneMusic(source: MusicSource, sceneId: number): () => void {
+	const audio = new Audio();
+	// BEFORE the src, and load-bearing: routing this element through the
+	// audio graph makes a MediaElementAudioSourceNode of it, and a source
+	// node built from a cross-origin element loaded in no-cors mode is
+	// tainted and outputs SILENCE rather than failing loudly. tauri's asset
+	// protocol answers with an explicit Access-Control-Allow-Origin for the
+	// window's own origin (tauri/src/protocol/asset.rs:21), so opting into
+	// CORS here is both possible and required (a repackaged blob url is
+	// same-origin and passes either way)
+	audio.crossOrigin = "anonymous";
+	audio.src = source.url;
+	audio.preload = "auto";
+	playbackClock.attachAudio(htmlAudioAdapter(audio));
+	// the graph carries the music level from here on; the element's own
+	// volume stays at 1 for its whole life (audio-graph.ts)
+	audioGraph.attachMusic(audio);
+	const onLoadedMetadata = () => {
+		// a metadata event can land late (this element's fetch/decode
+		// outlives audio.pause()): after a newer scene installed but before
+		// this effect's deferred cleanup removes the listener -- a stale
+		// scene's audio must touch neither the clock nor the store (the store
+		// write would otherwise stick forever when the new scene has no audio)
+		const state = viewerStore.getState();
+		if (state.sceneId !== sceneId || state.derived === null) return;
+		const durationMs = audio.duration * 1000;
+		// streaming sources report Infinity; that must not reach the bounds
+		if (!Number.isFinite(durationMs)) return;
+		// the live derived, never this effect run's closure: an edit landing
+		// before the metadata rederives the bounds, and extending the
+		// install-time ones here would stomp the clock's post-edit bounds at
+		// both ends -- with nothing to re-correct them, since publishing the
+		// duration below does not bump editRevision
+		const extended = audioExtendedBounds(state.derived.bounds, durationMs);
+		playbackClock.setBounds(extended.minTime, extended.maxTime);
+		// publish so the timeline maps against the same audio-extended bounds
+		state.setAudioDuration(durationMs);
+	};
+	audio.addEventListener("loadedmetadata", onLoadedMetadata);
+
+	return () => {
+		audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+		audio.pause();
+		// pause() stops playback but not an in-flight metadata fetch; dropping
+		// the src and reloading actually aborts it
+		audio.removeAttribute("src");
+		audio.load();
+		playbackClock.attachAudio(null);
+		audioGraph.attachMusic(null);
+		// only once the element has let go of it
+		source.release();
+	};
 }
 
 /**
@@ -313,53 +370,23 @@ export function PlayerView() {
 		if (rendererRef.current !== null) void installSkin(rendererRef.current);
 		if (scene.audioPath === null) return;
 
-		const audio = new Audio();
-		// BEFORE the src, and load-bearing: routing this element through the
-		// audio graph makes a MediaElementAudioSourceNode of it, and a source
-		// node built from a cross-origin element loaded in no-cors mode is
-		// tainted and outputs SILENCE rather than failing loudly. tauri's asset
-		// protocol answers with an explicit Access-Control-Allow-Origin for the
-		// window's own origin (tauri/src/protocol/asset.rs:21), so opting into
-		// CORS here is both possible and required
-		audio.crossOrigin = "anonymous";
-		audio.src = convertFileSrc(scene.audioPath);
-		audio.preload = "auto";
-		playbackClock.attachAudio(htmlAudioAdapter(audio));
-		// the graph carries the music level from here on; the element's own
-		// volume stays at 1 for its whole life (audio-graph.ts)
-		audioGraph.attachMusic(audio);
-		const onLoadedMetadata = () => {
-			// a metadata event can land late (this element's fetch/decode
-			// outlives audio.pause()): after a newer scene installed but before
-			// this effect's deferred cleanup removes the listener -- a stale
-			// scene's audio must touch neither the clock nor the store (the store
-			// write would otherwise stick forever when the new scene has no audio)
-			const state = viewerStore.getState();
-			if (state.sceneId !== sceneId || state.derived === null) return;
-			const durationMs = audio.duration * 1000;
-			// streaming sources report Infinity; that must not reach the bounds
-			if (!Number.isFinite(durationMs)) return;
-			// the live derived, never this effect run's closure: an edit landing
-			// before the metadata rederives the bounds, and extending the
-			// install-time ones here would stomp the clock's post-edit bounds at
-			// both ends -- with nothing to re-correct them, since publishing the
-			// duration below does not bump editRevision
-			const extended = audioExtendedBounds(state.derived.bounds, durationMs);
-			playbackClock.setBounds(extended.minTime, extended.maxTime);
-			// publish so the timeline maps against the same audio-extended bounds
-			state.setAudioDuration(durationMs);
-		};
-		audio.addEventListener("loadedmetadata", onLoadedMetadata);
-
+		// the element is only built once its source is settled (an mp3 is
+		// repackaged first so its seeks land exactly -- music-source.ts), never
+		// given a src after the clock holds it: assigning a src runs the media
+		// load algorithm, which puts playbackRate back to the default and would
+		// silently drop the rate attachAudio just applied. until it lands the
+		// clock runs on its own, as for a scene without audio, and its next
+		// play or tick hands over to the element as usual. a scene replaced
+		// while its read is in flight aborts it, and repackages nothing
+		const preparation = new AbortController();
+		let detachMusic: (() => void) | null = null;
+		void openMusicSource(convertFileSrc(scene.audioPath), preparation.signal).then((source) => {
+			if (preparation.signal.aborted) source.release();
+			else detachMusic = attachSceneMusic(source, sceneId);
+		});
 		return () => {
-			audio.removeEventListener("loadedmetadata", onLoadedMetadata);
-			audio.pause();
-			// pause() stops playback but not an in-flight metadata fetch; dropping
-			// the src and reloading actually aborts it
-			audio.removeAttribute("src");
-			audio.load();
-			playbackClock.attachAudio(null);
-			audioGraph.attachMusic(null);
+			preparation.abort();
+			detachMusic?.();
 			setBeatmapSampleSource(null);
 		};
 	}, [sceneId]);
