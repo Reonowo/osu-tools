@@ -36,6 +36,7 @@ import { expandRetimePress, type PressEdit } from "@/editor/press-ops";
 import { pressRunAt, pressRunFromIndex } from "@/editor/press-runs";
 import { pressLabel } from "@/editor/tool-commits";
 import { physicalButton, PHYSICAL_BUTTONS, type PhysicalKey } from "@/engine/buttons";
+import { GRADE_BAND_COLOUR } from "@/engine/osu-colours";
 import { holdSpansFlat, sliceSpansFlat } from "@/engine/interpolation";
 import { velocityTraceWindow, type VelocitySample } from "@/lib/analysis";
 import { holdLaneContextMenu, type EditMenuItem } from "@/lib/context-menu";
@@ -184,9 +185,9 @@ export function DetailLanes() {
 		const windows = scene.renderPlan.hitWindows;
 		if (!(windows.meh > 0)) return null;
 		const stop = (ms: number) => `${((ms / (2 * windows.meh)) * 100).toFixed(3)}%`;
-		const meh = "#ffcc2226";
-		const ok = "#88b30038";
-		const great = "#66ccff52";
+		const meh = GRADE_BAND_COLOUR.meh;
+		const ok = GRADE_BAND_COLOUR.ok;
+		const great = GRADE_BAND_COLOUR.great;
 		// the gradient spans ±meh; each stop is where one band hands over to
 		// the next, early (left) side then late (right) side
 		const earlyOkStop = stop(windows.meh - windows.ok);
@@ -664,18 +665,18 @@ export function DetailLanes() {
 		// frame-steps over these lanes exactly as it does everywhere else, and
 		// the span zoom rides ctrl+wheel on the dock (TimelineDock), one rule
 		// for every tier
-		<div className="relative flex border-b border-[#17171b] bg-surface-rail">
+		<div className="relative flex border-b border-border-faint bg-surface-rail">
 			{/* the hold-lane labels share one neutral tone: k/m identity comes
 			from the label text alone, keeping hue reserved for judgement meaning
 			(blue means "great", never "K1") */}
-			<div className="w-[74px] shrink-0 border-r border-[#17171b] pr-2 pb-1 text-right font-mono text-[10.5px]">
-				<div className="h-[17px]" />
-				<div className="flex h-[17px] items-center justify-end text-[#71717a]">obj</div>
-				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">K1</div>
-				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">K2</div>
-				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">M1</div>
-				<div className="flex h-[13px] items-center justify-end text-[#8a8a93]">M2</div>
-				<div className="flex h-[34px] items-center justify-end text-[#eb4791]">vel</div>
+			<div className="w-lane-gutter shrink-0 border-r border-border-faint pr-2 pb-1 text-right font-mono text-caption-plain">
+				<div className="h-lane-key" />
+				<div className="flex h-lane-key items-center justify-end text-foreground-dim">obj</div>
+				<div className="flex h-lane-hold items-center justify-end text-muted-foreground">K1</div>
+				<div className="flex h-lane-hold items-center justify-end text-muted-foreground">K2</div>
+				<div className="flex h-lane-hold items-center justify-end text-muted-foreground">M1</div>
+				<div className="flex h-lane-hold items-center justify-end text-muted-foreground">M2</div>
+				<div className="flex h-lane-velocity items-center justify-end text-graph-velocity">vel</div>
 			</div>
 
 			{/* overflow-hidden belongs here rather than on each lane: the layer
@@ -706,17 +707,17 @@ export function DetailLanes() {
 				{/* the lane layer, out of flow so it can be wider than the track --
 				the gutter column beside it is what gives this row its height */}
 				<div ref={laneLayerRef} className="absolute inset-y-0 left-0">
-					<div className="relative h-[17px] border-b border-[#17171b] font-mono text-[10.5px] text-[#8a8a93]">
+					<div className="relative h-lane-key border-b border-border-faint font-mono text-caption-plain text-muted-foreground">
 						{rulerMajors.map((tick) => (
 							<div key={tick} className="absolute inset-y-0" style={{ left: percentOf(tick) }}>
-								<div className="absolute top-[9px] bottom-0 left-0 w-px bg-border" />
-								<span className="absolute top-[3px] left-0 whitespace-nowrap">{formatTime(tick)}</span>
+								<div className="absolute top-card bottom-0 left-0 w-px bg-border" />
+								<span className="absolute top-inset left-0 whitespace-nowrap">{formatTime(tick)}</span>
 							</div>
 						))}
 						{rulerMinors.map((tick) => (
 							<div
 								key={tick}
-								className="absolute top-3 bottom-0 w-px bg-[#17171b]"
+								className="absolute top-3 bottom-0 w-px bg-border-faint"
 								style={{ left: percentOf(tick) }}
 							/>
 						))}
@@ -756,7 +757,11 @@ export function DetailLanes() {
 										right: windowFraction(neighbourhood, preview.span.end)
 									};
 						return (
-							<div key={bit} data-hold-lane={bit} className="relative h-[13px] border-b border-[#101013]">
+							<div
+								key={bit}
+								data-hold-lane={bit}
+								className="relative h-lane-hold border-b border-border-subtle"
+							>
 								{spans.map((span, i) => {
 									// both edges read off the same fraction map and neither is
 									// rounded on its own -- the layer's transform is the only
@@ -773,14 +778,14 @@ export function DetailLanes() {
 										<div
 											key={i}
 											data-selected={selected ? "" : undefined}
-											className="absolute inset-y-[3px] rounded-[2px] bg-[#a1a1aa] data-[selected]:bg-[#f4f4f5] data-[selected]:shadow-[0_0_0_1px_#ffffff66]"
+											className="absolute inset-y-inset rounded-bar bg-foreground-soft data-[selected]:bg-foreground-bright data-[selected]:shadow-mark-ring"
 											style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
 										/>
 									);
 								})}
 								{previewFractions !== null && (
 									<div
-										className="absolute inset-y-[3px] rounded-[2px] bg-[#f4f4f5] shadow-[0_0_0_1px_#ffffff66]"
+										className="absolute inset-y-inset rounded-bar bg-foreground-bright shadow-mark-ring"
 										style={{
 											left: `${previewFractions.left * 100}%`,
 											width: `${(previewFractions.right - previewFractions.left) * 100}%`
@@ -795,14 +800,19 @@ export function DetailLanes() {
 					on the track it would re-point itself every frame and drift a
 					sub-pixel against the lanes it is meant to line up with. the 600
 					viewBox units therefore span the neighbourhood, not the window */}
-					<div className="h-[34px]">
+					<div className="h-lane-velocity">
 						<svg viewBox="0 0 600 34" preserveAspectRatio="none" className="block h-full w-full">
 							<polygon
-								fill="#eb4791"
+								className="fill-graph-velocity"
 								fillOpacity={0.16}
 								points={velocityTrace === null ? "" : `0,34 ${velocityTrace} 600,34`}
 							/>
-							<polyline fill="none" stroke="#eb4791" strokeWidth={1.4} points={velocityTrace ?? ""} />
+							<polyline
+								fill="none"
+								className="stroke-graph-velocity"
+								strokeWidth={1.4}
+								points={velocityTrace ?? ""}
+							/>
 						</svg>
 					</div>
 
@@ -831,7 +841,7 @@ export function DetailLanes() {
 							return (
 								<div className="pointer-events-none absolute inset-0">
 									<div
-										className="absolute h-px bg-[#f4f4f5]"
+										className="absolute h-px bg-foreground-bright"
 										style={{
 											top: `${TETHER_REST_Y_PX}px`,
 											left: percentOf(Math.min(fromTime, pressTime)),
@@ -839,7 +849,7 @@ export function DetailLanes() {
 										}}
 									/>
 									<div
-										className="absolute w-px bg-[#f4f4f5]/80"
+										className="absolute w-px bg-foreground-bright/80"
 										style={{
 											top: `${TETHER_REST_Y_PX}px`,
 											height: `${dropBottom - TETHER_REST_Y_PX}px`,

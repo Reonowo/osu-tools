@@ -46,7 +46,7 @@ import { useViewerStore } from "@/state/store";
 
 // restart and the two frame-step buttons share one flanking style; only
 // play/pause gets the primary treatment
-const FLANKING_BUTTON_CLASS = "size-[30px] rounded-lg";
+const FLANKING_BUTTON_CLASS = "size-btn-flank rounded-lg";
 
 // osu!'s own rate choices; every label carries the U+00D7 multiplication
 // sign uniformly, matching Controls.tsx's own "{r}x" suffix on all six --
@@ -75,9 +75,9 @@ const RATES: { value: number; label: string }[] = [
  * `100` and `50` are what the app calls the grades the wire spells `ok` and
  * `meh` -- one pair of names for one thing (CONTEXT.md) */
 const SEVERITY_CHIP_STYLES: Record<SeverityGrade, { label: string; plural: string; className: string }> = {
-	ok: { label: "100", plural: "100s", className: "border-[#88b300]/40 bg-[#88b300]/10 text-[#88b300]" },
-	meh: { label: "50", plural: "50s", className: "border-[#ffcc22]/40 bg-[#ffcc22]/10 text-[#ffcc22]" },
-	miss: { label: "miss", plural: "misses", className: "border-[#ed1121]/45 bg-[#ed1121]/12 text-[#ed1121]" }
+	ok: { label: "100", plural: "100s", className: "border-grade-ok/40 bg-grade-ok/10 text-grade-ok" },
+	meh: { label: "50", plural: "50s", className: "border-grade-meh/40 bg-grade-meh/10 text-grade-meh" },
+	miss: { label: "miss", plural: "misses", className: "border-grade-miss/45 bg-grade-miss/12 text-grade-miss" }
 };
 
 /** keyed by grade and rendered in the module's own order, the way the tool
@@ -97,8 +97,8 @@ const slotIndex = (grade: SeverityGrade, direction: 1 | -1) =>
 	SEVERITY_SLOTS.findIndex((slot) => slot.grade === grade && slot.direction === direction);
 
 const JUMP_BUTTON_CLASS =
-	"flex size-[22px] items-center justify-center rounded-md text-[#71717a] transition-colors " +
-	"hover:bg-muted hover:text-[#e4e4e7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 " +
+	"flex size-btn-jump items-center justify-center rounded-md text-foreground-dim transition-colors " +
+	"hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 " +
 	"disabled:pointer-events-none disabled:opacity-35";
 
 /** what the tooltip says: what the button does, the key it currently answers
@@ -224,7 +224,7 @@ function VolumeButton({ levels, onToggle }: { levels: VolumeLevels; onToggle: ()
 		<IconAction
 			label={muted ? "unmute" : "mute"}
 			tooltip={muted ? "restore the volume this muted" : "mute"}
-			className="size-[26px] rounded-lg"
+			className="size-btn-tool rounded-lg"
 			onClick={onToggle}
 		>
 			<Icon />
@@ -334,7 +334,7 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 	const notSimulatedReason =
 		scene.simulation.status === "notSimulated" ? simulationReasonText(scene.simulation.reason) : null;
 	return (
-		<div className="flex items-center gap-[7px] px-2.5 py-1.5">
+		<div className="flex items-center gap-stack px-2.5 py-1.5">
 			<IconAction
 				label="restart"
 				tooltip={`jump back to the start of the replay${keybindSuffix(keybinds, "restart")}`}
@@ -349,7 +349,7 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 						<Button
 							size="icon"
 							aria-label={playing ? "pause" : "play"}
-							className="size-8 rounded-[9px] bg-primary text-primary-foreground hover:bg-[#ff87bc] hover:-translate-y-px"
+							className="size-8 rounded-card bg-primary text-primary-foreground hover:bg-primary-hover hover:-translate-y-px"
 							onClick={() => setPlaying(!playing)}
 						>
 							{playing ? <Pause /> : <Play />}
@@ -415,7 +415,7 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 						<span
 							aria-hidden
 							className={cn(
-								"rounded-[5px] border px-1 py-px font-mono text-[10px] leading-[14px] font-semibold tabular-nums",
+								"rounded-control border px-1 py-px font-mono text-kbd font-semibold tabular-nums",
 								chip.className,
 								(notSimulatedReason !== null || severityTargets[chip.grade].length === 0) &&
 									"opacity-35"
@@ -438,14 +438,14 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 			<Separator orientation="vertical" className="h-5" />
 
 			<div className="flex items-baseline gap-0.5 font-mono">
-				<span ref={currentTimeRef} className="text-[13px] text-[#f4f4f5] tabular-nums" />
-				<span className="text-[#3f3f46]">/</span>
-				<span ref={totalTimeRef} className="text-[11px] text-[#71717a] tabular-nums" />
+				<span ref={currentTimeRef} className="text-value text-foreground-bright tabular-nums" />
+				<span className="text-foreground-ghost">/</span>
+				<span ref={totalTimeRef} className="text-row text-foreground-dim tabular-nums" />
 			</div>
 
 			<Separator orientation="vertical" className="h-5" />
 
-			<span className="font-mono text-[10.5px] text-[#71717a] tabular-nums">
+			<span className="font-mono text-caption-plain text-foreground-dim tabular-nums">
 				{/* denominator is the last frame index, matching the readout above's
 				0-indexing -- guarded so an empty (never-happens-post-null-check, but
 				cheap to guard) frame list can't render frame 0 / -1 */}
@@ -463,13 +463,13 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 						const chosen = next[0];
 						if (chosen !== undefined) setRate(Number(chosen));
 					}}
-					className="h-[26px] rounded-[7px] border border-border bg-[#131316] p-0.5"
+					className="h-control segmented"
 				>
 					{RATES.map(({ value, label }) => (
 						<ToggleGroupItem
 							key={value}
 							value={String(value)}
-							className="h-full rounded-[5px] px-2 text-[10.5px] text-[#71717a] aria-pressed:bg-primary aria-pressed:text-primary-foreground aria-pressed:font-bold"
+							className="h-full rounded-control px-2 text-caption-plain text-foreground-dim aria-pressed:bg-primary aria-pressed:text-primary-foreground aria-pressed:font-bold"
 						>
 							{label}
 						</ToggleGroupItem>
@@ -486,7 +486,7 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 						// same trap Controls.tsx's own comment called out: the thumb is
 						// the only non-shrinkable part, so a bare width alone collapses
 						// to it
-						className="w-[86px] shrink-0"
+						className="w-time-col shrink-0"
 						aria-label="master volume"
 						min={0}
 						max={100}
@@ -494,7 +494,7 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 						value={[volume]}
 						onValueChange={(v) => setVolume(Array.isArray(v) ? v[0] : v)}
 					/>
-					<span className="w-[30px] text-right font-mono text-[10.5px] text-[#71717a] tabular-nums">
+					<span className="w-readout text-right font-mono text-caption-plain text-foreground-dim tabular-nums">
 						{volume}%
 					</span>
 					{/* after the readout rather than replacing the speaker: the
@@ -504,7 +504,7 @@ export function Transport({ onOpenSettings }: { onOpenSettings: (category?: Sett
 					<IconAction
 						label="audio settings"
 						tooltip="music and hitsound levels, and the rest of the audio settings"
-						className="size-[26px] rounded-lg"
+						className="size-btn-tool rounded-lg"
 						onClick={() => onOpenSettings("audio")}
 					>
 						<SlidersHorizontal />

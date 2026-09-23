@@ -20,8 +20,8 @@ export function playheadTransform(offsetPx: number, dpr: number): string {
 export function Playhead({ ref }: { ref: Ref<HTMLDivElement> }) {
 	return (
 		<div ref={ref} className="pointer-events-none absolute inset-y-0 left-0 w-0">
-			<div className="absolute inset-y-0 left-[-1px] w-0.5 bg-primary" />
-			<div className="absolute top-0 left-[-4px] h-[9px] w-2 rounded-b-[2px] bg-primary" />
+			<div className="absolute inset-y-0 -left-playhead-line-offset w-0.5 bg-primary" />
+			<div className="absolute top-0 -left-playhead-cap-offset h-playhead-cap w-2 rounded-b-bar bg-primary" />
 		</div>
 	);
 }

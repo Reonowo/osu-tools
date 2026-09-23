@@ -7,20 +7,17 @@
 // which the extended tether's y offsets are measured against
 
 import { dropSummary, type ObjectLaneEntry } from "@/lib/derive";
-import type { Grade, RenderObject } from "@/lib/scene-types";
+import type { RenderObject } from "@/lib/scene-types";
+import { GRADE_COLOUR, UNGRADED_COLOUR } from "@/engine/osu-colours";
 import { aimTime } from "@/lib/analysis";
 import { windowFraction, type TimeWindow } from "@/lib/timeline-view";
 
 // osu!'s hit colours, demoted onto small elements rather than full-height
 // bars so colour carries the grade without dominating the row; null grade
-// (NotSimulated) draws neutral rather than fabricating an outcome
-const GRADE_HEX: Record<Grade, string> = {
-	great: "#66ccff",
-	ok: "#88b300",
-	meh: "#ffcc22",
-	miss: "#ed1121"
-};
-const UNGRADED_HEX = "#8a8a93";
+// (NotSimulated) draws neutral rather than fabricating an outcome.
+// values live in engine/osu-colours.ts (the OsuColour.cs port)
+const GRADE_HEX = GRADE_COLOUR;
+const UNGRADED_HEX = UNGRADED_COLOUR;
 
 /** the hover readout: type, grade, the exact hit error, and on a slider with
  * recorded drops the cause segment naming them -- the grade is not the gate,
@@ -62,7 +59,7 @@ function NestedMarks({ object, entry, colour }: { object: RenderObject; entry: O
 		const fraction = objectSpan > 0 ? (time - object.startTime) / objectSpan : 0;
 		return `${fraction * 100}%`;
 	};
-	const markClass = "absolute inset-y-[3px] -ml-px w-[2px] rounded-[1px]";
+	const markClass = "absolute inset-y-inset -ml-px w-mark rounded-mark";
 	return (
 		<>
 			{entry.nestedMarks.map((mark, i) => (
@@ -115,7 +112,7 @@ export function ObjectLane({
 	const percentOf = (t: number) => `${windowFraction(neighbourhood, t) * 100}%`;
 
 	return (
-		<div data-object-lane="" className="relative h-[17px] border-b border-[#101013]">
+		<div data-object-lane="" className="relative h-lane-key border-b border-border-subtle">
 			{showHitWindowBands &&
 				hitWindowBand !== null &&
 				objects.map(({ index, object }) => {
@@ -125,7 +122,7 @@ export function ObjectLane({
 					return (
 						<div
 							key={index}
-							className="pointer-events-none absolute inset-y-[2px] rounded-[1px]"
+							className="pointer-events-none absolute inset-y-micro rounded-mark"
 							style={{
 								left: percentOf(centre - hitWindowBand.mehMs),
 								width: `${width}%`,
@@ -146,7 +143,7 @@ export function ObjectLane({
 					return (
 						<div
 							key={index}
-							className="pointer-events-none absolute bottom-[2px] h-px bg-[#e4e4e7]/70"
+							className="pointer-events-none absolute bottom-micro h-px bg-foreground/70"
 							style={{ left: percentOf(Math.min(tether.fromTime, tether.toTime)), width: `${width}%` }}
 						/>
 					);
@@ -161,11 +158,11 @@ export function ObjectLane({
 							key={index}
 							data-object-index={index}
 							title={title}
-							className={`absolute inset-y-0 -ml-[3.5px] w-[7px] ${clickable ? "cursor-pointer" : ""}`}
+							className={`absolute inset-y-0 -ml-nudge w-swatch ${clickable ? "cursor-pointer" : ""}`}
 							style={{ left: percentOf(object.startTime) }}
 						>
 							<div
-								className="absolute inset-y-[4px] left-[2px] w-[3px] rounded-[1px]"
+								className="absolute inset-y-circle-marker-inset left-micro w-mark-dot rounded-mark"
 								style={{ background: colour }}
 							/>
 						</div>
@@ -179,11 +176,11 @@ export function ObjectLane({
 						key={index}
 						data-object-index={index}
 						title={title}
-						className={`absolute inset-y-0 min-w-[3px] ${clickable ? "cursor-pointer" : ""}`}
+						className={`absolute inset-y-0 min-w-mark-dot ${clickable ? "cursor-pointer" : ""}`}
 						style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
 					>
 						<div
-							className="absolute inset-x-0 inset-y-[5px] rounded-[2px]"
+							className="absolute inset-x-0 inset-y-tight rounded-bar"
 							style={
 								// spin sections read differently from tap sections: a
 								// spinner's span is hatched where a slider's is solid

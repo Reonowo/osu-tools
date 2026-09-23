@@ -26,9 +26,9 @@ import { useObservedWidth, useTrackMetrics } from "./use-track-metrics";
 // (derive.ts's severityTicks), so the marks being looked for are never buried
 // in a solid bar
 const TICK_CLASS: Record<"ok" | "meh" | "miss", string> = {
-	miss: "absolute bottom-0 w-0.5 top-0 bg-[#ed1121]",
-	meh: "absolute bottom-0 w-[1.5px] top-[45%] bg-[#ffcc22]",
-	ok: "absolute bottom-0 w-[1.5px] top-[65%] bg-[#88b300]"
+	miss: "absolute bottom-0 w-0.5 top-0 bg-grade-miss",
+	meh: "absolute bottom-0 w-mark-thin top-[45%] bg-grade-meh",
+	ok: "absolute bottom-0 w-mark-thin top-[65%] bg-grade-ok"
 };
 
 // the strip's own height in css pixels, which the HP fill's svg is drawn in
@@ -154,7 +154,7 @@ export function OverviewStrip() {
 			// touch-none carries over from Timeline.tsx: without it, a touch drag
 			// fights the browser's own scroll/gesture handling instead of staying
 			// a clean pointer-capture seek
-			className="relative h-[26px] touch-none cursor-pointer overflow-hidden border-b border-[#17171b] bg-surface-strip"
+			className="relative h-strip touch-none cursor-pointer overflow-hidden border-b border-border-faint bg-surface-strip"
 			onPointerDown={(e) => {
 				// the default action here is arming a native drag: with a text
 				// selection anywhere on the page, a press that lands on it starts
@@ -173,10 +173,7 @@ export function OverviewStrip() {
 			}}
 		>
 			{/* 1: lead-in hatch, static per scene */}
-			<div
-				className="absolute inset-y-0 left-0 bg-[repeating-linear-gradient(45deg,rgba(255,255,255,.035)_0_3px,transparent_3px_6px)]"
-				style={{ width: `${leadInWidth}%` }}
-			/>
+			<div className="absolute inset-y-0 left-0 strip-offline-hatch" style={{ width: `${leadInWidth}%` }} />
 			{/* 2: HP fill, static per scene, delta and width. under the tint and
 			the ticks deliberately -- it is the backdrop those read against, not
 			a layer competing with them */}
@@ -187,18 +184,18 @@ export function OverviewStrip() {
 					width={observed.width}
 					height={STRIP_HEIGHT}
 				>
-					<path d={hpFill.area} fill="rgba(255,255,255,.06)" />
+					<path d={hpFill.area} fill="var(--hp-curve-wash)" />
 					<path
 						d={hpFill.edge}
 						fill="none"
-						stroke="rgba(255,255,255,.22)"
+						stroke="var(--hp-curve-line)"
 						strokeWidth={1}
 						shapeRendering="crispEdges"
 					/>
 				</svg>
 			)}
 			{/* 3: played tint, rAF-driven */}
-			<div ref={playedRef} className="absolute inset-y-0 left-0 bg-primary/5" />
+			<div ref={playedRef} className="absolute inset-y-0 left-0 bg-primary-wash-subtle" />
 			{/* 4: severity ticks, static per scene. the drop variant is an extra
 			element on the tick, never a second mark class: a square cap centred
 			on the tick's top end, inheriting the tick's own background so colour
@@ -216,10 +213,10 @@ export function OverviewStrip() {
 				<div key={i} className={TICK_CLASS[tick.grade]} style={{ left: `${tick.left}%` }}>
 					{tick.drop && (
 						<div
-							className={`absolute h-[3px] bg-inherit ${
+							className={`absolute h-mark-dot bg-inherit ${
 								tick.grade === "miss"
-									? "top-0 -left-[1.5px] w-[5px]"
-									: "-top-[1.5px] -left-[0.75px] w-[3px]"
+									? "top-0 -left-hairline w-mark-cap"
+									: "-top-hairline -left-slider-drop-cap-offset w-mark-dot"
 							}`}
 						/>
 					)}
@@ -244,10 +241,10 @@ export function OverviewStrip() {
 			the two must stay the same red whatever a theme does */}
 			{failPoint !== null && (
 				<div
-					className="pointer-events-none absolute inset-y-0 w-0.5 bg-[#ed1121]"
+					className="pointer-events-none absolute inset-y-0 w-0.5 bg-grade-miss"
 					style={{ left: `${fractionFor(bounds, failPoint) * 100}%` }}
 				>
-					<div className="absolute bottom-0 -left-[1.5px] h-[3px] w-[5px] bg-inherit" />
+					<div className="absolute bottom-0 -left-hairline h-mark-dot w-mark-cap bg-inherit" />
 				</div>
 			)}
 			{/* 7: zoom bracket, edit-mode only, rAF-driven (translated from the
@@ -268,7 +265,7 @@ export function OverviewStrip() {
 				{bracket.mounted && (
 					<div
 						ref={bracketRef}
-						className="pointer-events-none absolute inset-y-0 left-0 border-x border-primary/60 bg-primary/[.07]"
+						className="pointer-events-none absolute inset-y-0 left-0 border-x border-primary/60 bg-primary-wash-soft"
 					/>
 				)}
 			</div>

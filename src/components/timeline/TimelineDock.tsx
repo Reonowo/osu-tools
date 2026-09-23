@@ -49,7 +49,7 @@ export function TimelineDock({ onOpenSettings }: { onOpenSettings: (category?: S
 				data-motion-row="shell"
 				inert={lanes.exiting || undefined}
 				onTransitionEnd={lanes.onTransitionEnd}
-				className={cn("shell-edit-tier grid", editing ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}
+				className={cn("shell-edit-tier grid", editing ? "edit-tier-shown" : "edit-tier-hidden")}
 			>
 				<div className="min-h-0 overflow-hidden">{lanes.mounted && <DetailLanes />}</div>
 			</div>
